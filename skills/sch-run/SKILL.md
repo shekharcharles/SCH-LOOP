@@ -108,7 +108,15 @@ Re-read it; if it changed under you, drop and re-pick.
 
 ## 5. Execute (per pack method)
 
-Dispatch to the pack's installed skills — **use them, do not reinvent**:
+Dispatch to the pack's installed skills — **use them, do not reinvent**.
+
+**Actually invoke them.** Reading a skill's name in `packs/*.md` is NOT dispatch.
+For each skill the task needs, call it with the **Skill tool** so the invocation
+is recorded in the session transcript (that transcript is the audit trail —
+`scripts/skills-used.mjs` verifies it). Then record what you used:
+`task-set --skills "<skill1>|<skill2>"`. Claimed skills that never appear in the
+transcript are a reporting failure — the two must match. If a task genuinely
+needs no skill (trivial edit), record none rather than claiming one.
 
 - **Dev/tool:** implement only this task's `AC-N`; `NG-N` binding; repo style.
 - **Offensive:** run this phase's methodology from `packs/<method>.md`, against
