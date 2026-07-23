@@ -8,6 +8,9 @@ description: Review one SCH Loop task's branch against its acceptance criteria w
 > **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Run
 > `node scripts/state.mjs …` from there, or use the absolute path
 > `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> **`--project` is optional** — if omitted it is auto-detected from the current
+> folder (the registered project whose `path` contains your cwd). Check with
+> `state.mjs project-here`..
 
 You are a **fresh reviewer** with clean context. You did not build this. Judge
 the one task's branch against its contract only. One pass = one verdict.

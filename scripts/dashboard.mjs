@@ -52,6 +52,26 @@ const server = createServer((req, res) => {
   }
   // Task actions from the phone: requeue a blocked/stuck task, bump a queued
   // task to the front, or pause one. Whitelisted actions only.
+  // Answer a blocked task's question straight from the dashboard: records the
+  // answer on the task and requeues it at priority 1 so the loop resumes with it.
+  if (req.method === "POST" && url.pathname === "/answer") {
+    let body = ""; req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const p = new URLSearchParams(body);
+      const project = p.get("project"), id = Number(p.get("id")), text = (p.get("text") || "").trim();
+      if (getProject(project) && text) {
+        const s = loadState(project); const t = s.tasks.find((x) => x.id === id);
+        if (t) {
+          t.answers = [...(t.answers || []), { text, ts: new Date().toISOString() }];
+          t.status = "queued"; t.priority = 1; t.updatedAt = new Date().toISOString();
+          event(s, `task #${id} answered from dashboard -> requeued (p1): ${text.slice(0, 80)}`);
+          saveState(project, s);
+        }
+      }
+      res.writeHead(303, { location: "/?project=" + encodeURIComponent(project) }); res.end();
+    });
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/task") {
     let body = ""; req.on("data", (c) => (body += c));
     req.on("end", () => {
@@ -63,6 +83,7 @@ const server = createServer((req, res) => {
           if (action === "requeue") t.status = "queued";
           else if (action === "bump") t.phase = 0;          // sort puts phase 0 first
           else if (action === "hold") t.status = "blocked";
+          else if (action === "close") t.status = "superseded"; // replaced/decomposed — stop nagging
           t.updatedAt = new Date().toISOString();
           event(s, `dashboard: task #${id} ${action}`); saveState(project, s);
         }
@@ -98,7 +119,7 @@ const server = createServer((req, res) => {
     const rollup = reg.projects.map((p) => {
       const s = loadState(p.id);
       const c = (st) => s.tasks.filter((t) => t.status === st).length;
-      const total = s.tasks.length, done = c("merged"), building = c("building"), review = c("review"), changes = c("changes"), queued = c("queued"), blocked = c("blocked"), stuck = c("stuck");
+      const total = s.tasks.filter(t=>t.status!=="superseded").length, done = c("merged"), building = c("building"), review = c("review"), changes = c("changes"), queued = c("queued"), blocked = c("blocked"), stuck = c("stuck");
       const pending = queued, findings = (s.findings || []).length, inboxNew = s.inbox.filter((i) => i.status === "new").length;
       // project-level status category
       let status = "idle";
@@ -213,6 +234,13 @@ const PAGE = `<!doctype html>
   .attn>b{color:var(--red);letter-spacing:.1em;display:block;margin-bottom:6px;font-size:12px}
   .attn-row{padding:5px 0;border-top:1px solid rgba(255,42,42,.25);font-size:12px;line-height:1.5}
   .attn-row:first-of-type{border-top:0}
+  .attn-row .q{color:var(--fg);opacity:.85;margin:4px 0 8px;line-height:1.55}
+  .ans{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+  .ans input{flex:1;min-width:180px;font-family:inherit;font-size:14px;padding:8px 10px;background:var(--panel);color:var(--fg);border:1px solid var(--line)}
+  .ans input:focus{outline:none;border-color:var(--green)}
+  .ans button{font-family:inherit;padding:8px 14px;background:var(--green);color:#000;border:0;font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+  .skl{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}
+  .skl span{font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);border:1px solid var(--line);padding:1px 5px}
   @media(max-width:640px){
     table.tasks thead{position:absolute;left:-9999px}
     table.tasks tbody tr{display:block;border:1px solid var(--line);border-left-width:3px;margin-bottom:6px}
@@ -295,19 +323,25 @@ async function projectView(id){
   // phase progress: tasks in phase order with a status dot — recon done? what's left?
   const phases=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
   const phaseHtml=phases.length?phases.map(t=>\`<div class="pp st-\${t.status}"><span class="d"></span>P\${t.phase} \${esc(t.title)} · \${t.status}</div>\`).join(""):'<div class="empty">no phases planned yet</div>';
-  const done=by("merged").length,total=s.tasks.length,pct=total?Math.round(done/total*100):0;
+  const done=by("merged").length,total=s.tasks.filter(t=>t.status!=="superseded").length,pct=total?Math.round(done/total*100):0;
   // attention banner: surface tasks that need the operator (awaiting answer / failed)
   const attn=s.tasks.filter(t=>t.status==="blocked"||t.status==="stuck");
-  const attHtml=attn.length?\`<div class="attn"><b>⚠ NEEDS YOU — \${attn.length} task(s) awaiting / failed</b>\${attn.map(t=>\`<div class="attn-row"><span class="st st-\${t.status}">\${t.status==="blocked"?"AWAITING":"FAILED"}</span> <strong>\${esc(t.title)}</strong> — \${esc(t.notes||"(no detail — open the task)")}</div>\`).join("")}</div>\`:"";
+  const attHtml=attn.length?\`<div class="attn"><b>⚠ NEEDS YOU — \${attn.length} task(s) awaiting / failed</b>\${attn.map(t=>\`<div class="attn-row">
+      <div><span class="st st-\${t.status}">\${t.status==="blocked"?"AWAITING":"FAILED"}</span> <strong>\${esc(t.title)}</strong></div>
+      <div class="q">\${esc(t.notes||"(no detail — open the task)")}</div>
+      <form class="ans" method="POST" action="/answer"><input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="id" value="\${t.id}">
+        <input type="text" name="text" placeholder="Answer this — task resumes at top of queue" autocomplete="off" required><button>Answer &amp; unblock</button></form>
+      <form class="inl" method="POST" action="/task"><input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="id" value="\${t.id}"><input type="hidden" name="action" value="close"><button class="mini">✕ close (superseded)</button></form>
+    </div>\`).join("")}</div>\`:"";
   // status model → the five states the operator watches
-  const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"]};
+  const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"],superseded:["SUPERSEDED","st-superseded"]};
   const stL=(x)=>STMAP[x]||[String(x).toUpperCase(),""];
   const chips=[["active",by("building").length,"st-building"],["in progress",by("review").length+by("changes").length,"st-review"],["queued",by("queued").length,"st-queued"],["completed",done,"st-merged"],["awaiting",by("blocked").length,"st-blocked"],["failed",by("stuck").length,"st-stuck"],["findings",finds.length,""]]
     .map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("");
   const rowActs=(t)=>t.status==="queued"?actForm(id,t.id,"bump","▲")+actForm(id,t.id,"hold","⏸"):(t.status==="blocked"||t.status==="stuck")?actForm(id,t.id,"requeue","↻","go"):"";
   const trows=s.tasks.slice().sort((a,b)=>(a.priority??3)-(b.priority??3)||a.phase-b.phase||a.id-b.id).map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}">
     <td data-l="#" class="id">\${t.id}</td>
-    <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}</td>
+    <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
     <td data-l="Phase">P\${t.phase}</td>
     <td data-l="Pri">\${t.priority??3}</td>
     <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>

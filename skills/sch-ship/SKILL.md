@@ -8,6 +8,9 @@ description: Deliver a SCH Loop project when its queue is drained and its contra
 > **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Run
 > `node scripts/state.mjs …` from there, or use the absolute path
 > `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> **`--project` is optional** — if omitted it is auto-detected from the current
+> folder (the registered project whose `path` contains your cwd). Check with
+> `state.mjs project-here`..
 
 Runs only when the project has no ready or in-flight work **and** its contract is
 satisfied. Verify that first. Deliverable shape comes from the pack

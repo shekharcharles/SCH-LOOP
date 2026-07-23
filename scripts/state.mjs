@@ -30,7 +30,10 @@ export function auditLog(entry) {
   } catch { /* logging must never break the engine */ }
 }
 
-export const STATUSES = ["queued", "building", "review", "changes", "merged", "blocked", "stuck"];
+export const STATUSES = ["queued", "building", "review", "changes", "merged", "blocked", "stuck", "superseded"];
+// "superseded" = closed because it was replaced/decomposed. Not done, not
+// awaiting — it must never show up in the "needs you" banner.
+export const CLOSED = new Set(["merged", "superseded"]);
 const DONE = new Set(["merged"]); // "merged" = the generic "done" status for any pack
 export const OFFENSIVE = new Set(["web-pentest", "api-pentest", "mobile-android", "mobile-ios",
   "red-team-external", "red-team-internal", "external-network", "internal-network"]);
@@ -81,6 +84,8 @@ export function addTask(state, t) {
     target: t.target ?? "",   // offensive: which in-scope target
     source: t.source ?? "plan",
     notes: t.notes ?? "",
+    skills: t.skills ?? [],   // which installed skills this task dispatched to
+    answers: t.answers ?? [], // operator answers to blocked-task questions
     createdAt: now(),
     updatedAt: now(),
   };
@@ -195,7 +200,18 @@ function parseFlags(argv) {
 }
 const splitList = (s) => (s ? s.split(/\s*\|\s*|\n/).map((x) => x.trim()).filter(Boolean) : []);
 const out = (v) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
-const pid = (flags) => flags.project || process.env.SCH_PROJECT || die("need --project <id>");
+// Resolve the project from the current working directory, so --project is
+// optional: run the command from inside a project's folder and it just works.
+// Most specific (longest) registered path wins, so nested projects resolve right.
+const norm = (p) => (p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+export function detectProject(cwd = process.cwd()) {
+  const here = norm(cwd);
+  return (loadRegistry().projects || [])
+    .filter((p) => p.path && (here === norm(p.path) || here.startsWith(norm(p.path) + "/")))
+    .sort((a, b) => norm(b.path).length - norm(a.path).length)[0]?.id ?? null;
+}
+const pid = (flags) => flags.project || process.env.SCH_PROJECT || detectProject()
+  || die("no --project given and this folder matches no registered project. Use --project <id>, or run from the project folder. See: project-list");
 const die = (m) => { console.error("error: " + m); process.exit(1); };
 
 const commands = {
@@ -219,6 +235,11 @@ const commands = {
     out(p);
   },
   "project-list"() { out(loadRegistry().projects); },
+  // Which project does the current folder resolve to? (--project is optional)
+  "project-here"() {
+    const id = detectProject();
+    out(id ? { project: id, cwd: process.cwd(), ...getProject(id) } : "no registered project matches " + process.cwd());
+  },
   "project-get"({ flags, pos }) { out(getProject(flags.project ?? pos[0]) ?? "not found"); },
 
   "scope-set"({ flags }) {
@@ -308,6 +329,29 @@ const commands = {
     saveState(proj.id, s);
     out({ project: proj.id, domain: proj.domain, targets, ref: a.ref, expiry: a.expiry, next: `sch-plan --project ${proj.id}` });
   },
+  // ---- run lock: only one loop pass per project at a time ----
+  // The loop interval no longer matters: if a pass is still working, the next
+  // pass acquires nothing and exits. A stale lock (older than its TTL — e.g. the
+  // session died mid-task) is taken over automatically so work never wedges.
+  "lock-acquire"({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    const ttlMs = Number(flags.ttl ?? 45) * 60000;   // minutes; set > longest task
+    const l = s.lock;
+    if (l && Date.now() - new Date(l.ts).getTime() < (l.ttlMs ?? ttlMs)) {
+      return out(`BUSY held-by=${l.holder} since=${l.ts} — a pass is still running, exit this pass`);
+    }
+    if (l) event(s, `stale lock from ${l.ts} taken over`);
+    s.lock = { holder: flags.holder ?? "sch-run", ts: now(), ttlMs };
+    event(s, `run-lock acquired (${s.lock.holder})`);
+    saveState(id, s); out("ACQUIRED");
+  },
+  "lock-release"({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    if (s.lock) { delete s.lock; event(s, "run-lock released"); saveState(id, s); }
+    out("RELEASED");
+  },
+  "lock-status"({ flags }) { out(loadState(pid(flags)).lock ?? "free"); },
+
   "provenance"({ flags }) {
     const a = (loadRegistry().authorizations ?? []).find((x) => x.ref === flags.ref);
     out(a ? (a.provenance ?? []) : "no such authorization");
@@ -394,6 +438,8 @@ const commands = {
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
     for (const k of ["status", "branch", "notes", "phase", "target", "priority"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
+    // record which installed skills this task dispatched to (visible on the dashboard)
+    if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
     // a status note (the "what it's doing" / the blocked question) sticks to the
     // task so the dashboard can surface it, not just log it as an event.
     if (flags.note !== undefined) t.notes = flags.note;
@@ -402,6 +448,19 @@ const commands = {
     saveState(id, s); out(t);
   },
   "task-next"({ flags }) { out(nextReady(loadState(pid(flags))) ?? "none"); },
+  // Answer a blocked task's question → records the answer and returns it to the
+  // queue at high priority so the next pass picks it up with the decision in hand.
+  "task-answer"({ flags, pos }) {
+    const id = pid(flags); const s = loadState(id);
+    const t = s.tasks.find((x) => x.id === Number(pos[0] ?? flags.task));
+    if (!t) return out("not found");
+    const text = (flags.text ?? pos.slice(1).join(" ")).trim();
+    if (!text) return out("need answer text");
+    t.answers = [...(t.answers ?? []), { text, ts: now() }];
+    t.status = "queued"; t.priority = 1; t.updatedAt = now();
+    event(s, `task #${t.id} answered by operator -> requeued (p1): ${text.slice(0, 80)}`);
+    saveState(id, s); out(t);
+  },
 
   "inbox-add"({ flags, pos }) {
     const id = pid(flags); const s = loadState(id);

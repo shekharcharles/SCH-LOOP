@@ -8,7 +8,10 @@ description: The SCH Loop engine, one project per loop. One pass fully completes
 > **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Every
 > `node scripts/state.mjs …` command and every `packs/…` file below lives there.
 > If your terminal is in another folder, use the absolute path, e.g.
-> `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`. Dev git ops run
+> `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> **`--project` is optional** — if omitted it is auto-detected from the current
+> folder (the registered project whose `path` contains your cwd). Check with
+> `state.mjs project-here`.. Dev git ops run
 > in the project's own `path`; state + packs always come from `SCH_HOME`.
 
 One pass = one task carried to done, or one convergence round on a task in
@@ -32,6 +35,23 @@ Read `packs/packs.json` for the domain → `kind`, `dispatch`, `validate`,
 **Load prior learning:** read `knowledge/<pack>.md` and apply its accumulated
 techniques, target-class patterns, and false-positive filters to this pass. The
 loop gets smarter each engagement because of this file.
+
+## 0b. Take the run lock (FIRST action — prevents overlapping passes)
+
+```bash
+node scripts/state.mjs lock-acquire --project <id> --ttl 45
+```
+
+- Returns **`BUSY …`** → a previous pass is still working. **End this pass
+  immediately, do nothing else.** This is why the loop interval does not matter:
+  a short interval simply no-ops while work is in flight.
+- Returns **`ACQUIRED`** → proceed. A lock older than its TTL is taken over
+  automatically, so a crashed session never wedges the project.
+- **Always release at the end of the pass** (success, blocked, or error):
+  ```bash
+  node scripts/state.mjs lock-release --project <id>
+  ```
+  Set `--ttl` longer than your longest expected task (default 45 min).
 
 ## 1. Inbox first (never skip)
 
@@ -126,6 +146,25 @@ this task id (clean context — the executor never reviews itself). It returns
     applicable class is `validated` or `tested-clean` — no untested cells.
   - Then `task-set --project <id> <taskId> --status merged --note "<done ref>"`
     (`merged` is the generic "done" status for every pack).
+
+**Record what was used and what changed (every completed task):**
+
+1. **Skills used** — record which installed skills this task dispatched to, so
+   it is visible on the dashboard and auditable:
+   ```bash
+   node scripts/state.mjs task-set --project <id> <taskId> --skills "taste-skill|gsap-scrolltrigger"
+   ```
+2. **CHANGELOG.md** (in the project's own `path`) — append one entry per
+   completed task: date, task id + title, what changed (files/behaviour), the
+   merge/commit ref, and skills used. Create the file if missing.
+3. **HANDOFF.md** (in the project's `path`) — **overwrite** it each pass so it
+   always reflects current reality: what is done, what is in flight, what is next
+   in the queue, open questions/blockers, how to resume (branch, commands to run
+   the app/tests), and any known issues. This is the "pick up where it left off"
+   document for you or another session.
+
+These three plus `state.json` (tasks/findings/events) and `logs/audit-*.jsonl`
+are the complete record of what the loop did and why.
 
 Completion happens inside the loop, per task. The human gates are the contract
 (spec) and the inbox (direction) and — for offensive — the scope gate; not this.
