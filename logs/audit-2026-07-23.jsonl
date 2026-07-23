@@ -1,0 +1,3 @@
+{"ts":"2026-07-23T13:58:53.896Z","kind":"command","cmd":"cr-new","flags":{"id":"CR-DEMO","targets":"nb-nextgen-sit.hdfcbank.com/cards","via":"Teams","by":"HDFC","path":"C:/Users/r00t/Desktop/loop/SCH-loop/projects/cr-demo"},"pos":[]}
+{"ts":"2026-07-23T13:58:54.004Z","kind":"scope-check","project":"cr-demo","target":"nb-nextgen-sit.hdfcbank.com/cards","decision":"IN-SCOPE","ref":"HDFC-STANDING-AUTH-2026-07","client":"HDFC Bank"}
+{"ts":"2026-07-23T13:58:54.070Z","kind":"command","cmd":"cr-new","flags":{"id":"CR-BAD","targets":"randomtarget.com"},"pos":[]}

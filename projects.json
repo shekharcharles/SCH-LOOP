@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "projects": [],
+  "authorizations": [
+    {
+      "client": "HDFC Bank",
+      "ref": "HDFC-STANDING-AUTH-2026-07",
+      "signatory": "Sachin Chidrewar (per standing authorization email; under applicable SOW/RoE)",
+      "scopeDomains": [
+        "nb-nextgen-sit.hdfcbank.com",
+        "nb-nextgen-sit2.hdfcbank.com"
+      ],
+      "outOfScope": [],
+      "expiry": "2027-07-01",
+      "roe": "UAT/SIT/dev/pre-prod/internal + red team. Production only per specific host formally shared for verification/retest. Assets covered when formally shared via approved HDFC channel and added to registry. Per HDFC policies, SOW, RoE, testing restrictions.",
+      "compliance": [
+        "OWASP ASVS",
+        "OWASP Top-10",
+        "OWASP API Top-10",
+        "CERT-In",
+        "RBI Cyber Security Framework",
+        "SEBI CSCRF"
+      ],
+      "createdAt": "2026-07-23T13:49:14.862Z",
+      "provenance": [],
+      "clientDomains": [
+        "hdfcbank.com"
+      ]
+    }
+  ]
+}
