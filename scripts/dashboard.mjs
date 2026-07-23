@@ -7,7 +7,29 @@
 //   node scripts/dashboard.mjs        # http://<tailscale-ip>:4600
 
 import { createServer } from "node:http";
+import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE } from "./state.mjs";
+
+// Catalog of installed skills the operator can require for a project.
+// Read once per request from ~/.claude/skills/<name>/SKILL.md frontmatter.
+function skillCatalog() {
+  const root = join(homedir(), ".claude", "skills");
+  if (!existsSync(root)) return [];
+  const out = [];
+  for (const name of readdirSync(root)) {
+    const f = join(root, name, "SKILL.md");
+    if (!existsSync(f)) continue;
+    let desc = "";
+    try {
+      const t = readFileSync(f, "utf8").slice(0, 1200);
+      desc = (t.match(/^description:\s*(.+)$/m)?.[1] || "").slice(0, 140);
+    } catch { /* ignore */ }
+    out.push({ name, desc });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 const PORT = process.env.SCH_PORT || 4600;
 const json = (res, b) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
@@ -113,6 +135,25 @@ const server = createServer((req, res) => {
     });
     return;
   }
+  // Save the project's required skills (checkbox picker).
+  if (req.method === "POST" && url.pathname === "/skills") {
+    let body = ""; req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const p = new URLSearchParams(body);
+      const id = p.get("project");
+      const reg = loadRegistry(); const proj = reg.projects.find((x) => x.id === id);
+      if (proj) {
+        proj.requiredSkills = p.getAll("skills").filter(Boolean);
+        saveRegistry(reg);
+        const s = loadState(id);
+        event(s, `required skills set: ${proj.requiredSkills.join(", ") || "(none)"}`);
+        saveState(id, s);
+      }
+      res.writeHead(303, { location: "/?project=" + encodeURIComponent(id) }); res.end();
+    });
+    return;
+  }
+  if (url.pathname === "/api/skills") return json(res, skillCatalog());
   if (url.pathname === "/api/projects") {
     // registry + a small per-project rollup for the picker
     const reg = loadRegistry();
@@ -239,6 +280,18 @@ const PAGE = `<!doctype html>
   .ans input{flex:1;min-width:180px;font-family:inherit;font-size:14px;padding:8px 10px;background:var(--panel);color:var(--fg);border:1px solid var(--line)}
   .ans input:focus{outline:none;border-color:var(--green)}
   .ans button{font-family:inherit;padding:8px 14px;background:var(--green);color:#000;border:0;font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+  .skillbox{border:1px solid var(--line);background:var(--panel);padding:12px 14px;margin-bottom:8px}
+  .sk-sel{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+  .sk-chip{background:var(--green);color:#000;font-size:10px;font-weight:700;padding:2px 8px;letter-spacing:.05em;text-transform:uppercase}
+  .sk-search{width:100%;font-family:inherit;font-size:14px;padding:9px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);margin-bottom:8px}
+  .sk-search:focus{outline:none;border-color:var(--green)}
+  .sk-list{max-height:260px;overflow-y:auto;border:1px solid var(--line);margin-bottom:8px}
+  .sk-item{display:flex;align-items:baseline;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px}
+  .sk-item:hover{background:#171717}
+  .sk-item input{accent-color:#4af626;flex:0 0 auto}
+  .sk-n{font-weight:700;flex:0 0 auto}
+  .sk-d{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sk-save{font-family:inherit;padding:9px 16px;background:var(--green);color:#000;border:0;font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
   .skl{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}
   .skl span{font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);border:1px solid var(--line);padding:1px 5px}
   @media(max-width:640px){
@@ -359,6 +412,15 @@ async function projectView(id){
     <form class="inbox-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}">
       <input type="text" name="text" placeholder="NEW LEAD / TASK — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
     \${s.inbox.filter(i=>i.status==="new").length?'<h2>inbox<span class="n mono">'+s.inbox.filter(i=>i.status==="new").length+'</span></h2><div>'+s.inbox.filter(i=>i.status==="new").map(i=>\`<div class="frow">\${esc(i.text)}</div>\`).join("")+'</div>':''}
+    <h2>required skills<span class="n mono">\${(p.requiredSkills||[]).length} selected</span></h2>
+    <div class="skillbox">
+      <div class="sk-sel">\${(p.requiredSkills||[]).length?(p.requiredSkills).map(x=>'<span class="sk-chip">'+esc(x)+'</span>').join(""):'<span class="empty">none required — the loop may skip your design skills</span>'}</div>
+      <input type="text" id="skq" class="sk-search" placeholder="Search skills… (type to filter)" autocomplete="off" oninput="filterSkills()">
+      <form method="POST" action="/skills" id="skform"><input type="hidden" name="project" value="\${esc(id)}">
+        <div class="sk-list" id="sklist">loading…</div>
+        <button class="sk-save">Save required skills</button>
+      </form>
+    </div>
     <h2>tasks<span class="n mono">\${total}</span></h2>
     <div class="tbl-wrap"><table class="tasks"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>\${trows}</tbody></table></div>
     <h2>findings<span class="n mono">\${vfind.length}V / \${cleanN}C</span></h2>
@@ -366,11 +428,31 @@ async function projectView(id){
     <h2>activity<span class="n mono">\${s.events.length}</span></h2>
     <div>\${s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'}</div>\`;
 }
+// skill picker: catalog fetched once, rendered with checkboxes + live search
+let SKILLS=null;
+async function renderSkills(selected){
+  const box=document.getElementById("sklist"); if(!box)return;
+  if(!SKILLS){try{SKILLS=await (await fetch("/api/skills")).json();}catch{SKILLS=[];}}
+  const sel=new Set(selected||[]);
+  box.innerHTML=SKILLS.map(s=>\`<label class="sk-item" data-n="\${esc(s.name)} \${esc(s.desc).toLowerCase()}">
+    <input type="checkbox" name="skills" value="\${esc(s.name)}"\${sel.has(s.name)?" checked":""}>
+    <span class="sk-n">\${esc(s.name)}</span><span class="sk-d">\${esc(s.desc)}</span></label>\`).join("")
+    ||'<div class="empty">no skills found in ~/.claude/skills</div>';
+  filterSkills();
+}
+function filterSkills(){
+  const q=(document.getElementById("skq")?.value||"").toLowerCase().trim();
+  document.querySelectorAll("#sklist .sk-item").forEach(el=>{
+    el.style.display=!q||el.dataset.n.includes(q)?"":"none";
+  });
+}
 async function refresh(){
   // don't wipe the DOM while the user is typing in an input (the add-idea box)
   const ae=document.activeElement;
   if(ae&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA"))return;
-  const id=qp("project");id?await projectView(id):await projectList();
+  const id=qp("project");
+  if(id){await projectView(id);const pr=await (await fetch("/api/state?project="+encodeURIComponent(id))).json();renderSkills(pr.project?.requiredSkills||[]);}
+  else await projectList();
 }
 refresh();setInterval(refresh,5000);
 </script>

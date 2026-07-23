@@ -45,6 +45,22 @@ For web/app tasks, confirm the builder actually validated in the browser
 is a `[VALIDATION]` must-fix. For non-web tasks, confirm the domain's proof
 exists.
 
+## 3b. Required-skills gate (reject if the operator's skills were skipped)
+
+The operator pins skills to a project because they want that quality bar. Verify
+they were actually invoked — against Claude Code's transcript, not the agent's claim:
+
+```bash
+node scripts/state.mjs skills-get --project <id>
+node scripts/verify-skills.mjs --project <id> --since 60
+```
+
+If it exits **1 (FAIL)** and the missing skills apply to this task's kind, that is
+a **must-fix finding**: `[SKILL] required skill(s) <names> were never invoked`.
+Return `changes` — the task does not pass review. Only waive it when the skill is
+genuinely irrelevant to this task (e.g. a design skill on a pure backend task),
+and say so in the verdict.
+
 ## 4. Return one verdict
 
 Return to the caller (do not merge, do not push, do not label anything):
