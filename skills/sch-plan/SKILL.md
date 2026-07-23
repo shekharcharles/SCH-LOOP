@@ -64,15 +64,29 @@ Never create an offensive task whose `--target` is not in `SCOPE.md`. If the
 scope is empty or unauthorized, do not plan active tasks — plan recon only and
 tell the user to arm the scope gate.
 
-## 3. Fold in inbox ideas
+## 3. Fold in inbox ideas — reason placement into the queue
 
-For each new inbox item: think it through against the contract + codebase, turn
-it into task(s) (or, if it expands product scope / changes the engagement scope,
-flag it as a PRD/SCOPE change and — interactive — stop for the user). Then:
+Inbox items are tasks/leads you (or the dashboard) submitted mid-run. For each
+new item: think it through against the contract + codebase/attack-surface, then
+**place it intelligently** — do not just append to the end of a 150-item queue:
+
+- **Priority** (`--priority 1..5`, 1=highest): a hot lead / critical fix / an
+  active exploit path the user flagged → high priority so `task-next` picks it
+  before lower-priority backlog. Routine coverage → normal (3).
+- **Phase**: slot it into the right methodology phase (offensive) or stage (dev).
+- **Deps** (`--deps`): if it can only run after other work (needs a merged
+  feature, or a foothold from an earlier phase), set the dependency so it stays
+  hidden until ready.
+- If it expands product scope / changes the engagement scope, flag it as a
+  PRD/SCOPE change and — interactive — stop for the user; don't silently widen scope.
 
 ```bash
+node scripts/state.mjs task-add --project <id> --priority 1 --phase 4 --title "..." --source inbox --deps "..."
 node scripts/state.mjs inbox-mark --project <id> <inboxId>
 ```
+
+This is why the dashboard "add" box works even with a huge queue: you drop a
+lead, the next pass reasons it to the correct slot and priority, not the bottom.
 
 ## 4. Confirm (interactive only)
 

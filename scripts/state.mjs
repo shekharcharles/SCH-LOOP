@@ -70,6 +70,7 @@ export function addTask(state, t) {
   const task = {
     id: ++state.seq.task,
     phase: Number(t.phase ?? 1),
+    priority: Number(t.priority ?? 3), // 1=highest … 5=lowest; picked before phase order
     title: t.title ?? "(untitled)",
     ac: t.ac ?? [],           // dev: acceptance criteria; offensive: phase objectives
     ng: t.ng ?? [],
@@ -93,6 +94,11 @@ export function addTask(state, t) {
 export function addFinding(state, f) {
   state.seq.finding = state.seq.finding ?? 0;
   state.findings = state.findings ?? [];
+  const parents = (f.parents ?? []).map(Number).filter(Boolean);
+  // chain depth = 1 + deepest parent (root finding = 0). Used to cap chaining.
+  const parentDepth = parents.reduce((m, pid) => {
+    const p = state.findings.find((x) => x.id === pid); return p ? Math.max(m, p.chainDepth ?? 0) : m;
+  }, -1);
   const finding = {
     id: ++state.seq.finding,
     phase: Number(f.phase ?? 0),
@@ -104,18 +110,27 @@ export function addFinding(state, f) {
     status: f.status ?? "candidate",  // candidate|validated|tested-clean|false-positive|reported
     evidence: f.evidence ?? "",
     notes: f.notes ?? "",
+    parents,                          // finding ids this was chained from
+    chainDepth: parents.length ? parentDepth + 1 : 0,
     createdAt: now(),
   };
   state.findings.push(finding);
-  event(state, `finding #${finding.id} [${finding.status}] ${finding.title}`);
+  const chain = parents.length ? ` (chain d${finding.chainDepth} from #${parents.join(",#")})` : "";
+  event(state, `finding #${finding.id} [${finding.status}] ${finding.title}${chain}`);
   return finding;
 }
+
+// Max chain depth reached in this project — the loop stops spawning chain-hunts
+// past CHAIN_MAX (default 3) to avoid infinite self-spawning.
+export const CHAIN_MAX = 3;
 
 export function nextReady(state) {
   return state.tasks
     .filter((t) => t.status === "queued")
     .filter((t) => t.deps.every((d) => { const dep = state.tasks.find((x) => x.id === d); return dep && DONE.has(dep.status); }))
-    .sort((a, b) => a.phase - b.phase || a.id - b.id)[0] ?? null;
+    // priority first (1=highest), then phase order, then FIFO — so a hot task
+    // submitted from the dashboard jumps ahead of a 150-item queue when it should.
+    .sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.phase - b.phase || a.id - b.id)[0] ?? null;
 }
 
 const expired = (iso) => iso && new Date(iso).getTime() < Date.now();
@@ -297,6 +312,26 @@ const commands = {
     const a = (loadRegistry().authorizations ?? []).find((x) => x.ref === flags.ref);
     out(a ? (a.provenance ?? []) : "no such authorization");
   },
+  // Retest: spin a new project seeded with one task per validated finding from a
+  // source engagement (post-remediation re-verification). Inherits the source's
+  // scope + authorization. The loop re-tests each and records fixed (tested-clean)
+  // or still-open (validated); the report is the fixed/open delta.
+  "retest-new"({ flags }) {
+    const from = flags.from ?? die("need --from <source project id>");
+    const r = loadRegistry(); const src = r.projects.find((p) => p.id === from);
+    if (!src) die("no such source project: " + from);
+    const validated = (loadState(from).findings ?? []).filter((f) => f.status === "validated");
+    if (!validated.length) die("source has no validated findings to retest");
+    const newId = (flags.id ?? from + "-retest").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    if (r.projects.some((p) => p.id === newId)) die("project exists: " + newId);
+    const proj = { id: newId, name: flags.name ?? (src.name + " — retest"), domain: src.domain, path: flags.path ?? "", scope: structuredClone(src.scope ?? {}), createdAt: now() };
+    r.projects.push(proj); saveRegistry(r);
+    const s = structuredClone(STATE_EMPTY);
+    for (const f of validated) addTask(s, { phase: f.phase, priority: 2, title: "Re-verify: " + f.title, active: f.target ? true : false, target: f.target, source: "retest", notes: `Original finding: ${f.category || ""} sev=${f.severity} — confirm fixed or still-open. Evidence: ${f.evidence || "n/a"}` });
+    event(s, `retest of ${from}: ${validated.length} finding(s) queued for re-verification`);
+    saveState(newId, s);
+    out({ project: newId, retesting: validated.length, from, next: `sch-plan (optional) then /loop /sch-run --project ${newId}` });
+  },
   "auth-remove"({ flags }) {
     const r = loadRegistry(); const n = (r.authorizations ?? []).length;
     r.authorizations = (r.authorizations ?? []).filter((x) => x.ref !== flags.ref);
@@ -318,8 +353,14 @@ const commands = {
   // ---- findings (per project) ----
   "finding-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
-    const f = addFinding(s, { phase: flags.phase, target: flags.target, title: flags.title, category: flags.category, severity: flags.severity, cvss: flags.cvss, status: flags.status, evidence: flags.evidence, notes: flags.notes });
+    const f = addFinding(s, { phase: flags.phase, target: flags.target, title: flags.title, category: flags.category, severity: flags.severity, cvss: flags.cvss, status: flags.status, evidence: flags.evidence, notes: flags.notes, parents: splitList(flags.parents) });
     saveState(id, s); out(f.id.toString());
+  },
+  // Chain lineage: show each validated finding and what it chained from/into.
+  "chains"({ flags }) {
+    const s = loadState(pid(flags));
+    const v = (s.findings ?? []).filter((f) => f.status === "validated");
+    out(v.map((f) => ({ id: f.id, title: f.title, severity: f.severity, depth: f.chainDepth, from: f.parents, into: v.filter((x) => (x.parents ?? []).includes(f.id)).map((x) => x.id) })));
   },
   "finding-list"({ flags }) {
     const s = loadState(pid(flags));
@@ -337,7 +378,7 @@ const commands = {
 
   "task-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
-    const t = addTask(s, { phase: flags.phase, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target });
+    const t = addTask(s, { phase: flags.phase, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target });
     saveState(id, s); out(t.id.toString());
   },
   "task-list"({ flags }) {
@@ -352,7 +393,7 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
-    for (const k of ["status", "branch", "notes", "phase", "target"]) if (flags[k] !== undefined) t[k] = k === "phase" ? Number(flags[k]) : flags[k];
+    for (const k of ["status", "branch", "notes", "phase", "target", "priority"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
     t.updatedAt = now();
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);

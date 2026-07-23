@@ -135,6 +135,21 @@ Completion happens inside the loop, per task. The human gates are the contract
 - **Grow:** if executing revealed a needed feature/enhancement (dev) or a new
   lead worth a follow-up phase (offensive), add tasks so they get done too:
   `task-add --project <id> --source build ...`. The loop picks them up.
+
+- **Chain (offensive):** whenever you `finding-add` a `validated` finding, ask
+  "what does this primitive unlock?" and spawn a **chain-hunt task**
+  (`--source chain`) for each realistic escalation, unless the finding's
+  `chainDepth` already reached `CHAIN_MAX` (3). Record chained findings with
+  `finding-add --parents "<id>"` so lineage + depth are tracked. Common chains:
+  - SSRF → cloud metadata → creds → data / lateral
+  - IDOR/BOLA + mass-assignment → privilege escalation / tenant takeover
+  - reflected/stored XSS + weak CSRF/SameSite → account takeover
+  - open redirect + OAuth `redirect_uri` → token/code theft → ATO
+  - file upload + path traversal / LFI → RCE
+  - SQLi → auth bypass → admin → RCE (stacked/`xp_cmdshell`/`INTO OUTFILE`)
+  - exposed secret/key → API/cloud access → data
+  A proven chain outranks its individual parts — reviewers rate it higher. Stay
+  within RoE (no destructive actions); the depth cap prevents infinite spawning.
 - **Blocked:** a real product/authorization decision → write one concrete
   question (decision, options, which AC/objective), `task-set --status blocked`,
   end pass. It returns when a human answers via the dashboard inbox.
