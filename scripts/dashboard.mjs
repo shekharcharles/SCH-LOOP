@@ -112,7 +112,11 @@ const server = createServer((req, res) => {
   res.writeHead(404); res.end("not found");
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log(`SCH Loop dashboard on http://0.0.0.0:${PORT}  (reach it at your Tailscale IP)`));
+// Bind address. Default 0.0.0.0 (localhost + LAN + Tailscale). On an untrusted
+// network (office / client / public wifi) set SCH_BIND to your Tailscale IP so
+// the dashboard is reachable over the tailnet but NOT to the local LAN.
+const BIND = process.env.SCH_BIND || "0.0.0.0";
+server.listen(PORT, BIND, () => console.log(`SCH Loop dashboard on http://${BIND}:${PORT}  (Tailscale IP reaches it from any device)`));
 
 // ---- UI: Tactical Telemetry (industrial-brutalist), responsive desktop + mobile ----
 const PAGE = `<!doctype html>
