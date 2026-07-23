@@ -174,6 +174,18 @@ finding-list --project <id> [--status] | finding-set --project <id> <n> ...
 inbox-add --project <id> "<text>" | inbox-list --project <id> [--new] | inbox-mark --project <id> <n>
 ```
 
+## Dashboard security model
+
+- The dashboard is intended to be reached **only over your private Tailscale
+  tailnet (or localhost)** — never exposed to the public internet. That network
+  boundary is the access control; do not port-forward it or bind it to a public
+  interface.
+- State-changing POSTs (scope arm/HALT, task, inbox) are **CSRF-protected**
+  (same-origin enforced), so a malicious page you happen to open cannot drive
+  your scope gate through your browser.
+- For extra hardening on a shared tailnet, run it bound to localhost and reach it
+  via an SSH/Tailscale tunnel, or put an authenticating reverse proxy in front.
+
 ## Rules that keep it safe
 
 - One task per pass; one project per running loop.
