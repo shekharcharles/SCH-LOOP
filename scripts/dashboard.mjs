@@ -176,6 +176,27 @@ const PAGE = `<!doctype html>
   .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
   .pp.st-merged .d{background:var(--green)}.pp.st-building .d{background:#e3b341}.pp.st-review .d{background:#58a6ff}
   .pp.st-queued .d{background:var(--dim)}.pp.st-blocked .d,.pp.st-stuck .d{background:var(--red)}.pp.st-changes .d{background:#f0883e}
+  .chips{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:4px}
+  .chip{background:var(--panel);padding:8px 11px;flex:1;min-width:82px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+  .chip b{display:block;font-size:18px;color:var(--fg);line-height:1;margin-bottom:2px}
+  .chip.st-building b{color:#e3b341}.chip.st-review b{color:#58a6ff}.chip.st-merged b{color:var(--green)}.chip.st-blocked b,.chip.st-stuck b{color:var(--red)}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);margin-bottom:8px}
+  table.tasks{width:100%;border-collapse:collapse;font-size:12px}
+  table.tasks th{background:var(--panel);color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:10px;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  table.tasks td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.tasks tbody tr{border-left:3px solid transparent}
+  table.tasks tr.st-building{border-left-color:#e3b341}table.tasks tr.st-review,table.tasks tr.st-changes{border-left-color:#58a6ff}
+  table.tasks tr.st-merged{border-left-color:var(--green)}table.tasks tr.st-blocked,table.tasks tr.st-stuck{border-left-color:var(--red)}table.tasks tr.st-queued{border-left-color:var(--dim)}
+  .st{font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border:1px solid var(--line);white-space:nowrap}
+  .st.st-building{color:#e3b341}.st.st-review,.st.st-changes{color:#58a6ff}.st.st-merged{color:var(--green)}.st.st-blocked,.st.st-stuck{color:var(--red)}.st.st-queued{color:var(--dim)}
+  td.ac{white-space:nowrap} td.ac .mini{padding:4px 8px}
+  @media(max-width:640px){
+    table.tasks thead{position:absolute;left:-9999px}
+    table.tasks tbody tr{display:block;border:1px solid var(--line);border-left-width:3px;margin-bottom:6px}
+    table.tasks td{display:flex;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--line);padding:6px 10px}
+    table.tasks td::before{content:attr(data-l);color:var(--dim);text-transform:uppercase;font-size:10px;letter-spacing:.06em;flex:0 0 auto}
+    table.tasks td[data-l=""]{justify-content:flex-end}table.tasks td[data-l=""]::before{content:""}
+  }
   .acts{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
   form.inl{display:inline;margin:0}
   .mini{font-family:inherit;padding:7px 12px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
@@ -219,15 +240,6 @@ async function projectList(){
 function actForm(pid,id,action,label,cls){return \`<form class="inl" method="POST" action="/task">
   <input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}">
   <input type="hidden" name="action" value="\${action}"><button class="mini \${cls||''}">\${label}</button></form>\`;}
-function taskCard(t,pid){
-  let acts="";
-  if(t.status==="queued")acts=actForm(pid,t.id,"bump","▲ bump")+actForm(pid,t.id,"hold","⏸ hold");
-  else if(t.status==="blocked"||t.status==="stuck")acts=actForm(pid,t.id,"requeue","↻ requeue","go");
-  return \`<div class="cell"><div class="row"><span class="id">UNIT/\${t.id}</span>
-    <span class="badge st-\${t.status}">\${t.status}</span><span class="ttl">\${esc(t.title)}</span>\${t.active?' <span class="badge b-off">active</span>':''}</div>
-    <div class="meta">PH:\${t.phase}\${t.target?" · "+esc(t.target):""} · \${t.ac.length} OBJ\${t.branch?" · "+esc(t.branch):""} · SRC:\${t.source}</div>\${acts?'<div class="acts">'+acts+'</div>':''}</div>\`;
-}
-function lane(title,arr,render,em){return \`<h2>\${title}<span class="n mono">\${arr.length}</span></h2>\${arr.length?'<div class="grid cards">'+arr.map(render).join("")+'</div>':'<div class="empty">'+em+'</div>'}\`;}
 
 async function projectView(id){
   const r=await (await fetch("/api/state?project="+encodeURIComponent(id))).json();
@@ -244,31 +256,40 @@ async function projectView(id){
   const finds=s.findings||[];
   const vfind=finds.filter(f=>f.status==="validated").sort((a,b)=>srank(a.severity)-srank(b.severity)||a.id-b.id);
   const cleanN=finds.filter(f=>f.status==="tested-clean").length;
-  const crithigh=vfind.filter(f=>["critical","high"].includes((f.severity||"").toLowerCase())).length;
   const findHtml=vfind.length?vfind.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ from #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="meta">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>';
   // phase progress: tasks in phase order with a status dot — recon done? what's left?
   const phases=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
   const phaseHtml=phases.length?phases.map(t=>\`<div class="pp st-\${t.status}"><span class="d"></span>P\${t.phase} \${esc(t.title)} · \${t.status}</div>\`).join(""):'<div class="empty">no phases planned yet</div>';
   const done=by("merged").length,total=s.tasks.length,pct=total?Math.round(done/total*100):0;
-  const kpi=[["queue",by("queued").length],["build",by("building").length],["review",by("review").length],["done",\`\${done}/\${total}\`],["findings",finds.length],["crit+high",crithigh],["inbox",s.inbox.filter(i=>i.status==="new").length]]
-    .map(([n,v])=>\`<div class="kpi"><b class="mono">\${v}</b><span>\${n}</span></div>\`).join("");
+  // status model → the five states the operator watches
+  const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"]};
+  const stL=(x)=>STMAP[x]||[String(x).toUpperCase(),""];
+  const chips=[["active",by("building").length,"st-building"],["in progress",by("review").length+by("changes").length,"st-review"],["queued",by("queued").length,"st-queued"],["completed",done,"st-merged"],["awaiting",by("blocked").length,"st-blocked"],["failed",by("stuck").length,"st-stuck"],["findings",finds.length,""]]
+    .map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("");
+  const rowActs=(t)=>t.status==="queued"?actForm(id,t.id,"bump","▲")+actForm(id,t.id,"hold","⏸"):(t.status==="blocked"||t.status==="stuck")?actForm(id,t.id,"requeue","↻","go"):"";
+  const trows=s.tasks.slice().sort((a,b)=>(a.priority??3)-(b.priority??3)||a.phase-b.phase||a.id-b.id).map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}">
+    <td data-l="#" class="id">\${t.id}</td>
+    <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}</td>
+    <td data-l="Phase">P\${t.phase}</td>
+    <td data-l="Pri">\${t.priority??3}</td>
+    <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
+    <td data-l="Target">\${esc(t.target||"—")}</td>
+    <td data-l="Activity">\${esc(t.notes||t.branch||"—")}</td>
+    <td data-l="" class="ac">\${rowActs(t)}</td></tr>\`;}).join("")||'<tr><td colspan="8" class="empty">no tasks planned yet</td></tr>';
   document.getElementById("app").innerHTML=\`
     <div class="bar"><span><span class="dot"></span>online</span><span class="mono">\${clock()}</span><a class="back" href="/">« all units</a></div>
     <h1>\${esc(p.name)}</h1><div class="sub">\${esc(p.domain)} · \${esc(p.path)||"no path"} \${pbadges({offensive:OFF(p.domain),authorized:sc.authorized,halt:sc.halt})}</div>
     \${scopeBox}
-    <div class="grid kpis">\${kpi}</div>
+    <div class="chips">\${chips}</div>
     <h2>phase progress<span class="n mono">\${pct}% done</span></h2>
     <div class="phase-strip">\${phaseHtml}</div>
-    <h2>findings<span class="n mono">\${vfind.length}V / \${cleanN}C</span></h2>
-    <div>\${findHtml}</div>
     <form class="inbox-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}">
       <input type="text" name="text" placeholder="NEW LEAD / TASK — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
-    \${lane("inbox",s.inbox.filter(i=>i.status==="new"),i=>\`<div class="cell">\${esc(i.text)}<div class="meta">\${i.createdAt.slice(0,16).replace("T"," ")}</div></div>\`,"empty")}
-    \${lane("in review",by("review"),t=>taskCard(t,id),"nothing in review")}
-    \${lane("building",by("building"),t=>taskCard(t,id),"idle")}
-    \${lane("queue",by("queued"),t=>taskCard(t,id),"queue empty")}
-    \${lane("blocked // stuck",s.tasks.filter(t=>t.status==="blocked"||t.status==="stuck"),t=>taskCard(t,id),"none")}
-    \${lane("done",by("merged").slice(-12).reverse(),t=>taskCard(t,id),"nothing done yet")}
+    \${s.inbox.filter(i=>i.status==="new").length?'<h2>inbox<span class="n mono">'+s.inbox.filter(i=>i.status==="new").length+'</span></h2><div>'+s.inbox.filter(i=>i.status==="new").map(i=>\`<div class="frow">\${esc(i.text)}</div>\`).join("")+'</div>':''}
+    <h2>tasks<span class="n mono">\${total}</span></h2>
+    <div class="tbl-wrap"><table class="tasks"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>\${trows}</tbody></table></div>
+    <h2>findings<span class="n mono">\${vfind.length}V / \${cleanN}C</span></h2>
+    <div>\${findHtml}</div>
     <h2>activity<span class="n mono">\${s.events.length}</span></h2>
     <div>\${s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'}</div>\`;
 }
