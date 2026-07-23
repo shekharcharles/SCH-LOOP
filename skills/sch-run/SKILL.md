@@ -139,15 +139,48 @@ Completion happens inside the loop, per task. The human gates are the contract
   question (decision, options, which AC/objective), `task-set --status blocked`,
   end pass. It returns when a human answers via the dashboard inbox.
 
+## 7b. Effort budgets & rabbit-hole escape (mandatory)
+
+An autonomous loop must never spin forever on one thing. Enforce every pass:
+
+- **Bounded effort per task.** Each task (a phase, a specific vuln attempt, a
+  chain-hunt) has a budget — a small number of attempts/passes. Track it in the
+  task notes (attempt count).
+- **Progress = a coverage delta.** A pass "made progress" only if a coverage cell
+  moved (`validated`/`tested-clean` via `finding-add`) or a hypothesis was
+  confirmed/denied. Re-trying the same payload with no cell moving is NOT progress.
+- **Budget hit + no progress → stop the rabbit hole.** Record what was tried,
+  mark the task `stuck` (or the specific class `tested-clean` if genuinely
+  exhausted, e.g. WAF-bypass loop done), log the reason, and **move to the next
+  task**. Never keep grinding one endpoint/payload — breadth first, the queue
+  holds the rest.
+- **Chain-depth cap.** A chain-hunt task may spawn a follow-up only up to a fixed
+  depth (default 3 hops), and each hop must be a *validated* finding. Beyond that,
+  stop and report the chain as-is. This prevents infinite self-spawning.
+- **Bound the self-extending queue.** Only add a new task when it targets a
+  concrete, un-covered cell or a validated-finding chain — never speculative busywork.
+
 ## 8. Deliver-check
 
 First, if this pass completed a task, invoke **`/sch-learn --project <id>`** to
 distill any reusable lesson into `knowledge/<pack>.md` (generalizable only,
 never target-specific).
 
-Then: no ready or in-flight tasks **and** the contract satisfied (every PRD AC
-merged / every pack phase incl. `report` done) → invoke
-**`/sch-ship --project <id>`**. Otherwise end the pass.
+Then decide "finished" by the **coverage matrix**, not by "nothing queued":
+
+**Offensive — testing is finished only when ALL hold:**
+1. The attack surface is fully enumerated (recon phase done → the host × endpoint
+   × parameter × role inventory exists).
+2. **Every applicable class against every cell is `validated` or `tested-clean`**
+   (`finding-list` shows no un-covered cell). A phase with untested cells is NOT
+   done, even if its task looks complete.
+3. No open chain-hunt tasks (within the depth cap).
+4. Only `stuck` tasks remain for a human — those are escalated, not "done".
+
+When 1-4 hold → invoke **`/sch-ship --project <id>`** (produces the report via
+`scripts/report.mjs`). **Dev** — every PRD AC maps to a merged task. Otherwise end
+the pass; the next interval continues. If only `stuck` tasks remain, end and leave
+them for the human — do not fabricate completion.
 
 ## Hard limits
 
