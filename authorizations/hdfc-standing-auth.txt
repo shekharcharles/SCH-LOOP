@@ -1,0 +1,34 @@
+Classification - Internal
+Recorded in SCH Loop standing authorization registry (ref: HDFC-STANDING-AUTH-2026-07).
+
+--- ORIGINAL AUTHORIZATION (verbatim) ---
+
+Dear Hussain, Shekhar,
+
+This email serves as the standing authorization for the HDFC Bank security testing engagement for a period of one year from the date of this email.
+
+The authorization reference for this engagement will be maintained under the applicable Scope of Work, Rules of Engagement, project reference, and other approved engagement records.
+
+As the scope may change during the engagement, all domains, subdomains, URLs, applications, APIs, IP addresses, servers, and instances formally shared by the HDFC Bank team through email, meeting communication, scope sheets, tickets, or any other approved channel will be considered in scope.
+
+The scope will include UAT, SIT, development, pre-production, and other test environments. Production environments may also be shared when required for vulnerability verification, remediation validation, retesting, or confirmation of reported issues. Such production assets will be considered in scope when formally shared or approved by the HDFC Bank team.
+
+The scope will also include internal security testing, internal infrastructure testing, internal application testing, and internal red team testing performed by the authorized assessment team. Any internal domains, IP addresses, servers, applications, endpoints, network ranges, or other assets shared for such testing will also be considered in scope.
+
+As new UAT, SIT, production, internal, or other instances may be introduced during the engagement, a separate authorization email will not be required for each asset. Any asset formally provided or approved by the HDFC Bank team during the authorization period will be added to the standing scope registry and will remain covered under this authorization.
+
+All testing activities will be performed by the authorized team in accordance with the applicable Scope of Work, Rules of Engagement, HDFC Bank policies, compliance requirements, agreed testing restrictions, and approved communication channels.
+
+This authorization will remain valid for one year and will expire on 01 July, 2027, unless renewed, modified, suspended, or revoked through written communication.
+
+Regards,
+Sachin Chidrewar
+
+--- SCH LOOP HANDLING ---
+
+- Expiry enforced: 2027-07-01 (gate fails closed after).
+- Scope is an ALLOWLIST that grows as HDFC formally shares assets. Add each
+  shared asset with: state.mjs auth-add-domain --ref HDFC-STANDING-AUTH-2026-07 --domains "<host/ip>"
+- Production is covered ONLY for a specific host after it is formally shared and
+  added (for verification/retest) — never auto-covered by a bare apex domain.
+- Keep this file local. Do not publish.

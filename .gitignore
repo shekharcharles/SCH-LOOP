@@ -1,19 +1,9 @@
-# === ENGAGEMENT DATA — never commit (client-confidential; keep local per RoE + RBI/SEBI/CERT-In) ===
-authorizations/
-projects/
-projects.json
-state.json
-**/state.json
-logs/
-reports/
-**/reports/
-evidence/
-**/evidence/
-
-# runtime / temp / generated
+# Runtime / temp / generated only.
+# NOTE: engagement data (authorizations/, projects.json, projects/, logs/) IS
+# tracked in this repo by the owner's explicit choice — this is a PRIVATE repo
+# used as a self-contained backup. Keep it private.
 *.tmp
 node_modules/
 .playwright-mcp/
-*.png
 .DS_Store
 Thumbs.db
