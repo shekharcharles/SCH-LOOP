@@ -1,0 +1,26 @@
+host,path,method,params,source,auth_required,tested_status,notes
+nb-nextgen-sit.hdfcbank.com,/,GET,,passive-dns+wayback,no,fingerprinted,302->/retail-app; F5 ASM
+nb-nextgen-sit2.hdfcbank.com,/,GET,,passive-dns,no,fingerprinted,302->/retail-app; F5 ASM (preferred)
+nb-nextgen-sit2.hdfcbank.com,/retail-app/,GET,,fingerprint-302,no,fingerprinted,Backbase Angular SPA shell
+nb-nextgen-sit.hdfcbank.com,/retail-app/,GET,,fingerprint-302,no,untested,Backbase Angular SPA shell
+nb-nextgen-sit2.hdfcbank.com,/robots.txt,GET,,content-disc,no,fingerprinted,blanket Disallow /
+nb-nextgen-sit2.hdfcbank.com,/health,GET,,content-disc,no,fingerprinted,plaintext healthcheck (LB)
+nb-nextgen-sit2.hdfcbank.com,/actuator,GET,,content-disc,unknown,lead,403 Spring Boot actuator secured - probe subpaths task11
+nb-nextgen-sit2.hdfcbank.com,/retail-app/main.9e8f04248ee57b6d.js,GET,,content-disc,no,untested,primary Angular bundle - parse task4
+nb-nextgen-sit2.hdfcbank.com,/retail-app/polyfills.859a2b19539c20f1.js,GET,,content-disc,no,untested,parse task4
+nb-nextgen-sit2.hdfcbank.com,/retail-app/runtime.8ef31f7d1b2f342a.js,GET,,content-disc,no,untested,parse task4
+nb-nextgen-sit2.hdfcbank.com,/api/access-control/client-api/v3/accessgroups,GET,,js-analysis,yes,exists-401,Backbase access-control (OAuth2 Bearer)
+nb-nextgen-sit2.hdfcbank.com,/api/user-manager/client-api/v2/users/me,GET,,js-analysis,yes,exists-401,Backbase user-manager
+nb-nextgen-sit2.hdfcbank.com,/api/transaction-manager/client-api/v2/transactions,GET,,js-analysis,yes,exists-401,Backbase transaction-manager
+nb-nextgen-sit2.hdfcbank.com,/api/arrangement-manager/client-api/v2/product-summary,GET,,js-analysis,yes,exists-401,Backbase arrangement-manager
+nb-nextgen-sit2.hdfcbank.com,/api/access-control/client-api/v2/accessgroups,GET,,api-disc,yes,exists-401,
+nb-nextgen-sit2.hdfcbank.com,/api/access-control/client-api/v3/accessgroups/user-context/permissions,GET,,api-disc,yes,exists-401,permissions
+nb-nextgen-sit2.hdfcbank.com,/api/user-manager/client-api/v2/users,GET,,api-disc,yes,exists-401,
+nb-nextgen-sit2.hdfcbank.com,/api/arrangement-manager/client-api/v2/products,GET,,api-disc,yes,exists-401,
+nb-nextgen-sit2.hdfcbank.com,/api/arrangement-manager/client-api/v2/arrangements,GET,,api-disc,yes,exists-401,
+nb-nextgen-sit2.hdfcbank.com,/api/contact-manager/client-api/v2/contacts,GET,,api-disc,yes,exists-401,
+nb-nextgen-sit2.hdfcbank.com,/api/limit/client-api/v2/limits,GET,,api-disc,yes,exists-401,
+nb-nextgen-sit2.hdfcbank.com,/auth/realms/retail/protocol/openid-connect/auth,GET,response_type;client_id;redirect_uri;code_challenge,auth-flow,no,fingerprinted,Keycloak authorize (AuthCode+PKCE)
+nb-nextgen-sit2.hdfcbank.com,/auth/realms/retail/protocol/openid-connect/token,POST,grant_type;code;code_verifier,auth-flow,no,lead,token endpoint - test ROPC task21
+nb-nextgen-sit2.hdfcbank.com,/auth/realms/retail/.well-known/openid-configuration,GET,,auth-flow,no,fingerprinted,OIDC metadata (public)
+nb-nextgen-sit2.hdfcbank.com,/auth/admin/,GET,,auth-flow,yes,lead,Keycloak admin console 302 - exposure check task11

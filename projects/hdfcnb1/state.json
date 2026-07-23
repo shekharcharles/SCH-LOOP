@@ -1,0 +1,1008 @@
+{
+  "tasks": [
+    {
+      "id": 1,
+      "phase": 1,
+      "title": "Recon: Passive OSINT",
+      "ac": [
+        "both SIT hosts (sit + sit2)",
+        "CT logs / crt.sh subdomain enum",
+        "ASN/IP range + DNS records",
+        "Wayback/archive URL harvest",
+        "Google + GitHub dorks for leaks/creds",
+        "public API docs / postman collections",
+        "ZERO active touch on target"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T15:17:19.984Z"
+    },
+    {
+      "id": 2,
+      "phase": 1,
+      "title": "Recon: Infra fingerprint",
+      "ac": [
+        "TLS cert SANs (note: encryption disabled on SIT)",
+        "WAF/CDN detection",
+        "server + tech-stack fingerprint (Wappalyzer)",
+        "favicon hash",
+        "HTTP methods + load-balancer behavior",
+        "both SIT hosts"
+      ],
+      "ng": [],
+      "deps": [
+        1
+      ],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T15:20:43.971Z"
+    },
+    {
+      "id": 3,
+      "phase": 1,
+      "title": "Recon: Content discovery",
+      "ac": [
+        "spider both SIT hosts",
+        "dir/file brute (multiple wordlists)",
+        "robots.txt + sitemap.xml",
+        "backup/temp/config files",
+        "error-page enumeration",
+        "proxy ALL traffic through Burp (ground-truth sitemap)"
+      ],
+      "ng": [],
+      "deps": [
+        2
+      ],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T15:26:09.019Z"
+    },
+    {
+      "id": 4,
+      "phase": 1,
+      "title": "Recon: JS harvest + analysis",
+      "ac": [
+        "pull every JS bundle",
+        "extract endpoints/routes/params",
+        "secrets/API keys/tokens",
+        "source maps -> original source",
+        "dev comments + feature flags",
+        "feed all endpoints to ledger"
+      ],
+      "ng": [],
+      "deps": [
+        3
+      ],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T15:32:02.133Z"
+    },
+    {
+      "id": 5,
+      "phase": 1,
+      "title": "Recon: API discovery",
+      "ac": [
+        "OpenAPI/Swagger endpoints",
+        "GraphQL introspection",
+        "REST path + version enum (/v1 /v2)",
+        "mobile-API hints",
+        "param mining (arjun/param-miner) on discovered endpoints"
+      ],
+      "ng": [],
+      "deps": [
+        4
+      ],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T15:35:19.014Z"
+    },
+    {
+      "id": 6,
+      "phase": 1,
+      "title": "Recon: Auth-flow mapping",
+      "ac": [
+        "login flow + params",
+        "MFA/OTP flow",
+        "password-reset flow",
+        "logout + session cookies",
+        "redirect chains",
+        "SSO/OAuth/OIDC params if present",
+        "MAP only, no attacks"
+      ],
+      "ng": [],
+      "deps": [
+        3
+      ],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "Keycloak IdP mapped; AuthCode+PKCE; ROPC/implicit + admin-console leads; recon phase COMPLETE",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T18:02:01.892Z"
+    },
+    {
+      "id": 7,
+      "phase": 1,
+      "title": "Recon: Chatbot + embedded modules",
+      "ac": [
+        "locate chatbot endpoint/websocket + vendor",
+        "iframes + third-party widgets",
+        "flag cross-domain hosts (SSO/chatbot vendor) for user confirmation - do NOT test",
+        "postMessage origins"
+      ],
+      "ng": [],
+      "deps": [
+        3
+      ],
+      "status": "merged",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "no unauth chatbot; postMessage/iframe surface -> task19; chatbot deferred to auth-crawl task34",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T19:32:32.806Z"
+    },
+    {
+      "id": 8,
+      "phase": 1,
+      "title": "Recon: Coverage ledger consolidation",
+      "ac": [
+        "build projects/hdfcnb/recon/endpoints.csv (url|method|params|source|auth-required|tested-status)",
+        "union of ALL sources (crawler/JS/Burp/wayback/brute/API/sitemap)",
+        "net-banking feature checklist (login/accounts/statements/fund-transfer/beneficiary/billpay/cards/profile/settings/chatbot) - flag any module with 0 endpoints",
+        "SIT vs SIT2 diff",
+        "this ledger = single source of truth for all later phases"
+      ],
+      "ng": [],
+      "deps": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A gate to all testing",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 9,
+      "phase": 2,
+      "title": "Config: TLS/cipher + security headers",
+      "ac": [
+        "TLS versions + cipher posture (note encryption disabled on SIT)",
+        "HSTS/CSP/X-Frame/X-Content-Type/Referrer/Permissions headers",
+        "header presence per endpoint in ledger"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 10,
+      "phase": 2,
+      "title": "Config: CORS + cookie flags + CSRF posture",
+      "ac": [
+        "CORS origin reflection / null / wildcard+creds",
+        "cookie Secure/HttpOnly/SameSite flags",
+        "CSRF-token presence + validation on state-changing endpoints"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 11,
+      "phase": 2,
+      "title": "Config: Exposed files + verbose errors",
+      "ac": [
+        "/.git /.env backups .bak .old .zip",
+        "source maps exposure",
+        "verbose stack traces / debug endpoints",
+        "directory listing",
+        "default/admin panels"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 12,
+      "phase": 2,
+      "title": "Config: Cloud/storage misconfig + subdomain takeover",
+      "ac": [
+        "exposed cloud buckets/blobs referenced by app",
+        "dangling DNS -> subdomain takeover on enumerated subdomains",
+        "open cloud metadata paths if reachable"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 13,
+      "phase": 4,
+      "title": "Input(unauth): SQLi / NoSQLi",
+      "ac": [
+        "SQLi/NoSQLi on all unauth params in ledger",
+        "error-based + blind + time-based",
+        "PoC per finding (raw req/resp)"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 14,
+      "phase": 4,
+      "title": "Input(unauth): XSS reflected/DOM",
+      "ac": [
+        "reflected XSS on unauth params",
+        "DOM XSS via sources/sinks",
+        "PoC screenshots"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 15,
+      "phase": 4,
+      "title": "Input(unauth): SSRF / SSTI / XXE",
+      "ac": [
+        "SSRF on URL/fetch params (OOB via poll_oob)",
+        "SSTI on template-reflected inputs",
+        "XXE on XML endpoints"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 16,
+      "phase": 4,
+      "title": "Input(unauth): injection / traversal / redirect",
+      "ac": [
+        "command + LDAP injection",
+        "path traversal / LFI",
+        "open redirect",
+        "on unauth params"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 17,
+      "phase": 4,
+      "title": "Input(unauth): upload / smuggling / host-header",
+      "ac": [
+        "file-upload validation bypass (pre-auth if any)",
+        "HTTP request smuggling",
+        "host-header injection / cache poisoning"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 18,
+      "phase": 6,
+      "title": "Client(unauth): DOM XSS + prototype pollution",
+      "ac": [
+        "DOM XSS sources/sinks on pre-login pages",
+        "client-side prototype pollution",
+        "gadget scan"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 19,
+      "phase": 6,
+      "title": "Client(unauth): CSP / clickjacking / postMessage",
+      "ac": [
+        "CSP bypass/weakness",
+        "clickjacking (X-Frame/frame-ancestors)",
+        "postMessage origin abuse"
+      ],
+      "ng": [],
+      "deps": [
+        8
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 20,
+      "phase": 6,
+      "title": "Client(unauth): Chatbot client-side",
+      "ac": [
+        "chatbot input injection (XSS/markup into bot render)",
+        "websocket message tampering",
+        "chatbot info-leak / prompt-injection surface",
+        "stay on-origin; cross-domain vendor = flag only"
+      ],
+      "ng": [],
+      "deps": [
+        7
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 21,
+      "phase": 3,
+      "title": "AuthN(pre-auth): login attacks",
+      "ac": [
+        "username/customer-ID enumeration",
+        "brute-force + account-lockout policy",
+        "default/weak creds",
+        "rate-limit on login",
+        "NO destructive lockout of real test IDs - throttle"
+      ],
+      "ng": [],
+      "deps": [
+        6
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 22,
+      "phase": 3,
+      "title": "AuthN(pre-auth): reset + MFA logic",
+      "ac": [
+        "password-reset flow flaws (token predictability, host-header poisoning, user takeover)",
+        "MFA/OTP bypass logic",
+        "OTP rate-limit + reuse"
+      ],
+      "ng": [],
+      "deps": [
+        6
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 23,
+      "phase": 3,
+      "title": "AuthN(pre-auth): JWT/token analysis",
+      "ac": [
+        "decode any pre-auth token",
+        "alg=none / alg-confusion",
+        "weak signing key",
+        "sensitive data in token",
+        "only if a token is exposed pre-auth"
+      ],
+      "ng": [],
+      "deps": [
+        6
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 24,
+      "phase": 3,
+      "title": "AuthN(pre-auth): session mgmt + auth redirects",
+      "ac": [
+        "session cookie attributes",
+        "session fixation surface",
+        "open redirect in auth/login return-url",
+        "pre-auth session issuance"
+      ],
+      "ng": [],
+      "deps": [
+        6
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-A black-box active",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 25,
+      "phase": 3,
+      "title": "AuthZ(grey): IDOR / BOLA across 24 cust IDs",
+      "ac": [
+        "IDOR/BOLA on object endpoints (accounts/statements/txns)",
+        "swap identifiers across the 24 test cust IDs",
+        "cross-account data read PoC",
+        "NEEDS PASSWORDS - blocks until creds supplied"
+      ],
+      "ng": [],
+      "deps": [
+        21,
+        24
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 26,
+      "phase": 3,
+      "title": "AuthZ(grey): BFLA + privesc + forced browsing",
+      "ac": [
+        "function-level auth bypass (admin/privileged endpoints)",
+        "horizontal + vertical privesc",
+        "forced browsing to restricted functions",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 27,
+      "phase": 3,
+      "title": "AuthZ(grey): authenticated session mgmt",
+      "ac": [
+        "session fixation (authenticated)",
+        "concurrent sessions",
+        "idle/absolute timeout",
+        "logout token invalidation",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        24
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 28,
+      "phase": 4,
+      "title": "Input(grey): authenticated injection re-test",
+      "ac": [
+        "SQLi/NoSQLi + stored/reflected XSS on post-login params",
+        "re-test full ledger with auth session",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 29,
+      "phase": 4,
+      "title": "Input(grey): mass assignment + race conditions",
+      "ac": [
+        "mass assignment / parameter pollution on authenticated write endpoints",
+        "race conditions (double-spend, TOCTOU on transfers)",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 30,
+      "phase": 5,
+      "title": "BizLogic(grey): fund-transfer + amount tampering",
+      "ac": [
+        "fund-transfer workflow abuse",
+        "beneficiary add/skip-cooldown bypass",
+        "amount/currency/quantity tampering (negative, overflow, decimal)",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 31,
+      "phase": 5,
+      "title": "BizLogic(grey): rate-limit + data exposure + BOPLA",
+      "ac": [
+        "rate-limit bypass on sensitive ops",
+        "excessive data exposure in API responses",
+        "BOPLA / mass property exposure",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 32,
+      "phase": 5,
+      "title": "BizLogic(grey): multi-step workflow bypass",
+      "ac": [
+        "step-skipping in billpay/statements/profile-update",
+        "state-machine abuse",
+        "replay of signed/one-time requests",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 33,
+      "phase": 6,
+      "title": "Client(grey): authenticated XSS + chatbot abuse",
+      "ac": [
+        "authenticated stored/DOM XSS",
+        "post-auth chatbot abuse (data leak across session)",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": true,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 34,
+      "phase": 1,
+      "title": "Recon(grey): authenticated re-crawl -> ledger grow",
+      "ac": [
+        "re-spider authenticated with each role",
+        "add all post-login endpoints/params to ledger",
+        "update feature-checklist coverage",
+        "NEEDS PASSWORDS"
+      ],
+      "ng": [],
+      "deps": [
+        25
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "wave-B grey-box NEEDS CREDS",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    },
+    {
+      "id": 35,
+      "phase": 7,
+      "title": "Report (CERT-In)",
+      "ac": [
+        "CERT-In-format MD + self-contained print-to-PDF HTML in projects/hdfcnb/reports/",
+        "every finding named by OWASP Web Top-10 2021 + WSTG id (+ASVS)",
+        "per-finding CVSS v3.1",
+        "master severity table (sorted)",
+        "exec summary + overall risk",
+        "remediation + repro steps",
+        "evidence req/resp + screenshots",
+        "coverage appendix = endpoints.csv with tested/clean columns",
+        "black-box vs grey-box coverage split noted"
+      ],
+      "ng": [],
+      "deps": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "source": "plan",
+      "notes": "final deliverable",
+      "createdAt": "2026-07-23T13:40:00.000Z",
+      "updatedAt": "2026-07-23T13:40:00.000Z"
+    }
+  ],
+  "inbox": [
+    {
+      "id": 1,
+      "text": "SCOPE DECISION: TLS SANs reveal api-nb-nextgen-sit2.hdfcuat.bank.in (dedicated API host) + alt domain *.hdfcuat.bank.in (nb-nextgen-sit/sit2.hdfcuat.bank.in). Same app, likely the real API backend. NOT in authorized targets. User: confirm + formally share to test? If yes -> auth-add-domain --ref HDFC-STANDING-AUTH-2026-07 --domains 'api-nb-nextgen-sit2.hdfcuat.bank.in|nb-nextgen-sit2.hdfcuat.bank.in|nb-nextgen-sit.hdfcuat.bank.in'",
+      "status": "processed",
+      "createdAt": "2026-07-23T15:20:43.907Z"
+    }
+  ],
+  "events": [
+    {
+      "id": 19,
+      "ts": "2026-07-23T19:32:32.806Z",
+      "msg": "task #7 -> merged (no unauth chatbot; postMessage/iframe surface -> task19; chatbot deferred to auth-crawl task34)"
+    },
+    {
+      "id": 18,
+      "ts": "2026-07-23T19:31:53.225Z",
+      "msg": "task #7 -> building (claimed;attempt1)"
+    },
+    {
+      "id": 17,
+      "ts": "2026-07-23T18:02:01.892Z",
+      "msg": "task #6 -> merged (Keycloak IdP mapped; AuthCode+PKCE; ROPC/implicit + admin-console leads; recon phase COMPLETE)"
+    },
+    {
+      "id": 16,
+      "ts": "2026-07-23T18:02:01.812Z",
+      "msg": "finding #3 [lead] Keycloak admin console internet-reachable (/auth/admin/)"
+    },
+    {
+      "id": 15,
+      "ts": "2026-07-23T18:02:01.730Z",
+      "msg": "finding #2 [lead] Deprecated OAuth grant types (ROPC 'password' + implicit) advertised on Keycloak token endpoint"
+    },
+    {
+      "id": 14,
+      "ts": "2026-07-23T15:38:14.668Z",
+      "msg": "task #6 -> building (claimed;attempt1)"
+    },
+    {
+      "id": 13,
+      "ts": "2026-07-23T15:35:19.015Z",
+      "msg": "task #5 -> merged (6 Backbase services confirmed 401; no unauth 200; core svcs deferred to auth-crawl; tested-clean logged)"
+    },
+    {
+      "id": 12,
+      "ts": "2026-07-23T15:34:55.162Z",
+      "msg": "finding #1 [tested-clean] Unauthenticated access to Backbase API gateway endpoints"
+    },
+    {
+      "id": 11,
+      "ts": "2026-07-23T15:33:23.341Z",
+      "msg": "task #5 -> building (claimed;attempt1)"
+    },
+    {
+      "id": 10,
+      "ts": "2026-07-23T15:32:02.133Z",
+      "msg": "task #4 -> merged (in-scope Backbase API gateway /api/ confirmed; OAuth2 Bearer; 4 services 401; enum oracle; xdomain refs flagged)"
+    },
+    {
+      "id": 9,
+      "ts": "2026-07-23T15:28:36.644Z",
+      "msg": "task #4 -> building (claimed;attempt1)"
+    },
+    {
+      "id": 8,
+      "ts": "2026-07-23T15:26:09.019Z",
+      "msg": "task #3 -> merged (Backbase/Angular SPA + Spring Boot; /actuator 403 lead; SPA-catchall FP filter; bundles->task4)"
+    },
+    {
+      "id": 7,
+      "ts": "2026-07-23T15:24:22.436Z",
+      "msg": "task #3 -> building (claimed;attempt1)"
+    },
+    {
+      "id": 6,
+      "ts": "2026-07-23T15:20:43.971Z",
+      "msg": "task #2 -> merged (infra-fingerprint.md; F5 ASM WAF; /retail-app; SANs->api host flagged to inbox)"
+    },
+    {
+      "id": 5,
+      "ts": "2026-07-23T15:20:43.907Z",
+      "msg": "inbox +: SCOPE DECISION: TLS SANs reveal api-nb-nextgen-sit2.hdfcuat."
+    },
+    {
+      "id": 4,
+      "ts": "2026-07-23T15:19:18.684Z",
+      "msg": "task #2 -> building (claimed; attempt1)"
+    },
+    {
+      "id": 3,
+      "ts": "2026-07-23T15:17:19.984Z",
+      "msg": "task #1 -> merged (passive-osint.md + endpoints.csv seeded; crt.sh deferred(502))"
+    },
+    {
+      "id": 2,
+      "ts": "2026-07-23T15:14:37.999Z",
+      "msg": "task #1 -> building (claimed)"
+    },
+    {
+      "id": 1,
+      "ts": "2026-07-23T15:13:07.250Z",
+      "msg": "CR CR-HDFC-NB-UAT-2026-07 created & armed from HDFC-STANDING-AUTH-2026-07 — targets: nb-nextgen-sit.hdfcbank.com, nb-nextgen-sit2.hdfcbank.com (shared via email by Sachin Chidrewar (HDFC SIT env owner))"
+    }
+  ],
+  "findings": [
+    {
+      "id": 1,
+      "phase": 1,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "title": "Unauthenticated access to Backbase API gateway endpoints",
+      "category": "broken-access-control/unauth-api",
+      "severity": "info",
+      "cvss": "",
+      "status": "tested-clean",
+      "evidence": "recon/api-discovery.md",
+      "notes": "All 6 live Backbase services (access-control,user-manager,arrangement-manager,transaction-manager,contact-manager,limit) return 401 Bearer to unauthenticated requests; no unauth-reachable 200 endpoint found black-box. Authenticated BOLA/BFLA re-test = task 25/26 with creds.",
+      "parents": [],
+      "chainDepth": 0,
+      "createdAt": "2026-07-23T15:34:55.162Z"
+    },
+    {
+      "id": 2,
+      "phase": 3,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "title": "Deprecated OAuth grant types (ROPC 'password' + implicit) advertised on Keycloak token endpoint",
+      "category": "auth/weak-oauth-config",
+      "severity": "medium",
+      "cvss": "",
+      "status": "lead",
+      "evidence": "recon/auth-flow-mapping.md",
+      "notes": "grant_types_supported includes password+implicit; verify bb-web-client Direct Access Grants enabled; active ROPC test = task21",
+      "parents": [],
+      "chainDepth": 0,
+      "createdAt": "2026-07-23T18:02:01.730Z"
+    },
+    {
+      "id": 3,
+      "phase": 2,
+      "target": "nb-nextgen-sit2.hdfcbank.com",
+      "title": "Keycloak admin console internet-reachable (/auth/admin/)",
+      "category": "config/exposed-admin",
+      "severity": "low",
+      "cvss": "",
+      "status": "lead",
+      "evidence": "recon/auth-flow-mapping.md",
+      "notes": "302 to login; should be network-restricted; confirm task11",
+      "parents": [],
+      "chainDepth": 0,
+      "createdAt": "2026-07-23T18:02:01.812Z"
+    }
+  ],
+  "seq": {
+    "task": 35,
+    "inbox": 1,
+    "event": 19,
+    "finding": 3
+  }
+}
