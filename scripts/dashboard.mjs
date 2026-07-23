@@ -12,10 +12,27 @@ import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OF
 const PORT = process.env.SCH_PORT || 4600;
 const json = (res, b) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
 
+// CSRF guard: state-changing POSTs (scope arm/halt, task, inbox) must originate
+// from the dashboard itself. A cross-site page can auto-submit a form to our
+// endpoints (even over Tailscale, via the user's own browser), so we reject any
+// POST whose Origin/Referer host is not our own. Same-origin dashboard forms
+// send a matching Origin, so the UI is unaffected. Also require a present
+// Origin/Referer — a state change with neither is not a legitimate UI action.
+function sameOrigin(req) {
+  const host = req.headers.host;
+  const src = req.headers.origin || req.headers.referer;
+  if (!host || !src) return false;
+  try { return new URL(src).host === host; } catch { return false; }
+}
+const forbid = (res) => { res.writeHead(403, { "content-type": "text/plain" }); res.end("forbidden: cross-origin request rejected"); };
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, "http://x");
 
   if (url.pathname === "/favicon.ico") { res.writeHead(204); res.end(); return; }
+
+  // Every state-changing POST must be same-origin (CSRF protection).
+  if (req.method === "POST" && !sameOrigin(req)) { forbid(res); return; }
 
   if (req.method === "POST" && url.pathname === "/inbox") {
     let body = "";
