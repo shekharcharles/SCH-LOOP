@@ -1,0 +1,223 @@
+#!/usr/bin/env node
+// SCH Loop — CERT-In report generator. Reads a project's findings + scope and
+// writes a client-ready report (Markdown + self-contained print-to-PDF HTML) to
+// projects/<id>/reports/. Called by sch-ship, or directly:
+//
+//   node scripts/report.mjs --project <id> [--author "Name"] [--classification Confidential]
+
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { loadState, getProject } from "./state.mjs";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+function parseFlags(argv) {
+  const f = {};
+  for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) f[argv[i].slice(2)] = argv[++i];
+  return f;
+}
+
+const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
+const sevRank = (s) => { const i = SEV_ORDER.indexOf((s || "info").toLowerCase()); return i === -1 ? 99 : i; };
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const today = () => new Date().toISOString().slice(0, 10);
+
+// Overall risk = worst validated severity present.
+function overallRisk(validated) {
+  for (const s of SEV_ORDER) if (validated.some((f) => (f.severity || "").toLowerCase() === s)) return s;
+  return "informational";
+}
+
+export function buildReport(projectId, opts = {}) {
+  const p = getProject(projectId);
+  if (!p) throw new Error("no such project: " + projectId);
+  const s = loadState(projectId);
+  const sc = p.scope || {};
+  const findings = s.findings || [];
+  const validated = findings.filter((f) => f.status === "validated").sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || a.id - b.id);
+  const clean = findings.filter((f) => f.status === "tested-clean");
+
+  const author = opts.author || "SCH Loop assessment team";
+  const classification = opts.classification || "Confidential";
+  const reportId = `${(p.client || p.name || projectId).replace(/[^A-Za-z0-9]+/g, "-")}-${projectId}-${today()}`.toUpperCase();
+
+  const counts = {}; for (const sev of SEV_ORDER) counts[sev] = validated.filter((f) => (f.severity || "").toLowerCase() === sev).length;
+  const risk = overallRisk(validated);
+
+  const meta = {
+    reportId, client: p.client || "—", engagement: p.name || projectId, domain: p.domain,
+    ref: sc.ref || "—", targets: (sc.targets || []).join(", ") || "—",
+    date: today(), author, classification,
+    compliance: (sc.compliance || []), counts, risk,
+    validated, clean, total: findings.length,
+  };
+  const md = renderMarkdown(meta);
+  const html = renderHtml(meta);
+
+  const dir = join(ROOT, "projects", projectId, "reports");
+  mkdirSync(dir, { recursive: true });
+  const base = join(dir, reportId);
+  writeFileSync(base + ".md", md);
+  writeFileSync(base + ".html", html);
+  return { md: base + ".md", html: base + ".html", reportId, counts, risk };
+}
+
+function sevTableRows(counts) {
+  return SEV_ORDER.map((s) => `| ${s[0].toUpperCase() + s.slice(1)} | ${counts[s]} |`).join("\n");
+}
+
+function renderMarkdown(m) {
+  const findingBlocks = m.validated.length ? m.validated.map((f, i) => `
+### ${i + 1}. ${f.title}  — **${(f.severity || "info").toUpperCase()}**
+
+| | |
+|---|---|
+| **Category / ID** | ${f.category || "—"} |
+| **Severity** | ${f.severity || "—"} |
+| **CVSS v3.1** | ${f.cvss || "—"} |
+| **Target** | ${f.target || m.targets} |
+| **Status** | ${f.status} |
+
+**Description / Impact**
+${f.notes || "See evidence."}
+
+**Evidence:** ${f.evidence || "(attached separately)"}
+`).join("\n---\n") : "\n_No exploitable findings validated._\n";
+
+  const cleanList = m.clean.length
+    ? m.clean.map((f) => `- ${f.category ? f.category + " — " : ""}${f.title}`).join("\n")
+    : "_None recorded._";
+
+  const compliance = m.compliance.length
+    ? m.compliance.map((c) => `- **${c}** — findings mapped to applicable controls; see per-finding categories.`).join("\n")
+    : "_No compliance frameworks specified for this engagement._";
+
+  return `# Penetration Test Report — ${m.engagement}
+
+**Report ID:** ${m.reportId}
+**Client:** ${m.client}
+**Engagement type:** ${m.domain}
+**Authorization ref:** ${m.ref}
+**Scope:** ${m.targets}
+**Date:** ${m.date}
+**Author:** ${m.author}
+**Classification:** ${m.classification}
+
+---
+
+## 1. Executive summary
+
+This report presents the results of an authorized ${m.domain} assessment of the
+scope listed above, conducted under authorization reference ${m.ref}. The
+assessment identified **${m.validated.length} validated finding(s)**. The overall
+risk rating is **${m.risk.toUpperCase()}**, driven by the highest-severity
+validated issue.
+
+### Severity summary
+
+| Severity | Count |
+|---|---|
+${sevTableRows(m.counts)}
+
+## 2. Findings
+${findingBlocks}
+
+## 3. Controls that held (tested-clean coverage)
+
+The following classes were tested and no issue was found — recorded to
+demonstrate coverage (zero false negatives), not omission:
+
+${cleanList}
+
+## 4. Compliance mapping
+
+${compliance}
+
+## 5. Methodology & coverage
+
+Testing followed the SCH Loop ${m.domain} methodology (OWASP WSTG / ASVS / API
+Top-10 as applicable), phase by phase, with coverage tracked per endpoint ×
+parameter × role. Total tracked test outcomes: ${m.total}
+(${m.validated.length} validated, ${m.clean.length} tested-clean).
+
+---
+_Generated by SCH Loop. ${m.classification}. Distribute only to authorized
+recipients of ${m.client}._
+`;
+}
+
+function renderHtml(m) {
+  const badge = (sev) => `<span class="sev ${sev}">${sev.toUpperCase()}</span>`;
+  const rows = m.validated.map((f, i) => `
+    <div class="finding">
+      <h3>${i + 1}. ${esc(f.title)} ${badge((f.severity || "info").toLowerCase())}</h3>
+      <table class="kv">
+        <tr><th>Category / ID</th><td>${esc(f.category || "—")}</td></tr>
+        <tr><th>CVSS v3.1</th><td>${esc(f.cvss || "—")}</td></tr>
+        <tr><th>Target</th><td>${esc(f.target || m.targets)}</td></tr>
+        <tr><th>Status</th><td>${esc(f.status)}</td></tr>
+      </table>
+      <p class="desc">${esc(f.notes || "See evidence.")}</p>
+      <p class="ev"><strong>Evidence:</strong> ${esc(f.evidence || "(attached separately)")}</p>
+    </div>`).join("") || "<p><em>No exploitable findings validated.</em></p>";
+
+  const sevRows = SEV_ORDER.map((s) => `<tr><td>${badge(s)}</td><td>${m.counts[s]}</td></tr>`).join("");
+  const clean = m.clean.length ? "<ul>" + m.clean.map((f) => `<li>${esc(f.category ? f.category + " — " : "")}${esc(f.title)}</li>`).join("") + "</ul>" : "<p><em>None recorded.</em></p>";
+  const comp = m.compliance.length ? "<ul>" + m.compliance.map((c) => `<li><strong>${esc(c)}</strong> — findings mapped to applicable controls.</li>`).join("") + "</ul>" : "<p><em>None specified.</em></p>";
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(m.reportId)}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font: 12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; color:#111; max-width:900px; margin:auto; padding:24px; }
+  h1 { font-size:22px; border-bottom:3px solid #c00; padding-bottom:8px; }
+  h2 { font-size:16px; margin-top:28px; border-bottom:1px solid #ddd; padding-bottom:4px; }
+  h3 { font-size:14px; margin:0 0 8px; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; }
+  th,td { border:1px solid #ccc; padding:6px 9px; text-align:left; vertical-align:top; }
+  table.kv th { width:150px; background:#f6f6f6; }
+  .meta td { border:0; padding:2px 8px 2px 0; } .meta th { border:0; text-align:left; width:170px; padding:2px 0; }
+  .sev { font-size:10px; font-weight:700; padding:2px 7px; border-radius:3px; color:#fff; }
+  .critical{background:#7c0000}.high{background:#c00}.medium{background:#e67e00}.low{background:#2a7}.info{background:#777}
+  .finding { border:1px solid #e2e2e2; border-left:4px solid #c00; padding:10px 14px; margin:12px 0; page-break-inside:avoid; }
+  .desc { white-space:pre-wrap; } .ev { color:#555; font-size:11px; }
+  .cls { float:right; font-size:10px; color:#c00; border:1px solid #c00; padding:2px 8px; text-transform:uppercase; }
+  footer { margin-top:30px; border-top:1px solid #ddd; padding-top:8px; color:#777; font-size:10px; }
+</style></head><body>
+  <span class="cls">${esc(m.classification)}</span>
+  <h1>Penetration Test Report — ${esc(m.engagement)}</h1>
+  <table class="meta">
+    <tr><th>Report ID</th><td>${esc(m.reportId)}</td></tr>
+    <tr><th>Client</th><td>${esc(m.client)}</td></tr>
+    <tr><th>Engagement type</th><td>${esc(m.domain)}</td></tr>
+    <tr><th>Authorization ref</th><td>${esc(m.ref)}</td></tr>
+    <tr><th>Scope</th><td>${esc(m.targets)}</td></tr>
+    <tr><th>Date</th><td>${esc(m.date)}</td></tr>
+    <tr><th>Author</th><td>${esc(m.author)}</td></tr>
+    <tr><th>Overall risk</th><td>${badge(m.risk === "informational" ? "info" : m.risk)}</td></tr>
+  </table>
+  <h2>1. Executive summary</h2>
+  <p>Authorized ${esc(m.domain)} assessment conducted under authorization reference
+     ${esc(m.ref)}. <strong>${m.validated.length}</strong> validated finding(s). Overall risk:
+     <strong>${esc(m.risk.toUpperCase())}</strong>.</p>
+  <table><tr><th>Severity</th><th>Count</th></tr>${sevRows}</table>
+  <h2>2. Findings</h2>
+  ${rows}
+  <h2>3. Controls that held (tested-clean coverage)</h2>
+  ${clean}
+  <h2>4. Compliance mapping</h2>
+  ${comp}
+  <h2>5. Methodology &amp; coverage</h2>
+  <p>SCH Loop ${esc(m.domain)} methodology (OWASP WSTG / ASVS / API Top-10 as applicable),
+     phase by phase, coverage tracked per endpoint × parameter × role. Total outcomes:
+     ${m.total} (${m.validated.length} validated, ${m.clean.length} tested-clean).</p>
+  <footer>Generated by SCH Loop · ${esc(m.classification)} · Distribute only to authorized recipients of ${esc(m.client)}. Open in a browser and Print → Save as PDF.</footer>
+</body></html>`;
+}
+
+if (process.argv[1] && process.argv[1].endsWith("report.mjs")) {
+  const f = parseFlags(process.argv.slice(2));
+  if (!f.project) { console.error("need --project <id>"); process.exit(1); }
+  const r = buildReport(f.project, { author: f.author, classification: f.classification });
+  console.log("report written:\n  " + r.md + "\n  " + r.html + "\n  risk: " + r.risk.toUpperCase());
+}

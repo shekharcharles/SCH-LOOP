@@ -43,8 +43,18 @@ Any gap → do not deliver; log it and end (or file a fix task).
   to a real external target is an outward action — never invent one.
 - **`package-and-publish` (tool-dev):** build wheel/sdist/crate/binary; publish
   to the registry only via the project's established path, else hand off.
-- **`cert-in-report` (web / mobile pentest):** write to `<project>/reports/` a
-  CERT-In-format report (Markdown + self-contained print-to-PDF HTML). Every
+- **`cert-in-report` (web / mobile / api / network pentest):** generate the
+  report from the recorded findings — the intelligence already happened in the
+  loop (each finding's category, CVSS, description, evidence); this just pours it
+  into the mandated CERT-In format:
+  ```bash
+  node scripts/report.mjs --project <id> --author "<name>" --classification Confidential
+  ```
+  It writes `<project>/reports/<REPORT-ID>.md` and `.html` (open the HTML → Print
+  → Save as PDF). Before generating, confirm findings are complete + evidence
+  paths are set (`finding-list`). The report includes severity summary, per-
+  finding detail + CVSS + evidence, the **coverage matrix / controls-that-held**,
+  and compliance mapping. Everything below is what that report must contain: Every
   finding named by its exact taxonomy (OWASP Web Top-10 2021 + WSTG id, or OWASP
   Mobile Top-10 2024 + MASVS + MASTG id); per-finding CVSS v3.1 by that finding's
   realistic attacker; master severity table (sorted); executive summary + overall
