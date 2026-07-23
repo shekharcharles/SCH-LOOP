@@ -26,7 +26,17 @@ skills below — **do not hand-roll UI, motion, or design systems the skills cov
 | Accessibility must pass | `accessibility-compliance`, `wcag-audit-patterns` |
 | React Native app (not web) | `react-native-architecture`, `react-native-design`, `mobile-ios-design`/`mobile-android-design` |
 | Long/complete code output without truncation | `output-skill` |
-| Backend/API for the feature | `fastapi-templates`, `nodejs-backend-patterns`, `postgresql-table-design` |
+| **Backend — Python** | `fastapi-templates`, `python-project-structure`, `async-python-patterns`, `python-testing-patterns`, `python-error-handling`, `python-type-safety`, `python-background-jobs` |
+| **Backend — Node** | `nodejs-backend-patterns`, `modern-javascript-patterns`, `typescript-advanced-types` |
+| **Backend — .NET / Go** | `dotnet-backend-patterns`, `go-concurrency-patterns` |
+| **Database** | `postgresql-table-design`, `sql-optimization-patterns`, `database-migration`, `domain-modeling` |
+| **API design** | `api-design-principles`, `api-and-interface-design`, `openapi-spec-generation`, `graphql` patterns |
+| **Architecture** | `architecture-patterns`, `microservices-patterns`, `cqrs-implementation`, `event-store-design`, `saga-orchestration`, `domain-modeling` |
+| **Reliability / observability** | `error-handling-patterns`, `observability-and-instrumentation`, `distributed-tracing`, `slo-implementation`, `python-resilience` |
+| **Testing** | `test-driven-development`, `tdd`, `e2e-testing-patterns`, `property-based-testing`, `mutation-testing`, `javascript-testing-patterns` |
+| **CI/CD / infra** | `ci-cd-and-automation`, `github-actions-templates`, `gitops-workflow`, `k8s-manifest-generator`, `helm-chart-scaffolding`, `terraform-module-library` |
+| **Security in dev** | `owasp-security`, `secrets-management`, `auth-implementation-patterns`, `security-and-hardening` |
+| **Perf / quality** | `performance-optimization`, `code-review-and-quality`, `code-simplification`, `debugging-strategies` |
 
 Pick the smallest set the task needs — direction skill first (if new/redesign),
 then build, then motion/3d only if the AC calls for it. Match the repo's existing
