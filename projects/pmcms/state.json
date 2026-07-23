@@ -428,14 +428,14 @@
         "NG-6: keep AGPL/attribution in footer"
       ],
       "deps": [],
-      "status": "building",
+      "status": "changes",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "claimed",
+      "notes": "reviewer: dup .pm-btn breaks forum CTAs; missing .pm-dialog; duplicate tokens",
       "createdAt": "2026-07-23T20:17:21.769Z",
-      "updatedAt": "2026-07-23T20:18:43.152Z"
+      "updatedAt": "2026-07-23T20:35:55.705Z"
     },
     {
       "id": 22,
@@ -758,6 +758,21 @@
   ],
   "events": [
     {
+      "id": 50,
+      "ts": "2026-07-23T20:38:28.735Z",
+      "msg": "required skills set: impeccable, taste-skill, design-dna, redesign-skill, motion-design, output-skill"
+    },
+    {
+      "id": 49,
+      "ts": "2026-07-23T20:36:56.214Z",
+      "msg": "required skills set: impeccable, taste-skill, design-dna"
+    },
+    {
+      "id": 48,
+      "ts": "2026-07-23T20:35:55.705Z",
+      "msg": "task #21 -> changes (reviewer: dup .pm-btn breaks forum CTAs; missing .pm-dialog; duplicate tokens)"
+    },
+    {
       "id": 47,
       "ts": "2026-07-23T20:18:43.152Z",
       "msg": "task #21 -> building (claimed)"
@@ -997,7 +1012,7 @@
   "seq": {
     "task": 34,
     "inbox": 1,
-    "event": 47,
+    "event": 50,
     "finding": 0
   }
 }

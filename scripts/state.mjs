@@ -235,6 +235,18 @@ const commands = {
     out(p);
   },
   "project-list"() { out(loadRegistry().projects); },
+  // Skills the operator REQUIRES this project to use. The loop must invoke them
+  // (verified against the session transcript by scripts/verify-skills.mjs), and
+  // a task cannot complete if a required skill for its kind was never invoked.
+  "skills-set"({ flags }) {
+    const r = loadRegistry(); const p = r.projects.find((x) => x.id === pid(flags));
+    if (!p) die("no such project");
+    p.requiredSkills = splitList(flags.skills);
+    saveRegistry(r);
+    const s = loadState(p.id); event(s, `required skills set: ${p.requiredSkills.join(", ") || "(none)"}`); saveState(p.id, s);
+    out(p.requiredSkills);
+  },
+  "skills-get"({ flags }) { out(getProject(pid(flags))?.requiredSkills ?? []); },
   // Which project does the current folder resolve to? (--project is optional)
   "project-here"() {
     const id = detectProject();

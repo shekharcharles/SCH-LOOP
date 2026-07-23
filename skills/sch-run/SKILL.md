@@ -115,8 +115,33 @@ For each skill the task needs, call it with the **Skill tool** so the invocation
 is recorded in the session transcript (that transcript is the audit trail —
 `scripts/skills-used.mjs` verifies it). Then record what you used:
 `task-set --skills "<skill1>|<skill2>"`. Claimed skills that never appear in the
-transcript are a reporting failure — the two must match. If a task genuinely
-needs no skill (trivial edit), record none rather than claiming one.
+transcript are a reporting failure — the two must match.
+
+**REQUIRED SKILLS — hard gate.** The operator can pin skills to a project (via
+the dashboard picker or `state.mjs skills-set`). Check them **before** you build:
+
+```bash
+node scripts/state.mjs skills-get --project <id>
+```
+
+If the project has required skills that apply to this task's kind (e.g. the
+design skills on a UI task), you **must invoke them with the Skill tool before
+writing code** — they exist because the operator chose them for their quality.
+Before completing the task, verify:
+
+```bash
+node scripts/verify-skills.mjs --project <id> --since 60
+```
+
+- **exit 0 / PASS** → proceed to complete the task.
+- **exit 1 / FAIL** → the required skills were never invoked. **Do NOT mark the
+  task complete.** Invoke them, redo the work under their guidance, re-verify.
+  This check reads Claude Code's own transcript, so it cannot be satisfied by
+  claiming — only by actually invoking.
+
+If a required skill genuinely does not apply to this task (e.g. a backend-only
+task and the requirement is a design skill), say so explicitly in the task note
+rather than silently skipping.
 
 - **Dev/tool:** implement only this task's `AC-N`; `NG-N` binding; repo style.
 - **Offensive:** run this phase's methodology from `packs/<method>.md`, against

@@ -125,3 +125,4 @@
 {"ts":"2026-07-23T20:18:43.151Z","kind":"command","cmd":"task-set","flags":{"project":"pmcms","status":"building","note":"claimed"},"pos":["21"]}
 {"ts":"2026-07-23T20:19:04.122Z","kind":"command","cmd":"project-add","flags":{"id":"lock-t","name":"Lock Test","domain":"app-dev","path":"C:/Users/r00t/AppData/Local/Temp/x"},"pos":[]}
 {"ts":"2026-07-23T20:19:37.397Z","kind":"command","cmd":"project-add","flags":{"id":"lock-t2","name":"Lock T2","domain":"app-dev","path":"C:/Users/r00t/AppData/Local/Temp/x"},"pos":[]}
+{"ts":"2026-07-23T20:35:55.704Z","kind":"command","cmd":"task-set","flags":{"project":"pmcms","status":"changes","note":"reviewer: dup .pm-btn breaks forum CTAs; missing .pm-dialog; duplicate tokens"},"pos":["21"]}
