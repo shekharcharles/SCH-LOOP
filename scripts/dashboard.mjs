@@ -245,7 +245,7 @@ async function projectView(id){
   const vfind=finds.filter(f=>f.status==="validated").sort((a,b)=>srank(a.severity)-srank(b.severity)||a.id-b.id);
   const cleanN=finds.filter(f=>f.status==="tested-clean").length;
   const crithigh=vfind.filter(f=>["critical","high"].includes((f.severity||"").toLowerCase())).length;
-  const findHtml=vfind.length?vfind.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${f.target?' <span class="meta">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>';
+  const findHtml=vfind.length?vfind.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ from #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="meta">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>';
   // phase progress: tasks in phase order with a status dot — recon done? what's left?
   const phases=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
   const phaseHtml=phases.length?phases.map(t=>\`<div class="pp st-\${t.status}"><span class="d"></span>P\${t.phase} \${esc(t.title)} · \${t.status}</div>\`).join(""):'<div class="empty">no phases planned yet</div>';

@@ -157,6 +157,7 @@ function renderHtml(m) {
         <tr><th>CVSS v3.1</th><td>${esc(f.cvss || "—")}</td></tr>
         <tr><th>Target</th><td>${esc(f.target || m.targets)}</td></tr>
         <tr><th>Status</th><td>${esc(f.status)}</td></tr>
+        ${(f.parents && f.parents.length) ? `<tr><th>Attack chain</th><td>chained from finding(s) #${f.parents.join(", #")} (depth ${f.chainDepth})</td></tr>` : ""}
       </table>
       <p class="desc">${esc(f.notes || "See evidence.")}</p>
       <p class="ev"><strong>Evidence:</strong> ${esc(f.evidence || "(attached separately)")}</p>
