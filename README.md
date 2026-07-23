@@ -183,8 +183,14 @@ inbox-add --project <id> "<text>" | inbox-list --project <id> [--new] | inbox-ma
 - State-changing POSTs (scope arm/HALT, task, inbox) are **CSRF-protected**
   (same-origin enforced), so a malicious page you happen to open cannot drive
   your scope gate through your browser.
-- For extra hardening on a shared tailnet, run it bound to localhost and reach it
-  via an SSH/Tailscale tunnel, or put an authenticating reverse proxy in front.
+- By default it binds `0.0.0.0` (localhost + LAN + Tailscale). On an untrusted
+  network (office / client site / public wifi), set `SCH_BIND` to your Tailscale
+  IP so it's reachable over the tailnet but **not** the local LAN:
+  ```
+  SCH_BIND=10.10.10.10 node scripts/dashboard.mjs   # your Tailscale IP
+  ```
+- For extra hardening on a shared tailnet, bind localhost and reach it via an
+  SSH/Tailscale tunnel, or put an authenticating reverse proxy in front.
 
 ## Rules that keep it safe
 
