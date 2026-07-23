@@ -1,0 +1,19 @@
+# === ENGAGEMENT DATA — never commit (client-confidential; keep local per RoE + RBI/SEBI/CERT-In) ===
+authorizations/
+projects/
+projects.json
+state.json
+**/state.json
+logs/
+reports/
+**/reports/
+evidence/
+**/evidence/
+
+# runtime / temp / generated
+*.tmp
+node_modules/
+.playwright-mcp/
+*.png
+.DS_Store
+Thumbs.db
