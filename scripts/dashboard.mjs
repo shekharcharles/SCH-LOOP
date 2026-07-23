@@ -168,6 +168,14 @@ const PAGE = `<!doctype html>
   .scope{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--red);
     padding:12px 14px;margin-bottom:12px;font-size:12px;line-height:1.7}
   .scope b{color:var(--red);letter-spacing:.1em}
+  .fsev{font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;color:#fff;font-weight:700}
+  .f-critical{background:#7c0000}.f-high{background:#ff2a2a}.f-medium{background:#e67e00}.f-low{background:#2a8f6b}.f-info{background:#777}
+  .frow{display:flex;gap:8px;align-items:baseline;padding:7px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .phase-strip{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:4px}
+  .pp{font-size:11px;padding:6px 10px;background:var(--panel);flex:1;min-width:130px;text-transform:uppercase;letter-spacing:.04em}
+  .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
+  .pp.st-merged .d{background:var(--green)}.pp.st-building .d{background:#e3b341}.pp.st-review .d{background:#58a6ff}
+  .pp.st-queued .d{background:var(--dim)}.pp.st-blocked .d,.pp.st-stuck .d{background:var(--red)}.pp.st-changes .d{background:#f0883e}
   .acts{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
   form.inl{display:inline;margin:0}
   .mini{font-family:inherit;padding:7px 12px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
@@ -231,15 +239,30 @@ async function projectView(id){
   const scopeBox=OFF(p.domain)?\`<div class="scope"><b>SCOPE //</b> \${sc.authorized?'authorized':'NOT authorized'}\${sc.halt?' · <span style="color:var(--red)">HALT SET</span>':''}<br>
     TARGETS: \${esc((sc.targets||[]).join(", "))||"(none)"}<br>OUT-OF-SCOPE: \${esc((sc.outOfScope||[]).join(", "))||"(none)"}<br>REF: \${esc(sc.ref)||"(none)"}
     <div class="acts">\${scopeCtl}</div></div>\`:"";
-  const kpi=[["queue",by("queued").length],["build",by("building").length],["review",by("review").length],["done",by("merged").length],["inbox",s.inbox.filter(i=>i.status==="new").length]]
+  const srank=(x)=>["critical","high","medium","low","info"].indexOf((x||"info").toLowerCase());
+  const fsev=(x)=>({critical:"f-critical",high:"f-high",medium:"f-medium",low:"f-low"}[(x||"info").toLowerCase()]||"f-info");
+  const finds=s.findings||[];
+  const vfind=finds.filter(f=>f.status==="validated").sort((a,b)=>srank(a.severity)-srank(b.severity)||a.id-b.id);
+  const cleanN=finds.filter(f=>f.status==="tested-clean").length;
+  const crithigh=vfind.filter(f=>["critical","high"].includes((f.severity||"").toLowerCase())).length;
+  const findHtml=vfind.length?vfind.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${f.target?' <span class="meta">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>';
+  // phase progress: tasks in phase order with a status dot — recon done? what's left?
+  const phases=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
+  const phaseHtml=phases.length?phases.map(t=>\`<div class="pp st-\${t.status}"><span class="d"></span>P\${t.phase} \${esc(t.title)} · \${t.status}</div>\`).join(""):'<div class="empty">no phases planned yet</div>';
+  const done=by("merged").length,total=s.tasks.length,pct=total?Math.round(done/total*100):0;
+  const kpi=[["queue",by("queued").length],["build",by("building").length],["review",by("review").length],["done",\`\${done}/\${total}\`],["findings",finds.length],["crit+high",crithigh],["inbox",s.inbox.filter(i=>i.status==="new").length]]
     .map(([n,v])=>\`<div class="kpi"><b class="mono">\${v}</b><span>\${n}</span></div>\`).join("");
   document.getElementById("app").innerHTML=\`
     <div class="bar"><span><span class="dot"></span>online</span><span class="mono">\${clock()}</span><a class="back" href="/">« all units</a></div>
     <h1>\${esc(p.name)}</h1><div class="sub">\${esc(p.domain)} · \${esc(p.path)||"no path"} \${pbadges({offensive:OFF(p.domain),authorized:sc.authorized,halt:sc.halt})}</div>
     \${scopeBox}
     <div class="grid kpis">\${kpi}</div>
+    <h2>phase progress<span class="n mono">\${pct}% done</span></h2>
+    <div class="phase-strip">\${phaseHtml}</div>
+    <h2>findings<span class="n mono">\${vfind.length}V / \${cleanN}C</span></h2>
+    <div>\${findHtml}</div>
     <form class="inbox-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}">
-      <input type="text" name="text" placeholder="NEW IDEA / FEATURE / LEAD — planned next pass" autocomplete="off" required><button>Add</button></form>
+      <input type="text" name="text" placeholder="NEW LEAD / TASK — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
     \${lane("inbox",s.inbox.filter(i=>i.status==="new"),i=>\`<div class="cell">\${esc(i.text)}<div class="meta">\${i.createdAt.slice(0,16).replace("T"," ")}</div></div>\`,"empty")}
     \${lane("in review",by("review"),t=>taskCard(t,id),"nothing in review")}
     \${lane("building",by("building"),t=>taskCard(t,id),"idle")}
