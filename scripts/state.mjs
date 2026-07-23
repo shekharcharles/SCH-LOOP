@@ -394,6 +394,9 @@ const commands = {
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
     for (const k of ["status", "branch", "notes", "phase", "target", "priority"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
+    // a status note (the "what it's doing" / the blocked question) sticks to the
+    // task so the dashboard can surface it, not just log it as an event.
+    if (flags.note !== undefined) t.notes = flags.note;
     t.updatedAt = now();
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);

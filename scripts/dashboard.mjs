@@ -98,7 +98,18 @@ const server = createServer((req, res) => {
     const rollup = reg.projects.map((p) => {
       const s = loadState(p.id);
       const c = (st) => s.tasks.filter((t) => t.status === st).length;
-      return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false, queued: c("queued"), building: c("building"), review: c("review"), done: c("merged"), inboxNew: s.inbox.filter((i) => i.status === "new").length };
+      const total = s.tasks.length, done = c("merged"), building = c("building"), review = c("review"), changes = c("changes"), queued = c("queued"), blocked = c("blocked"), stuck = c("stuck");
+      const pending = queued, findings = (s.findings || []).length, inboxNew = s.inbox.filter((i) => i.status === "new").length;
+      // project-level status category
+      let status = "idle";
+      if (total === 0) status = "new";
+      else if (stuck || blocked) status = "attention";     // failed / awaiting
+      else if (done === total) status = "completed";
+      else if (building || review || changes) status = "active";
+      else status = "inprogress";                          // queued work pending
+      return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false,
+        status, total, done, pending, building, review, blocked, stuck, findings, inboxNew,
+        pct: total ? Math.round(done / total * 100) : 0 };
     });
     return json(res, rollup);
   }
@@ -190,6 +201,18 @@ const PAGE = `<!doctype html>
   .st{font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 6px;border:1px solid var(--line);white-space:nowrap}
   .st.st-building{color:#e3b341}.st.st-review,.st.st-changes{color:#58a6ff}.st.st-merged{color:var(--green)}.st.st-blocked,.st.st-stuck{color:var(--red)}.st.st-queued{color:var(--dim)}
   td.ac{white-space:nowrap} td.ac .mini{padding:4px 8px}
+  table.projects tbody tr{cursor:pointer}table.projects tbody tr:hover td{background:#171717}
+  .st.ps-active{color:#e3b341}.st.ps-inprogress{color:#58a6ff}.st.ps-attention{color:var(--red)}.st.ps-completed{color:var(--green)}.st.ps-new,.st.ps-idle{color:var(--dim)}
+  table.projects tr.ps-active{border-left-color:#e3b341}table.projects tr.ps-inprogress{border-left-color:#58a6ff}table.projects tr.ps-attention{border-left-color:var(--red)}table.projects tr.ps-completed{border-left-color:var(--green)}table.projects tr.ps-new,table.projects tr.ps-idle{border-left-color:var(--dim)}
+  .chip.ps-active b{color:#e3b341}.chip.ps-inprogress b{color:#58a6ff}.chip.ps-attention b{color:var(--red)}.chip.ps-completed b{color:var(--green)}
+  .bar2{display:inline-block;width:70px;height:8px;background:#222;border:1px solid var(--line);vertical-align:middle;margin-right:6px}
+  .bar2 span{display:block;height:100%;background:var(--green)}
+  .pctn{font-size:11px;color:var(--dim)}
+  .in{background:var(--red);color:#fff;padding:1px 7px;font-weight:700;font-size:11px}
+  .attn{border:1px solid var(--red);border-left:4px solid var(--red);background:rgba(255,42,42,.08);padding:10px 14px;margin-bottom:12px}
+  .attn>b{color:var(--red);letter-spacing:.1em;display:block;margin-bottom:6px;font-size:12px}
+  .attn-row{padding:5px 0;border-top:1px solid rgba(255,42,42,.25);font-size:12px;line-height:1.5}
+  .attn-row:first-of-type{border-top:0}
   @media(max-width:640px){
     table.tasks thead{position:absolute;left:-9999px}
     table.tasks tbody tr{display:block;border:1px solid var(--line);border-left-width:3px;margin-bottom:6px}
@@ -225,16 +248,28 @@ function pbadges(p){let b=[];if(p.offensive)b.push('<span class="badge b-off">of
   if(p.offensive)b.push(p.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>');
   if(p.halt)b.push('<span class="badge b-halt">halt</span>');return b.join(" ");}
 
+const PSTAT={new:["NEW","ps-new"],inprogress:["IN PROGRESS","ps-inprogress"],active:["ACTIVE","ps-active"],attention:["FAILED / AWAITING","ps-attention"],completed:["COMPLETED","ps-completed"],idle:["IDLE","ps-idle"]};
+const RANK={attention:0,active:1,inprogress:2,new:3,idle:4,completed:5};
 async function projectList(){
-  const ps=await (await fetch("/api/projects")).json();
-  const cards=ps.length?ps.map(p=>\`<a class="cell link" href="/?project=\${encodeURIComponent(p.id)}">
-    <div class="row"><span class="ttl">\${esc(p.name)}</span> <span class="id">\${esc(p.domain)}</span></div>
-    <div style="margin:8px 0 6px">\${pbadges(p)}</div>
-    <div class="meta">Q:\${p.queued} · BUILD:\${p.building} · REVIEW:\${p.review} · DONE:\${p.done} · INBOX:\${p.inboxNew}</div></a>\`).join(""):'<div class="empty">no projects — run /sch-spec</div>';
+  const ps=(await (await fetch("/api/projects")).json()).sort((a,b)=>(RANK[a.status]??9)-(RANK[b.status]??9)||a.name.localeCompare(b.name));
+  const by=(cat)=>ps.filter(p=>p.status===cat).length;
+  const chips=[["active",by("active"),"ps-active"],["in progress",by("inprogress"),"ps-inprogress"],["failed / awaiting",by("attention"),"ps-attention"],["completed",by("completed"),"ps-completed"],["new",by("new"),"ps-new"]]
+    .map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("");
+  const rows=ps.length?ps.map((p,i)=>{const[lab,cl]=PSTAT[p.status]||[p.status,""];return \`<tr class="\${cl}" onclick="location.href='/?project=\${encodeURIComponent(p.id)}'">
+    <td data-l="#" class="id">\${i+1}</td>
+    <td data-l="Project"><strong>\${esc(p.name)}</strong> <span class="id">\${esc(p.domain)}</span>\${p.offensive&&p.halt?' <span class="badge b-halt">halt</span>':''}</td>
+    <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
+    <td data-l="Progress"><div class="bar2"><span style="width:\${p.pct}%"></span></div><span class="pctn">\${p.pct}%</span></td>
+    <td data-l="Done">\${p.done}</td>
+    <td data-l="Total">\${p.total}</td>
+    <td data-l="Pending">\${p.pending}</td>
+    <td data-l="Findings">\${p.findings}</td>
+    <td data-l="Inbox">\${p.inboxNew?'<span class="in">'+p.inboxNew+'</span>':'0'}</td></tr>\`;}).join(""):'<tr><td colspan="9" class="empty">no projects — run /sch-spec to create one</td></tr>';
   document.getElementById("app").innerHTML=\`
     <div class="bar"><span><span class="dot"></span>online</span><span class="mono">\${clock()}</span><span>units // \${ps.length}</span></div>
-    <h1>SCH·LOOP</h1><div class="sub">operations // select unit</div>
-    <div class="grid cards">\${cards}</div>\`;
+    <h1>SCH·LOOP</h1><div class="sub">operations // all projects</div>
+    <div class="chips">\${chips}</div>
+    <div class="tbl-wrap"><table class="tasks projects"><thead><tr><th>#</th><th>Project</th><th>Status</th><th>Progress</th><th>Done</th><th>Total</th><th>Pending</th><th>Find</th><th>Inbox</th></tr></thead><tbody>\${rows}</tbody></table></div>\`;
 }
 
 function actForm(pid,id,action,label,cls){return \`<form class="inl" method="POST" action="/task">
@@ -261,6 +296,9 @@ async function projectView(id){
   const phases=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
   const phaseHtml=phases.length?phases.map(t=>\`<div class="pp st-\${t.status}"><span class="d"></span>P\${t.phase} \${esc(t.title)} · \${t.status}</div>\`).join(""):'<div class="empty">no phases planned yet</div>';
   const done=by("merged").length,total=s.tasks.length,pct=total?Math.round(done/total*100):0;
+  // attention banner: surface tasks that need the operator (awaiting answer / failed)
+  const attn=s.tasks.filter(t=>t.status==="blocked"||t.status==="stuck");
+  const attHtml=attn.length?\`<div class="attn"><b>⚠ NEEDS YOU — \${attn.length} task(s) awaiting / failed</b>\${attn.map(t=>\`<div class="attn-row"><span class="st st-\${t.status}">\${t.status==="blocked"?"AWAITING":"FAILED"}</span> <strong>\${esc(t.title)}</strong> — \${esc(t.notes||"(no detail — open the task)")}</div>\`).join("")}</div>\`:"";
   // status model → the five states the operator watches
   const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"]};
   const stL=(x)=>STMAP[x]||[String(x).toUpperCase(),""];
@@ -279,6 +317,7 @@ async function projectView(id){
   document.getElementById("app").innerHTML=\`
     <div class="bar"><span><span class="dot"></span>online</span><span class="mono">\${clock()}</span><a class="back" href="/">« all units</a></div>
     <h1>\${esc(p.name)}</h1><div class="sub">\${esc(p.domain)} · \${esc(p.path)||"no path"} \${pbadges({offensive:OFF(p.domain),authorized:sc.authorized,halt:sc.halt})}</div>
+    \${attHtml}
     \${scopeBox}
     <div class="chips">\${chips}</div>
     <h2>phase progress<span class="n mono">\${pct}% done</span></h2>
@@ -293,7 +332,12 @@ async function projectView(id){
     <h2>activity<span class="n mono">\${s.events.length}</span></h2>
     <div>\${s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'}</div>\`;
 }
-async function refresh(){const id=qp("project");id?projectView(id):projectList();}
+async function refresh(){
+  // don't wipe the DOM while the user is typing in an input (the add-idea box)
+  const ae=document.activeElement;
+  if(ae&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA"))return;
+  const id=qp("project");id?await projectView(id):await projectList();
+}
 refresh();setInterval(refresh,5000);
 </script>
 </body></html>`;
