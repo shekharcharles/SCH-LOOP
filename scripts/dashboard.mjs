@@ -260,28 +260,47 @@ function set(id,html){
 }
 
 // ---------- HOME ----------
+let projQ="";
 function homeSkeleton(){
   document.getElementById("app").innerHTML=\`
     <div class="bar"><span><span class="dot"></span><span id="livemark" class="live">live</span></span><span class="mono" id="clk"></span><span id="ucount"></span></div>
     <h1>SCH·LOOP</h1><div class="sub">operations // all projects</div>
     <section id="pchips"></section>
-    <section id="ptable"></section>\`;
-  CACHE.pchips=CACHE.ptable=undefined;
+    <div class="toolbar"><input id="pq" placeholder="search projects…" title="Search by project name, id or domain" value="" oninput="projQ=this.value;reapplyHome()"></div>
+    <section id="devsec"></section>
+    <section id="secsec"></section>\`;
+  CACHE.pchips=CACHE.devsec=CACHE.secsec=undefined;
+}
+function reapplyHome(){ if(LAST&&LAST.projects)homeApply(LAST.projects); }
+function projRows(list){
+  const RANK={attention:0,active:1,inprogress:2,new:3,idle:4,completed:5};
+  return list.slice().sort((a,b)=>(RANK[a.status]??9)-(RANK[b.status]??9)||a.name.localeCompare(b.name)).map((p,i)=>{
+    const[lab,cl]=PSTAT[p.status]||[p.status,""];
+    return \`<tr class="\${cl}" onclick="location.href='/?project=\${encodeURIComponent(p.id)}'" title="Open \${esc(p.name)}">
+    <td data-l="#" class="id">\${i+1}</td>
+    <td data-l="Project"><strong>\${esc(p.name)}</strong> <span class="id">\${esc(p.domain)}</span>\${p.offensive&&p.halt?' <span class="badge b-halt">halt</span>':''}\${p.offensive&&!p.authorized?' <span class="badge b-off">unauthorized</span>':''}</td>
+    <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
+    <td data-l="Progress"><div class="bar2"><span style="width:\${p.pct}%"></span></div><span class="pctn">\${p.pct}%</span></td>
+    <td data-l="Done">\${p.done}</td><td data-l="Total">\${p.total}</td><td data-l="Pending">\${p.pending}</td>\${p.offensive?'<td data-l="Findings">'+p.findings+'</td>':'<td data-l="Findings">—</td>'}
+    <td data-l="Inbox">\${p.inboxNew?'<span class="in">'+p.inboxNew+'</span>':'0'}</td></tr>\`;}).join("");
+}
+function projTable(title,list,emptyMsg){
+  const rows=projRows(list)||'<tr><td colspan="9" class="empty">'+emptyMsg+'</td></tr>';
+  return '<h2>'+title+'<span class="n mono">'+list.length+'</span></h2>'+
+    '<div class="tbl-wrap"><table class="t projects"><thead><tr><th>#</th><th>Project</th><th>Status</th><th>Progress</th><th>Done</th><th>Total</th><th>Pending</th><th>Findings</th><th>Inbox</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 function homeApply(ps){
   document.getElementById("clk").textContent=clock();
   document.getElementById("ucount").textContent="units // "+ps.length;
   const by=(c)=>ps.filter(p=>p.status===c).length;
   set("pchips",'<div class="chips">'+[["active",by("active"),"active"],["in progress",by("inprogress"),"inprogress"],["failed / awaiting",by("attention"),"attention"],["completed",by("completed"),"completed"],["new",by("new"),"new"]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
-  const RANK={attention:0,active:1,inprogress:2,new:3,idle:4,completed:5};
-  const rows=ps.slice().sort((a,b)=>(RANK[a.status]??9)-(RANK[b.status]??9)||a.name.localeCompare(b.name)).map((p,i)=>{const[lab,cl]=PSTAT[p.status]||[p.status,""];return \`<tr class="\${cl}" onclick="location.href='/?project=\${encodeURIComponent(p.id)}'">
-    <td data-l="#" class="id">\${i+1}</td>
-    <td data-l="Project"><strong>\${esc(p.name)}</strong> <span class="id">\${esc(p.domain)}</span>\${p.offensive&&p.halt?' <span class="badge b-halt">halt</span>':''}</td>
-    <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
-    <td data-l="Progress"><div class="bar2"><span style="width:\${p.pct}%"></span></div><span class="pctn">\${p.pct}%</span></td>
-    <td data-l="Done">\${p.done}</td><td data-l="Total">\${p.total}</td><td data-l="Pending">\${p.pending}</td><td data-l="Find">\${p.findings}</td>
-    <td data-l="Inbox">\${p.inboxNew?'<span class="in">'+p.inboxNew+'</span>':'0'}</td></tr>\`;}).join("")||'<tr><td colspan="9" class="empty">no projects — run /sch-spec</td></tr>';
-  set("ptable",'<div class="tbl-wrap"><table class="t projects"><thead><tr><th>#</th><th>Project</th><th>Status</th><th>Progress</th><th>Done</th><th>Total</th><th>Pending</th><th>Find</th><th>Inbox</th></tr></thead><tbody>'+rows+'</tbody></table></div>');
+  // split by kind, then apply the search
+  const q=projQ.trim().toLowerCase();
+  const match=(p)=>!q||((p.name+" "+p.id+" "+p.domain).toLowerCase().includes(q));
+  const dev=ps.filter(p=>!p.offensive&&match(p));
+  const sec=ps.filter(p=>p.offensive&&match(p));
+  set("devsec",projTable("development",dev,q?"no development project matches":"no development projects — run /sch-spec"));
+  set("secsec",projTable("security // pentest",sec,q?"no engagement matches":"no engagements — run /sch-spec with a target"));
 }
 
 // ---------- PROJECT ----------
