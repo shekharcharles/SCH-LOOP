@@ -218,6 +218,17 @@ the dashboard — never a guess.
 
 ## 2. Preflight + scope gate
 
+**FIRST: has the operator already answered the thing that is blocking you?**
+Before reporting any blocker, check whether a task about it already exists **and
+carries an answer** (`task-get <id>` → `answers[]`, or notes beginning
+`ANSWERED:`). If it does, **carry the answer out now, in this pass** — that is the
+whole point of asking. Then set the task `merged` and continue.
+
+Reporting "blocked, unanswered" for a question that was answered hours ago is the
+worst failure this loop has: the operator did their part, watched nothing happen,
+and has no way to tell the difference between a loop that is waiting and a loop
+that is ignoring them. An answer is an instruction, not a note.
+
 - **Dev packs:** confirm the project `path` repo, `origin` reachable, and a clean
   tree (`git status --porcelain` empty). **A dirty tree must not silently no-op
   every pass** — it blocks all work, so surface it where the operator will see it:
