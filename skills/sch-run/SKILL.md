@@ -150,6 +150,13 @@ If any new ideas exist, invoke **`/sch-plan --project <id>`** to fold them into
 the queue before doing work. This is the "I thought of / was told a new thing"
 path — planned before executed.
 
+You are calling it in **unattended mode** (nobody is watching this terminal), so
+it skips the play-back and confirmation steps. It still decomposes properly: one
+inbox message often contains several separate requirements and becomes several
+right-sized tasks, each tagged `--source inbox#<id>` so the operator can trace
+what their message became. Anything genuinely ambiguous becomes a DECISION task on
+the dashboard — never a guess.
+
 ## 2. Preflight + scope gate
 
 - **Dev packs:** confirm the project `path` repo, `origin` reachable, and a clean
