@@ -311,8 +311,42 @@ Re-read it; if it changed under you, drop and re-pick.
 wander off-topic and burn tokens. **Spawn a fresh `Agent`** (model `sonnet`), clean
 context, one task. The loop session stays a lean orchestrator.
 
-Brief it with ONLY: the task id, its `AC-N`/`NG-N`, the project `path` +
-`CLAUDE.md`/`HANDOFF.md`, and the pack's relevant phase. Its rules:
+### 5a. LOCATE FIRST — never send a builder in blind (the biggest cost lever)
+
+A fresh subagent knows nothing about this codebase. Hand it `"enforce upload
+quotas per role"` with no file names and it will spend 40-80 tool calls and
+100k+ tokens rediscovering what you could have found in three greps. That is the
+entire difference between a task taking 3 minutes and taking 14.
+
+**If the task does not already name its target files, find them BEFORE
+dispatching**, in the orchestrator, cheaply:
+
+```bash
+# the choke point, not every mention — name the function/route/model
+rtk grep -rn "user_allowed_to_upload\|def upload" --include=*.py files/
+```
+
+Prefer `codegraph_explore` when the project has a `.codegraph/` index — one call
+returns the relevant symbols' source plus the call paths between them, replacing
+a whole grep-and-read loop. (Not indexed? Say so once to the operator; indexing
+is their call, not yours.)
+
+Then **write what you found back into the task** so it is never rediscovered:
+
+```bash
+node scripts/state.mjs task-set --project <id> <taskId> \
+  --note "files: files/models/media.py (user_allowed_to_upload = the single choke point) | files/admin.py | tests/api/test_upload_quota.py"
+```
+
+Budget this at ~2-4 searches. You are locating, not solving.
+
+**Give the builder a tool budget: ~35 tool uses.** If it burns through that, the
+task was underspecified or too big — it must return what it learned (as a file
+map) rather than grinding on. The next pass then starts informed.
+
+Brief it with: the task id, its `AC-N`/`NG-N`, **the target files you just
+located and what each one is for**, the project `path` + `CLAUDE.md`/`HANDOFF.md`,
+and the pack's relevant phase. Its rules:
 
 1. **On-task only.** Implement just its `AC-N`; `NG-N` binding. Do not redesign the
    product, amend the PRD, or touch adjacent features. A discovered product/scope
@@ -371,13 +405,28 @@ Ambiguous objective, conflict with an `NG`/RoE, or a decision only a human can m
   screenshot / decrypted Burp request; ground truth, not a guess.
 - `objective-proof` (red team): beacon callback / access token / screenshot.
 
-**Review** (token-cheap): spawn a fresh **`Agent`** running `/sch-review` for this
-task id — but **scope it to the diff, not the repo**, and **on a cheaper model**.
-Pass the agent: the task's `AC-N`/`NG-N`, the `git diff` of the branch, and the
-list of changed files. Tell it NOT to re-explore the whole codebase (that re-read
-is what cost ~80k tokens/task). A fresh agent reviewing a focused diff costs a
-fraction. Run the agent with `model: "sonnet"` unless the change is genuinely
-subtle. It returns `approved` / `changes` / `escalate`.
+**Review — right-size it. A review must never cost more than the build.**
+
+Measured on real passes, review was running 65-85k tokens per task: 33-45% of the
+total, to look at a diff the orchestrator already has. That is not a review, it is
+a second exploration.
+
+**Small, well-covered change** — under ~40 changed lines, tests green, no
+security/auth/crypto/payment/migration surface? **Skip the subagent.** Check the
+`AC-N` against the diff yourself and complete. A one-line config change does not
+need a fresh agent to read the repo.
+
+**Otherwise** spawn a fresh **`Agent`** running `/sch-review`, `model: "sonnet"`, with:
+- the task's `AC-N`/`NG-N`,
+- the **`git diff` text itself** (paste it — do not make the agent fetch it),
+- the changed-file list.
+
+Hard limits for that agent: **no repo exploration, ~8 tool uses, no reading files
+that are not in the diff.** Its evidence is the diff plus the test/lint output it
+runs — not a re-read of the codebase. If a diff is genuinely too subtle to judge
+without more context, it says so and escalates rather than going exploring.
+
+It returns `approved` / `changes` / `escalate`.
 
 - `changes` → `task-set --status changes`, end pass (step 3 converges next).
 - `escalate` → `task-set --status blocked`, end pass.

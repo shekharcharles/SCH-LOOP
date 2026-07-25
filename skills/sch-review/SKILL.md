@@ -18,11 +18,21 @@ the one task's branch against its contract only. One pass = one verdict.
 ## 0. Token budget — review the DIFF, not the repo
 
 You are given the task's `AC-N`/`NG-N`, the `git diff` of the branch, and the
-changed-file list. **Review those.** Do NOT re-explore the whole codebase or read
-large unrelated files — re-reading the repo is what makes review cost ~80k tokens
-per task. Read a changed file in full only if the diff alone is genuinely
-ambiguous. Run real checks (lint/typecheck/tests) — their output is the evidence,
-not a re-read of the source. Keep the verdict terse.
+changed-file list. **Review those.**
+
+**Budget: ~8 tool uses.** Nearly all of them should be running checks
+(tests/lint/typecheck), because their output is the evidence — not a re-read of
+the source you were already handed.
+
+- **Do NOT explore the repo.** No directory listings, no "let me understand the
+  architecture", no reading files that are not in the diff. Measured on real
+  passes, that exploration was 65-85k tokens per review — more than some builds.
+- Read a changed file in full only when the diff alone is genuinely ambiguous,
+  and only that file.
+- If you cannot judge the change without wider context, **say so and escalate**.
+  An honest escalation is cheap; a self-directed tour of the codebase is not.
+
+Keep the verdict terse.
 
 ## 1. Load the contract and diff
 
