@@ -14,11 +14,25 @@ import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OF
 
 // Catalog of installed skills the operator can require for a project.
 // Read once per request from ~/.claude/skills/<name>/SKILL.md frontmatter.
+const DESIGN = new Set(["impeccable", "taste-skill", "taste-skill-v1", "redesign-skill", "design-dna",
+  "stitch-skill", "soft-skill", "minimalist-skill", "brutalist-skill", "brandkit",
+  "image-to-code-skill", "gpt-tasteskill"]);
+// Group skills so the operator picks a category first, then the skills in it.
+function categorize(name) {
+  if (name.startsWith("gsap-") || name === "motion-design") return "Motion / GSAP";
+  if (name.startsWith("threejs-")) return "3D / Three.js";
+  if (name.startsWith("imagegen-")) return "Image generation";
+  if (DESIGN.has(name)) return "Design & UI";
+  return "Other";
+}
+export const CAT_ORDER = ["Design & UI", "Motion / GSAP", "Image generation", "3D / Three.js", "Other"];
+
 function skillCatalog() {
   const root = join(homedir(), ".claude", "skills");
   if (!existsSync(root)) return [];
   const out = [];
   for (const name of readdirSync(root)) {
+    if (name.startsWith("sch-")) continue;            // the engine itself — not selectable
     const f = join(root, name, "SKILL.md");
     if (!existsSync(f)) continue;
     let desc = "";
@@ -26,9 +40,10 @@ function skillCatalog() {
       const t = readFileSync(f, "utf8").slice(0, 1200);
       desc = (t.match(/^description:\s*(.+)$/m)?.[1] || "").slice(0, 140);
     } catch { /* ignore */ }
-    out.push({ name, desc });
+    out.push({ name, desc, cat: categorize(name), legacy: name.endsWith("-v1") });
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.sort((a, b) =>
+    CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || a.name.localeCompare(b.name));
 }
 
 const PORT = process.env.SCH_PORT || 4600;
@@ -285,7 +300,17 @@ const PAGE = `<!doctype html>
   .sk-chip{background:var(--green);color:#000;font-size:10px;font-weight:700;padding:2px 8px;letter-spacing:.05em;text-transform:uppercase}
   .sk-search{width:100%;font-family:inherit;font-size:14px;padding:9px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);margin-bottom:8px}
   .sk-search:focus{outline:none;border-color:var(--green)}
-  .sk-list{max-height:260px;overflow-y:auto;border:1px solid var(--line);margin-bottom:8px}
+  .sk-list{max-height:340px;overflow-y:auto;border:1px solid var(--line);margin-bottom:8px}
+  .sk-cat{border-bottom:1px solid var(--line)}
+  .sk-cat>summary{cursor:pointer;padding:8px 10px;background:#141414;display:flex;align-items:center;gap:8px;
+    font-size:11px;text-transform:uppercase;letter-spacing:.09em;user-select:none}
+  .sk-cat>summary::-webkit-details-marker{color:var(--red)}
+  .sk-cn{font-weight:700;flex:1}
+  .sk-cc{color:var(--dim);font-variant-numeric:tabular-nums}
+  .sk-all{font-family:inherit;font-size:9px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;
+    background:#222;color:var(--fg);border:1px solid var(--line);cursor:pointer}
+  .sk-all:hover{border-color:var(--green);color:var(--green)}
+  .sk-lg{font-style:normal;font-size:9px;color:var(--red);border:1px solid var(--red);padding:0 4px;margin-left:4px}
   .sk-item{display:flex;align-items:baseline;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px}
   .sk-item:hover{background:#171717}
   .sk-item input{accent-color:#4af626;flex:0 0 auto}
@@ -380,7 +405,7 @@ async function projectView(id){
   // attention banner: surface tasks that need the operator (awaiting answer / failed)
   const attn=s.tasks.filter(t=>t.status==="blocked"||t.status==="stuck");
   const attHtml=attn.length?\`<div class="attn"><b>⚠ NEEDS YOU — \${attn.length} task(s) awaiting / failed</b>\${attn.map(t=>\`<div class="attn-row">
-      <div><span class="st st-\${t.status}">\${t.status==="blocked"?"AWAITING":"FAILED"}</span> <strong>\${esc(t.title)}</strong></div>
+      <div><span class="st st-\${t.status}">\${t.status==="blocked"?"AWAITING":"FAILED"}</span> <span class="id">TASK #\${t.id}</span> <strong>\${esc(t.title)}</strong></div>
       <div class="q">\${esc(t.notes||"(no detail — open the task)")}</div>
       <form class="ans" method="POST" action="/answer"><input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="id" value="\${t.id}">
         <input type="text" name="text" placeholder="Answer this — task resumes at top of queue" autocomplete="off" required><button>Answer &amp; unblock</button></form>
@@ -429,21 +454,46 @@ async function projectView(id){
     <div>\${s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'}</div>\`;
 }
 // skill picker: catalog fetched once, rendered with checkboxes + live search
-let SKILLS=null;
+let SKILLS=null,SKSIG="";
 async function renderSkills(selected){
   const box=document.getElementById("sklist"); if(!box)return;
   if(!SKILLS){try{SKILLS=await (await fetch("/api/skills")).json();}catch{SKILLS=[];}}
   const sel=new Set(selected||[]);
-  box.innerHTML=SKILLS.map(s=>\`<label class="sk-item" data-n="\${esc(s.name)} \${esc(s.desc).toLowerCase()}">
-    <input type="checkbox" name="skills" value="\${esc(s.name)}"\${sel.has(s.name)?" checked":""}>
-    <span class="sk-n">\${esc(s.name)}</span><span class="sk-d">\${esc(s.desc)}</span></label>\`).join("")
-    ||'<div class="empty">no skills found in ~/.claude/skills</div>';
+  // only re-render when the saved selection actually changed — otherwise the 5s
+  // refresh would collapse open categories and wipe the search box
+  const sig=JSON.stringify([...sel].sort())+"|"+SKILLS.length;
+  if(sig===SKSIG&&box.dataset.ready)return;
+  SKSIG=sig;
+  const cats=[...new Set(SKILLS.map(s=>s.cat))];
+  box.innerHTML=cats.map(c=>{
+    const items=SKILLS.filter(s=>s.cat===c);
+    const on=items.filter(s=>sel.has(s.name)).length;
+    return \`<details class="sk-cat" data-c="\${esc(c)}"\${(c==="Design & UI"||on)?" open":""}>
+      <summary><span class="sk-cn">\${esc(c)}</span><span class="sk-cc">\${on}/\${items.length}</span>
+        <button type="button" class="sk-all" onclick="selectCat(event,'\${esc(c)}',true)">all</button>
+        <button type="button" class="sk-all" onclick="selectCat(event,'\${esc(c)}',false)">none</button></summary>
+      \${items.map(s=>\`<label class="sk-item" data-n="\${esc(s.name)} \${esc(s.desc).toLowerCase()}">
+        <input type="checkbox" name="skills" value="\${esc(s.name)}"\${sel.has(s.name)?" checked":""}>
+        <span class="sk-n">\${esc(s.name)}\${s.legacy?' <em class="sk-lg">legacy</em>':''}</span>
+        <span class="sk-d">\${esc(s.desc)}</span></label>\`).join("")}
+    </details>\`;}).join("")||'<div class="empty">no skills found in ~/.claude/skills</div>';
+  box.dataset.ready="1";
   filterSkills();
+}
+function selectCat(e,cat,on){
+  e.preventDefault();
+  document.querySelectorAll('#sklist .sk-cat[data-c="'+cat+'"] input[type=checkbox]').forEach(cb=>{cb.checked=on;});
 }
 function filterSkills(){
   const q=(document.getElementById("skq")?.value||"").toLowerCase().trim();
-  document.querySelectorAll("#sklist .sk-item").forEach(el=>{
-    el.style.display=!q||el.dataset.n.includes(q)?"":"none";
+  document.querySelectorAll("#sklist .sk-cat").forEach(cat=>{
+    let shown=0;
+    cat.querySelectorAll(".sk-item").forEach(el=>{
+      const hit=!q||el.dataset.n.includes(q);
+      el.style.display=hit?"":"none"; if(hit)shown++;
+    });
+    cat.style.display=shown?"":"none";
+    if(q&&shown)cat.open=true;
   });
 }
 async function refresh(){

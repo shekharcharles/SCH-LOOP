@@ -19,39 +19,43 @@ review. Under `/loop /sch-run --project <id>` each interval runs this once for
 that project. All durable state is in `state.json`; re-read every pass, trust
 nothing from memory.
 
-## 0. Load the pack
+## 0. Cheap gate FIRST (do this before loading anything — saves tokens)
 
-Resolve the project and its pack:
+The single most important step for cost. Make ONE call before reading any pack,
+knowledge, PRD, or scope:
+
+```bash
+node scripts/state.mjs pass-gate --project <id>
+```
+
+- **`BUSY`** → another pass is still running. **STOP the pass right here.** Output
+  one short line ("pass skipped — another running") and end. Do NOT load the pack,
+  do NOT read files, do NOT think further. A short `/loop` interval costs almost
+  nothing because of this.
+- **`IDLE`** → nothing to build (no ready task, no `changes`, no new inbox). **STOP
+  here too** — one line ("idle — nothing queued"), end. Don't load the methodology
+  just to discover there's no work.
+- **`WORK`** → there is real work. Take the lock and proceed:
+  ```bash
+  node scripts/state.mjs lock-acquire --project <id> --ttl 45
+  ```
+  (If lock-acquire now says BUSY due to a race, stop.) **Always release** at the
+  end of the pass (success, blocked, or error):
+  `node scripts/state.mjs lock-release --project <id>`.
+
+Only after `WORK` + lock do the heavy steps below run. This keeps idle and
+overlapping passes to a handful of tokens instead of a full methodology load.
+
+## 0c. Load the pack (only on a WORK pass)
 
 ```bash
 node scripts/state.mjs project-get --project <id>     # domain, path, scope
-node scripts/state.mjs stats --project <id>
 ```
 
-Read `packs/packs.json` for the domain → `kind`, `dispatch`, `validate`,
-`complete`, `deliver`, `concurrency`, `scope_required`, `active_gating`, and
-`packs/<method>.md` for the methodology. Everything below follows the pack.
-
-**Load prior learning:** read `knowledge/<pack>.md` and apply its accumulated
-techniques, target-class patterns, and false-positive filters to this pass. The
-loop gets smarter each engagement because of this file.
-
-## 0b. Take the run lock (FIRST action — prevents overlapping passes)
-
-```bash
-node scripts/state.mjs lock-acquire --project <id> --ttl 45
-```
-
-- Returns **`BUSY …`** → a previous pass is still working. **End this pass
-  immediately, do nothing else.** This is why the loop interval does not matter:
-  a short interval simply no-ops while work is in flight.
-- Returns **`ACQUIRED`** → proceed. A lock older than its TTL is taken over
-  automatically, so a crashed session never wedges the project.
-- **Always release at the end of the pass** (success, blocked, or error):
-  ```bash
-  node scripts/state.mjs lock-release --project <id>
-  ```
-  Set `--ttl` longer than your longest expected task (default 45 min).
+Read `packs/packs.json` for the domain, and `packs/<method>.md` for the
+methodology. **Load only the phase/section relevant to the task you're about to
+do** — do not re-read the entire 15 KB methodology every pass if you only need one
+phase. Read `knowledge/<pack>.md` for accumulated lessons.
 
 ## 1. Inbox first (never skip)
 
@@ -222,9 +226,31 @@ Completion happens inside the loop, per task. The human gates are the contract
   - exposed secret/key → API/cloud access → data
   A proven chain outranks its individual parts — reviewers rate it higher. Stay
   within RoE (no destructive actions); the depth cap prevents infinite spawning.
-- **Blocked:** a real product/authorization decision → write one concrete
-  question (decision, options, which AC/objective), `task-set --status blocked`,
-  end pass. It returns when a human answers via the dashboard inbox.
+- **Blocked:** a real product/authorization decision → `task-set --status blocked
+  --note "<question>"`, end pass. It returns when the operator answers from the
+  dashboard.
+
+  **Write the question in plain language a non-developer can answer.** The person
+  reading it on their phone may not be a developer, and will not know your jargon.
+  Every blocked question MUST have:
+  1. **What you need to decide**, in everyday words — no unexplained jargon
+     (write "who can do what in the app", not "role axis / RBAC taxonomy").
+  2. **The options, spelled out** with what each means in practice.
+  3. **A concrete example** of the result of each option.
+  4. **Your recommendation + a sensible default**, so they can simply reply "yes,
+     use your default" and be done.
+
+  ❌ Bad: `Needs product decision: role axis (User/Admin/SuperAdmin tiers vs RBAC
+  member/contributor/manager), which quota dimensions, and defaults.`
+
+  ✅ Good: `Who should be allowed to upload, and how much? Option A (simple):
+  three levels — Viewer (watch only), Creator (can upload), Admin (manages
+  everything). Option B (flexible): finer roles per team. Example with A: a
+  Creator gets 5 GB total and 500 MB per video; a Viewer gets none.
+  Recommended: A, with 5 GB / 500 MB — reply "use default" to accept.`
+
+  If the operator's answer is still ambiguous, ask ONE short follow-up in the same
+  plain style rather than guessing.
 
 ## 7b. Effort budgets & rabbit-hole escape (mandatory)
 
