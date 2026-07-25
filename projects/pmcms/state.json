@@ -428,14 +428,22 @@
         "NG-6: keep AGPL/attribution in footer"
       ],
       "deps": [],
-      "status": "changes",
+      "status": "merged",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "reviewer: dup .pm-btn breaks forum CTAs; missing .pm-dialog; duplicate tokens",
+      "notes": "561c3d8: token layer+primitives, light/dark verified, reviewer approved",
       "createdAt": "2026-07-23T20:17:21.769Z",
-      "updatedAt": "2026-07-23T20:35:55.705Z"
+      "updatedAt": "2026-07-25T09:17:50.742Z",
+      "skills": [
+        "design-dna",
+        "taste-skill",
+        "redesign-skill",
+        "impeccable",
+        "motion-design",
+        "output-skill"
+      ]
     },
     {
       "id": 22,
@@ -758,6 +766,36 @@
   ],
   "events": [
     {
+      "id": 59,
+      "ts": "2026-07-25T09:17:50.742Z",
+      "msg": "task #21 -> merged (561c3d8: token layer+primitives, light/dark verified, reviewer approved)"
+    },
+    {
+      "id": 58,
+      "ts": "2026-07-25T09:15:16.656Z",
+      "msg": "required skills set: design-dna, impeccable, minimalist-skill, redesign-skill, stitch-skill, taste-skill, gsap-core, gsap-frameworks, gsap-performance, gsap-plugins, gsap-react, gsap-scrolltrigger, gsap-timeline, gsap-utils, motion-design, output-skill"
+    },
+    {
+      "id": 57,
+      "ts": "2026-07-25T09:15:03.198Z",
+      "msg": "required skills set: design-dna, impeccable, redesign-skill, taste-skill, gsap-core, gsap-frameworks, gsap-performance, gsap-plugins, gsap-react, gsap-scrolltrigger, gsap-timeline, gsap-utils, motion-design, output-skill"
+    },
+    {
+      "id": 56,
+      "ts": "2026-07-25T09:14:35.371Z",
+      "msg": "run-lock released"
+    },
+    {
+      "id": 55,
+      "ts": "2026-07-25T09:13:21.634Z",
+      "msg": "run-lock acquired (sch-run)"
+    },
+    {
+      "id": 54,
+      "ts": "2026-07-25T09:13:21.634Z",
+      "msg": "stale lock from 2026-07-23T20:43:12.176Z taken over"
+    },
+    {
       "id": 53,
       "ts": "2026-07-23T20:43:12.176Z",
       "msg": "run-lock acquired (sch-run)"
@@ -1027,12 +1065,7 @@
   "seq": {
     "task": 34,
     "inbox": 1,
-    "event": 53,
+    "event": 59,
     "finding": 0
-  },
-  "lock": {
-    "holder": "sch-run",
-    "ts": "2026-07-23T20:43:12.176Z",
-    "ttlMs": 2700000
   }
 }
