@@ -14,7 +14,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const { inScope, authForTarget, clientMatch, nextReady, isDesignTask, addTask, addFinding, CHAIN_MAX } =
+const { inScope, authForTarget, clientMatch, nextReady, isDesignTask, addTask, addFinding, suggestInterval, CHAIN_MAX } =
   await import(join(ROOT, "scripts", "state.mjs").replace(/\\/g, "/").replace(/^([A-Za-z]):/, "file:///$1:"));
 
 // ---------- scope gate (the safety-critical one) ----------
@@ -184,4 +184,21 @@ test("pass-gate: own pass continues, a second pass is refused", () => {
   const st = JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8"));
   assert.equal(st.run.passN, 2, "two real wake-ups (initial + the refused one), not five");
   rmSync(home, { recursive: true, force: true });
+});
+
+// --- interval advice: the right interval depends on WHY the loop would be idle
+test("suggestInterval: matches the reason the loop would be stopped", () => {
+  const t = (status, deps = []) => ({ id: Math.random(), status, deps });
+  const st = (tasks, inbox = []) => ({ tasks, inbox });
+
+  assert.equal(suggestInterval(st([])).minutes, 30, "empty queue → wake rarely");
+  assert.equal(suggestInterval(st(Array.from({ length: 8 }, () => t("queued")))).minutes, 30,
+    "deep ready queue → a pass batches anyway, short interval only adds BUSY wakes");
+  assert.equal(suggestInterval(st([t("queued"), t("queued")])).minutes, 15,
+    "shallow queue → the pass ends early, so waking sooner does real work");
+  assert.equal(suggestInterval(st([t("blocked"), t("merged")])).minutes, 10,
+    "waiting on the operator → pick their answer up quickly");
+  // a blocked task must not shorten the interval while there is still real work
+  assert.equal(suggestInterval(st([t("blocked"), ...Array.from({ length: 6 }, () => t("queued"))])).minutes, 30,
+    "blocked but plenty ready → keep batching");
 });

@@ -236,6 +236,33 @@ function logProvenance(auth, domains, flags) {
 
 // Is `target` inside a project's authorized scope? Used to gate active tasks.
 // An expired authorization fails closed — a standing engagement is time-boxed.
+// What loop interval should this project run at?
+//
+// Since a pass now keeps working (up to 5 tasks / 25 min) instead of sleeping out
+// its interval, the interval ONLY decides how long a *stopped* loop waits before
+// waking. So the answer depends on why it would be stopped:
+//   deep ready queue  → a pass batches anyway; a short interval only adds BUSY
+//                       wake-ups that cost tokens and achieve nothing.
+//   shallow queue     → the pass ends early, so waking sooner does real work.
+//   blocked on you    → YOU are the bottleneck; wake soon after an answer lands.
+//   nothing at all    → wake rarely; every wake-up on an empty queue is waste.
+export function suggestInterval(state) {
+  const t = state.tasks ?? [];
+  const ready = t.filter((x) => x.status === "queued" &&
+    (x.deps ?? []).every((d) => DONE.has(t.find((y) => y.id === Number(d))?.status))).length;
+  const blocked = t.filter((x) => x.status === "blocked").length;
+  const changes = t.filter((x) => x.status === "changes").length;
+  const inbox = (state.inbox ?? []).filter((i) => i.status === "new").length;
+
+  if (blocked && !ready && !changes)
+    return { minutes: 10, why: `${blocked} task(s) waiting on your answer and nothing else ready — a short interval picks your answer up quickly` };
+  if (ready + changes + inbox === 0)
+    return { minutes: 30, why: "nothing queued — wake rarely; every wake-up on an empty queue is wasted tokens" };
+  if (ready + changes >= 5)
+    return { minutes: 30, why: `${ready + changes} ready — one pass batches up to 5 tasks / 25 min, so a shorter interval would only add BUSY wake-ups` };
+  return { minutes: 15, why: `only ${ready + changes} ready — a pass will finish early, so waking sooner does real work` };
+}
+
 export function inScope(project, target) {
   const sc = project?.scope ?? SCOPE_EMPTY;
   if (!sc.authorized || sc.halt || expired(sc.expiry)) return false;
@@ -603,6 +630,7 @@ const commands = {
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);
   },
+  "interval-advice"({ flags }) { out(suggestInterval(loadState(pid(flags)))); },
   // "How long do tasks actually take?" — the only honest basis for choosing the
   // loop interval and the lock TTL. Reports the measured distribution.
   timing({ flags }) {
