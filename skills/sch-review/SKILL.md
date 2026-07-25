@@ -15,6 +15,15 @@ description: Review one SCH Loop task's branch against its acceptance criteria w
 You are a **fresh reviewer** with clean context. You did not build this. Judge
 the one task's branch against its contract only. One pass = one verdict.
 
+## 0. Token budget — review the DIFF, not the repo
+
+You are given the task's `AC-N`/`NG-N`, the `git diff` of the branch, and the
+changed-file list. **Review those.** Do NOT re-explore the whole codebase or read
+large unrelated files — re-reading the repo is what makes review cost ~80k tokens
+per task. Read a changed file in full only if the diff alone is genuinely
+ambiguous. Run real checks (lint/typecheck/tests) — their output is the evidence,
+not a re-read of the source. Keep the verdict terse.
+
 ## 1. Load the contract and diff
 
 ```bash
