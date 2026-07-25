@@ -6,3 +6,4 @@
 {"ts":"2026-07-25T11:47:41.901Z","kind":"command","cmd":"project-add","flags":{"id":"gate-t","name":"Gate Test","domain":"app-dev","path":"C:/Users/r00t/AppData/Local/Temp/gt"},"pos":[]}
 {"ts":"2026-07-25T11:47:42.038Z","kind":"command","cmd":"task-add","flags":{"project":"gate-t","title":"dummy"},"pos":[]}
 {"ts":"2026-07-25T11:47:42.103Z","kind":"command","cmd":"task-set","flags":{"project":"gate-t","status":"merged"},"pos":["1"]}
+{"ts":"2026-07-25T12:14:57.276Z","kind":"command","cmd":"task-set","flags":{"project":"pmcms","status":"building","note":"claimed"},"pos":["22"]}

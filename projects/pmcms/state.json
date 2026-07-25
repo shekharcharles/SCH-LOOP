@@ -460,14 +460,14 @@
       "deps": [
         21
       ],
-      "status": "queued",
+      "status": "building",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "claimed",
       "createdAt": "2026-07-23T20:17:21.851Z",
-      "updatedAt": "2026-07-23T20:17:21.851Z"
+      "updatedAt": "2026-07-25T12:14:57.277Z"
     },
     {
       "id": 23,
@@ -765,6 +765,31 @@
     }
   ],
   "events": [
+    {
+      "id": 64,
+      "ts": "2026-07-25T12:14:57.277Z",
+      "msg": "task #22 -> building (claimed)"
+    },
+    {
+      "id": 63,
+      "ts": "2026-07-25T12:14:23.398Z",
+      "msg": "run-lock acquired (sch-run)"
+    },
+    {
+      "id": 62,
+      "ts": "2026-07-25T12:12:52.981Z",
+      "msg": "inbox +: live-test-1784981572978"
+    },
+    {
+      "id": 61,
+      "ts": "2026-07-25T12:06:53.888Z",
+      "msg": "run-lock released"
+    },
+    {
+      "id": 60,
+      "ts": "2026-07-25T12:06:38.912Z",
+      "msg": "run-lock acquired (sch-run)"
+    },
     {
       "id": 59,
       "ts": "2026-07-25T09:17:50.742Z",
@@ -1064,8 +1089,13 @@
   "findings": [],
   "seq": {
     "task": 34,
-    "inbox": 1,
-    "event": 59,
+    "inbox": 2,
+    "event": 64,
     "finding": 0
+  },
+  "lock": {
+    "holder": "sch-run",
+    "ts": "2026-07-25T12:14:23.397Z",
+    "ttlMs": 2700000
   }
 }
