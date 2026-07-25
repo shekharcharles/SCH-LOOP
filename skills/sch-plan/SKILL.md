@@ -111,6 +111,32 @@ node scripts/state.mjs inbox-mark --project <id> <inboxId>
 This is why the dashboard "add" box works even with a huge queue: you drop a
 lead, the next pass reasons it to the correct slot and priority, not the bottom.
 
+## 3b. NEVER leave a question only in the terminal (hard rule)
+
+The operator is usually **away, with only the dashboard**. A question you print in
+the terminal is invisible to them and stalls the loop until they happen to look.
+
+So whenever planning raises a decision you will not make yourself (scope
+expansion, an architectural choice, a risky approach), **write it into state so it
+appears in the dashboard's "NEEDS YOU" banner with an answer box**:
+
+```bash
+node scripts/state.mjs task-add --project <id> --priority 1 --category <cat> \
+  --phase-name "<phase>" --title "DECISION: <short question>" \
+  --notes "<the question in plain language: what must be decided, the options with
+  what each means in practice, a concrete example, and your recommendation + a
+  sensible default so the operator can simply reply 'use your default'>"
+node scripts/state.mjs task-set --project <id> <newId> --status blocked --note "<same question text>"
+```
+
+Then also print it in the terminal (for when they *are* watching), and — if a
+webhook is configured — push it:
+`node scripts/notify.mjs "<project>: decision needed — <one line>"`.
+
+Plan everything that is NOT blocked by the question. Never stall the whole inbox
+item on one open decision: write the unambiguous tasks now, and leave only the
+genuinely-blocked ones as the DECISION task.
+
 ## 4. Confirm (interactive only)
 
 Show the phase → task tree in chat before writing when the user is present. In
