@@ -22,9 +22,20 @@ nothing from memory.
 ## THE OPERATOR IS USUALLY AWAY — every question goes to the dashboard
 
 A phone notification is configured (`SCH_NOTIFY_WEBHOOK`), so **every time you
-block on a question, push it**:
-`node <SCH_HOME>/scripts/notify.mjs "<project>: #<task id> needs you — <one-line question>" --title "SCH Loop"`.
-Push once per blocked task, not on every pass.
+block on a question, push it** — one clear sentence, with a link straight to the
+project so it can be answered in one tap:
+
+```bash
+node <SCH_HOME>/scripts/notify.mjs \
+  "<project> · task #<id> needs you — <the question in one line>. Reply on the dashboard." \
+  --title "SCH Loop - needs you" --tags warning --priority high \
+  --click "http://localhost:4600/?project=<project>"
+```
+
+Push **once per blocked task**, never on every pass. Keep it generic — task id +
+short question, **never credentials, targets, or client-confidential detail**
+(the channel is not private). Use `--tags white_check_mark` + normal priority for
+a "queue finished / report ready" notice.
 
 Assume the person is **not watching this terminal**; they have the dashboard on a
 phone. Therefore: **anything that needs their input must be written into state**,
