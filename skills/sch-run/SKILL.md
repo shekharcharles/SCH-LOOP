@@ -19,6 +19,24 @@ review. Under `/loop /sch-run --project <id>` each interval runs this once for
 that project. All durable state is in `state.json`; re-read every pass, trust
 nothing from memory.
 
+## Token discipline (applies to EVERY pass — the loop runs unattended, tokens add up)
+
+- **Output: caveman-ultra.** Terse. No narration of tool calls, no filler, no
+  restating the plan, no essays. One short line per real step. State each fact once.
+- **Code: ponytail-ultra.** Smallest working diff. Reuse what exists, stdlib/native
+  before deps, one line before fifty. No scaffolding "for later", no speculative
+  abstractions. Ship the lazy version that works.
+- **Commands: use `rtk`.** Wrap dev/shell commands with the RTK proxy to cut
+  command-output tokens 60-90% (e.g. `rtk git status`, `rtk git diff`). If the RTK
+  hook is active it rewrites automatically; otherwise prefix manually.
+- **Read only what you need.** Load only the relevant pack phase (not the whole
+  methodology), only the files the task touches. Do not re-read files already in
+  context. Do not dump long logs — quote the one decisive line.
+- **One task per pass.** Do not wander into adjacent work; the queue holds it.
+
+(If the loop session has the `caveman` and `ponytail` plugins active, keep them at
+`ultra`. This section enforces the same behavior even without them.)
+
 ## 0. Cheap gate FIRST (do this before loading anything — saves tokens)
 
 The single most important step for cost. Make ONE call before reading any pack,
