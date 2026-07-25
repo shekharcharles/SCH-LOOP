@@ -330,10 +330,23 @@ dispatching**, in the orchestrator, cheaply:
 rtk grep -rn "user_allowed_to_upload\|def upload" --include=*.py files/
 ```
 
-Prefer `codegraph_explore` when the project has a `.codegraph/` index — one call
-returns the relevant symbols' source plus the call paths between them, replacing
-a whole grep-and-read loop. (Not indexed? Say so once to the operator; indexing
-is their call, not yours.)
+**If the project has a `.codegraph/` index, `codegraph_explore` is the FIRST
+call — not a fallback.** One call returns the relevant symbols' verbatim source,
+every caller of each one, and a warning where no tests cover them. Measured on
+this project: the same question that cost ~35 greps and reads returned in a
+single call, including all 7 callers of the choke point.
+
+- Query it with the symbols/behaviour you are looking for; a natural-language
+  question works.
+- **Treat what it returns as already Read** — re-opening those files is pure
+  waste, and it says so in its own output.
+- Its "blast radius" list *is* the ground-truth check: every caller you must
+  update before renaming anything, without a separate grep pass.
+- Budget is a couple of calls per project; spend the second on an area the first
+  did not cover rather than falling back to Read.
+
+Not indexed? Say so once to the operator (`codegraph init` in the repo) and use
+targeted greps meanwhile. Indexing is their call, not yours.
 
 Then **write what you found back into the task** so it is never rediscovered:
 
