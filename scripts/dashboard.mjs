@@ -176,8 +176,10 @@ const PAGE = `<!doctype html>
   .empty{color:var(--dim);padding:12px 14px;border:1px dashed var(--line);text-transform:uppercase;font-size:11px;letter-spacing:.1em}
   .ev{color:var(--dim);font-size:11.5px;padding:4px 0;border-bottom:1px solid var(--line)}.ev b{color:var(--fg)}
   /* phase strip */
-  .phase-strip{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line)}
-  .pp{font-size:11px;padding:6px 10px;background:var(--panel);flex:1 1 150px;text-transform:uppercase;letter-spacing:.03em}
+  /* uniform grid — equal cells, no ragged flex-wrap */
+  .phase-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+  .pp .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pp{font-size:11px;padding:7px 10px;background:var(--panel);text-transform:uppercase;letter-spacing:.03em;min-width:0}
   .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
   .pp.st-merged .d,.pp.st-completed .d{background:var(--green)}.pp.st-building .d{background:var(--amber)}.pp.st-review .d,.pp.st-changes .d{background:var(--blue)}.pp.st-queued .d{background:var(--dim)}.pp.st-blocked .d,.pp.st-stuck .d{background:var(--red)}
   /* task table */
@@ -234,7 +236,7 @@ const OFF=(d)=>OFFSET.has(d);
 const clock=()=>new Date().toISOString().slice(0,19).replace("T"," ")+" UTC";
 const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"],superseded:["SUPERSEDED","st-superseded"]};
 const PSTAT={new:["NEW","st-new"],inprogress:["IN PROGRESS","st-inprogress"],active:["ACTIVE","st-active"],attention:["FAILED / AWAITING","st-attention"],completed:["COMPLETED","st-completed"],idle:["IDLE","st-idle"]};
-let SKILLS=null, taskFilter={q:"",status:""};
+let SKILLS=null, taskFilter={q:"",status:"",showSuperseded:false};
 
 // --- section patcher: write only sections whose HTML changed, and never a
 // --- section the user is currently focused in (protects inputs/typing).
@@ -242,8 +244,18 @@ const CACHE={};
 function set(id,html){
   const el=document.getElementById(id); if(!el)return;
   if(CACHE[id]===html)return;
-  if(el.contains(document.activeElement))return;   // typing here → skip
+  // Protect what the user is typing — but only for free-text inputs, and by
+  // restoring value+caret after the patch rather than skipping the render.
+  // (Skipping the whole section is what previously broke the status filter:
+  // focus sat inside the section, so the re-render never happened.)
+  const a=document.activeElement;
+  const typing = a && el.contains(a) && a.tagName==="INPUT" && a.type!=="hidden";
+  const keep = typing ? {id:a.id, v:a.value, s:a.selectionStart, e:a.selectionEnd} : null;
   CACHE[id]=html; el.innerHTML=html;
+  if(keep && keep.id){
+    const n=document.getElementById(keep.id);
+    if(n){ n.value=keep.v; n.focus(); try{ n.setSelectionRange(keep.s,keep.e); }catch{} }
+  }
   el.classList.remove("upd"); void el.offsetWidth; el.classList.add("upd");
 }
 
@@ -280,15 +292,13 @@ function projSkeleton(id){
     <section id="attn"></section>
     <section id="scope"></section>
     <section id="chips"></section>
+    <form class="row-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
+    <section id="inboxsec"></section>
     <section id="phase"></section>
     <section id="tasksec"></section>
     <section id="findsec"></section>
-    <details class="box" id="skillbox"><summary>design skills for UI tasks — loop uses the best-fit one per UI task (backend tasks unaffected)</summary><div class="boxin" id="skillin"></div></details>
-    <details class="box"><summary>add lead / task &amp; activity</summary><div class="boxin">
-      <form class="row-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" placeholder="NEW LEAD / TASK — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
-      <section id="inboxsec"></section><section id="actsec"></section></div></details>\`;
+    <details class="box"><summary>activity log</summary><div class="boxin"><section id="actsec"></section></div></details>\`;
   for(const k in CACHE)delete CACHE[k];
-  renderSkills(id,[]);
 }
 function actForm(pid,id,a,l,c){return \`<form class="inl" method="POST" action="/task"><input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}">\${l}</button></form>\`;}
 function projApply(id,r){
@@ -319,11 +329,13 @@ function projApply(id,r){
   set("chips",'<div class="chips">'+[["active",by("building").length,"active"],["in progress",by("review").length+by("changes").length,"inprogress"],["queued",by("queued").length,""],["completed",done,"completed"],["awaiting",by("blocked").length,"awaiting"],["failed",by("stuck").length,"failed"],["findings",finds.length,""]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
   // phase strip
   const ph=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
-  set("phase",'<h2>phase progress<span class="n mono">'+pct+'% done</span></h2><div class="phase-strip">'+(ph.length?ph.map(t=>\`<div class="pp st-\${t.status}"><span class="d"></span>P\${t.phase} \${esc(t.title)} · \${t.status}</div>\`).join(""):'<div class="empty">no phases</div>')+'</div>');
+  set("phase",'<h2>phase progress<span class="n mono">'+pct+'% done</span></h2><div class="phase-strip">'+(ph.length?ph.map(t=>\`<div class="pp st-\${t.status}" title="\${esc(t.title)} · \${t.status}"><span class="t"><span class="d"></span>P\${t.phase} \${esc(t.title)}</span><span class="t" style="opacity:.6;padding-left:13px">\${t.status}</span></div>\`).join(""):'<div class="empty">no phases</div>')+'</div>');
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
   const rowActs=(t)=>t.status==="queued"?actForm(id,t.id,"bump","▲")+actForm(id,t.id,"hold","⏸"):(t.status==="blocked"||t.status==="stuck")?actForm(id,t.id,"requeue","↻","go"):"";
   let ts=s.tasks.slice().sort((a,b)=>(a.priority??3)-(b.priority??3)||a.phase-b.phase||a.id-b.id);
+  // superseded = replaced by smaller/other tasks; hidden unless explicitly shown
+  if(!taskFilter.showSuperseded && taskFilter.status!=="superseded")ts=ts.filter(t=>t.status!=="superseded");
   if(taskFilter.status)ts=ts.filter(t=>t.status===taskFilter.status);
   if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" P"+t.phase).toLowerCase().includes(q));}
   const trows=ts.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
@@ -333,52 +345,29 @@ function projApply(id,r){
     <td data-l="Target">\${esc(t.target||"—")}</td>
     <td data-l="Activity">\${esc(t.notes||t.branch||"—")}</td>
     <td data-l="" class="ac">\${rowActs(t)}</td></tr>\`;}).join("")||'<tr><td colspan="8" class="empty">no tasks match</td></tr>';
-  const statuses=["","queued","building","review","changes","blocked","stuck","merged"];
-  set("tasksec",'<h2>tasks<span class="n mono">'+total+'</span></h2>'+
+  const statuses=["","queued","building","review","changes","blocked","stuck","merged","superseded"];
+  const supN=s.tasks.filter(t=>t.status==="superseded").length;
+  set("tasksec",'<h2>tasks<span class="n mono">'+ts.length+' shown / '+total+'</span></h2>'+
     '<div class="toolbar"><input id="tq" placeholder="filter tasks…" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
-    '<select id="ts" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select></div>'+
+    '<select id="ts" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
+    (supN?'<button class="mini" onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
     '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>');
   // findings
   const srank=(x)=>["critical","high","medium","low","info"].indexOf((x||"info").toLowerCase());
   const fsev=(x)=>({critical:"f-critical",high:"f-high",medium:"f-medium",low:"f-low"}[(x||"info").toLowerCase()]||"f-info");
   const vf=finds.filter(f=>f.status==="validated").sort((a,b)=>srank(a.severity)-srank(b.severity)||a.id-b.id);
   const cn=finds.filter(f=>f.status==="tested-clean").length;
-  set("findsec",'<h2>findings<span class="n mono">'+vf.length+'V / '+cn+'C</span></h2>'+(vf.length?vf.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="pctn">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>'));
+  // findings are a pentest concept — never shown on a dev/tool project
+  set("findsec",!OFF(p.domain)?"":'<h2>findings<span class="n mono">'+vf.length+'V / '+cn+'C</span></h2>'+(vf.length?vf.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="pctn">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>'));
   // inbox + activity
   const nb=s.inbox.filter(i=>i.status==="new");
   set("inboxsec",nb.length?'<h2>inbox<span class="n mono">'+nb.length+'</span></h2>'+nb.map(i=>\`<div class="frow">\${esc(i.text)}</div>\`).join(""):"");
   set("actsec",'<h2>activity<span class="n mono">'+s.events.length+'</span></h2>'+(s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'));
   // keep skill picker selection in sync (only when not focused)
-  renderSkills(id,p.requiredSkills||[]);
 }
 function reapplyTasks(){ if(LAST&&LAST.project)projApply(qp("project"),LAST); }
 
 // skills picker — plain string concat (no nested templates) + event delegation
-async function renderSkills(id,selected){
-  const host=document.getElementById("skillin");
-  if(!host)return;
-  if(!SKILLS){try{SKILLS=await(await fetch("/api/skills")).json();}catch{SKILLS=[];}}
-  const sel=new Set(selected||[]);
-  const sig=JSON.stringify([...sel].sort())+"|"+SKILLS.length;
-  if(host.dataset.sig===sig)return;
-  if(host.contains(document.activeElement))return;
-  host.dataset.sig=sig;
-  const cats=[...new Set(SKILLS.map(s=>s.cat))];
-  var selHtml=sel.size?[...sel].map(x=>'<span class="sk-chip">'+esc(x)+'</span>').join(""):'<span class="empty">none — the loop may skip your design skills</span>';
-  var list="";
-  for(const c of cats){
-    const items=SKILLS.filter(s=>s.cat===c);
-    const on=items.filter(s=>sel.has(s.name)).length;
-    var its="";
-    for(const s of items){
-      its+='<label class="sk-item" data-n="'+esc(s.name)+' '+esc(s.desc).toLowerCase()+'"><input type="checkbox" name="skills" value="'+esc(s.name)+'"'+(sel.has(s.name)?" checked":"")+'><span class="sk-n">'+esc(s.name)+(s.legacy?'<em class="sk-lg">legacy</em>':'')+'</span><span class="sk-d">'+esc(s.desc)+'</span></label>';
-    }
-    list+='<details class="sk-cat" data-c="'+esc(c)+'"'+((c==="Design & UI"||on)?" open":"")+'><summary><span class="sk-cn">'+esc(c)+'</span><span class="sk-cc">'+on+'/'+items.length+'</span><button type="button" class="sk-all" data-cat="'+esc(c)+'" data-on="1">all</button><button type="button" class="sk-all" data-cat="'+esc(c)+'" data-on="0">none</button></summary>'+its+'</details>';
-  }
-  host.innerHTML='<div class="sk-sel">'+selHtml+'</div><input type="text" id="skq" class="sk-search" placeholder="Search skills…" autocomplete="off" oninput="filterSkills()"><form method="POST" action="/skills"><input type="hidden" name="project" value="'+esc(id)+'"><div class="sk-list" id="sklist">'+list+'</div><button class="sk-save">Save required skills</button></form>';
-}
-document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest(".sk-all");if(!b)return;e.preventDefault();document.querySelectorAll('#sklist .sk-cat[data-c="'+b.dataset.cat+'"] input[type=checkbox]').forEach(function(cb){cb.checked=b.dataset.on==="1";});});
-function filterSkills(){const q=(document.getElementById("skq")?.value||"").toLowerCase().trim();document.querySelectorAll("#sklist .sk-cat").forEach(cat=>{let n=0;cat.querySelectorAll(".sk-item").forEach(el=>{const h=!q||el.dataset.n.includes(q);el.style.display=h?"":"none";if(h)n++;});cat.style.display=n?"":"none";if(q&&n)cat.open=true;});}
 
 // ---- live stream (SSE) + graceful fallback ----
 let LAST=null, curProject=null, es=null;
