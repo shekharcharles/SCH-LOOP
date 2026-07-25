@@ -5,9 +5,9 @@ description: Review one SCH Loop task's branch against its acceptance criteria w
 
 # SCH Loop — reviewer
 
-> **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Run
+> **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Run
 > `node scripts/state.mjs …` from there, or use the absolute path
-> `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> `node $HOME/.claude/SCH-loop/scripts/state.mjs …`.
 > **`--project` is optional** — if omitted it is auto-detected from the current
 > folder (the registered project whose `path` contains your cwd). Check with
 > `state.mjs project-here`..
@@ -93,6 +93,12 @@ and nothing beyond scope?
 
 Any failure → `changes` with a tagged must-fix (`[DEFECT]`/`[SECURITY]`/`[AC-N]`/
 `[TEST]`/`[A11Y]`). Approve only when spec + quality + real checks all pass.
+
+## 3d. Definition-of-Done checklist
+
+Validate the task against the **Definition of Done** checklist in the project's
+`CLAUDE.md`. Every box must be genuinely satisfiable from evidence (not claimed).
+Any unmet box is a must-fix → `changes`.
 
 ## 4. Return one verdict
 

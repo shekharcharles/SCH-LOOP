@@ -10,7 +10,7 @@ daily CR path) and **dev** (app / tool). After this, the user only runs
 `/loop 15m /sch-run --project <id>`. This skill also **plans** the work, so tasks
 are queued and ready.
 
-> **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Run
+> **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Run
 > `node scripts/state.mjs …` from there or via the absolute path.
 
 Decide the shape from what the user gives: a CR + target(s)/hosts → offensive; an
@@ -80,7 +80,7 @@ Keep it to one round when you can. Fold the answers into `SCOPE.md` (step 3).
 node scripts/state.mjs cr-new --id "<CR-REF>" --name "<CR-REF short title>" \
   --targets "<host1>|<host2>" --via "<Teams|Email|Call|Meeting>" --by "<who shared>" \
   --domain web-pentest \
-  --path "C:/Users/r00t/Desktop/loop/SCH-loop/projects/<cr-slug>"
+  --path "$HOME/.claude/SCH-loop/projects/<cr-slug>"
 ```
 
 `--domain` is `web-pentest` (default), `mobile-android`, `mobile-ios`, or
@@ -113,6 +113,12 @@ no two criteria conflict. If a contradiction exists, surface it to the user and
 resolve it in the contract **now** — do not let the loop discover it mid-build.
 
 ## B) Dev — app / tool
+
+**Brainstorm first for a vague/greenfield idea** (superpowers `brainstorming`):
+if the request is fuzzy ("build me an X"), refine it Socratically BEFORE the PRD —
+surface the core user + primary flow, the one metric of success, and 2-3 design
+forks, presenting your recommended direction. Get the shape agreed, THEN spec. For
+a concrete/existing codebase, skip straight to the interview.
 
 Research the code first. Interview in rounds (1-4 questions, options, recommended
 first) — only genuine product decisions. Confidence test: *could two engineers

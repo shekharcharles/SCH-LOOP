@@ -35,10 +35,18 @@ not violate. **This file stays local — never commit it.** `sch-spec` fills eac
 - **Never write CSS/DOM against assumed markup** — read the real template; confirm the
   selector exists and co-occurs.
 - **Never commit secrets, `.env*`, keys, or this `CLAUDE.md`.** Secret-scan gates every
-  commit: `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/secret-scan.mjs`.
+  commit: `node $HOME/.claude/SCH-loop/scripts/secret-scan.mjs`.
 - **Never edit outside the task's declared files.** A product/scope decision → inbox
   question, not a code change. Do not redesign the product mid-build.
 - <project-specific binding constraints (security / DRM / compliance / license)>
+
+## Definition of Done (reviewer validates every task against this)
+- [ ] Meets every `AC-N`; violates no `NG-N`; nothing outside the task's files changed.
+- [ ] Tests written/updated and passing; lint + typecheck clean (evidence pasted).
+- [ ] UI verified in a real browser (screenshot); backend verified by running it.
+- [ ] No secret/`.env`/`CLAUDE.md` staged (secret-scan clean).
+- [ ] `CHANGELOG.md` + `HANDOFF.md` updated; any correction added to Lessons below.
+- [ ] <project-specific gates, e.g. i18n keys intact, DRM not weakened, a11y pass>
 
 ## Quality bar
 - Tests for logic/data/permission/UI-behaviour changes (<test runners>); test-first.

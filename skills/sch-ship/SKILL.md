@@ -5,9 +5,9 @@ description: Deliver a SCH Loop project when its queue is drained and its contra
 
 # SCH Loop — deliver
 
-> **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Run
+> **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Run
 > `node scripts/state.mjs …` from there, or use the absolute path
-> `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> `node $HOME/.claude/SCH-loop/scripts/state.mjs …`.
 > **`--project` is optional** — if omitted it is auto-detected from the current
 > folder (the registered project whose `path` contains your cwd). Check with
 > `state.mjs project-here`..

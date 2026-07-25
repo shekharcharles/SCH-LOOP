@@ -5,10 +5,10 @@ description: The SCH Loop engine, one project per loop. One pass fully completes
 
 # SCH Loop — engine
 
-> **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Every
+> **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Every
 > `node scripts/state.mjs …` command and every `packs/…` file below lives there.
 > If your terminal is in another folder, use the absolute path, e.g.
-> `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> `node $HOME/.claude/SCH-loop/scripts/state.mjs …`.
 > **`--project` is optional** — if omitted it is auto-detected from the current
 > folder (the registered project whose `path` contains your cwd). Check with
 > `state.mjs project-here`.. Dev git ops run
@@ -349,8 +349,11 @@ Completion happens inside the loop, per task. The human gates are the contract
   A proven chain outranks its individual parts — reviewers rate it higher. Stay
   within RoE (no destructive actions); the depth cap prevents infinite spawning.
 - **Blocked:** a real product/authorization decision → `task-set --status blocked
-  --note "<question>"`, end pass. It returns when the operator answers from the
-  dashboard.
+  --note "<question>"`, then **push a notification** so the operator sees it even
+  away from the dashboard:
+  `node <SCH_HOME>/scripts/notify.mjs "<project>: task #<id> needs you — <one-line question>" --title "SCH Loop"`
+  (no webhook set = harmless no-op). End pass. It returns when the operator answers
+  from the dashboard.
 
   **Write the question in plain language a non-developer can answer.** The person
   reading it on their phone may not be a developer, and will not know your jargon.
