@@ -1,0 +1,8 @@
+{"ts":"2026-07-25T09:17:50.741Z","kind":"command","cmd":"task-set","flags":{"project":"pmcms","status":"merged","skills":"design-dna|taste-skill|redesign-skill|impeccable|motion-design|output-skill","note":"561c3d8: token layer+primitives, light/dark verified, reviewer approved"},"pos":["21"]}
+{"ts":"2026-07-25T11:47:27.043Z","kind":"command","cmd":"project-add","flags":{"id":"gate-t","name":"Gate Test","domain":"app-dev","path":"C:/Users/r00t/AppData/Local/Temp/gt"},"pos":[]}
+{"ts":"2026-07-25T11:47:27.171Z","kind":"command","cmd":"task-add","flags":{"project":"gate-t","title":"dummy"},"pos":[]}
+{"ts":"2026-07-25T11:47:27.239Z","kind":"command","cmd":"task-set","flags":{"project":"gate-t","status":"merged"},"pos":["1"]}
+{"ts":"2026-07-25T11:47:27.520Z","kind":"command","cmd":"task-set","flags":{"project":"gate-t","status":"merged","force":"true","note":"test override"},"pos":["1"]}
+{"ts":"2026-07-25T11:47:41.901Z","kind":"command","cmd":"project-add","flags":{"id":"gate-t","name":"Gate Test","domain":"app-dev","path":"C:/Users/r00t/AppData/Local/Temp/gt"},"pos":[]}
+{"ts":"2026-07-25T11:47:42.038Z","kind":"command","cmd":"task-add","flags":{"project":"gate-t","title":"dummy"},"pos":[]}
+{"ts":"2026-07-25T11:47:42.103Z","kind":"command","cmd":"task-set","flags":{"project":"gate-t","status":"merged"},"pos":["1"]}
