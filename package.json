@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Autonomous multi-domain build + security loop for Claude Code (dev, web/api/mobile pentest, red team).",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --test test.mjs",
     "validate": "node scripts/validate.mjs",
-    "check": "npm run validate && npm test",
+    "check": "npm run validate && npm test && npm run doctor",
     "dashboard": "node scripts/dashboard.mjs",
     "init": "node scripts/state.mjs init",
-    "scan": "node scripts/secret-scan.mjs"
+    "scan": "node scripts/secret-scan.mjs",
+    "doctor": "node scripts/doctor.mjs"
   }
 }

@@ -128,6 +128,9 @@ scripts/dashboard-ctl.mjs Ref-counted auto start/stop of the dashboard, driven b
                           SessionStart/SessionEnd hooks (up on first session, down on the last).
 scripts/sync-skills.mjs   Installs skills/ into ~/.claude/skills (where Claude Code loads them).
                           `--check` reports drift; validate fails if the installed copy is stale.
+scripts/doctor.mjs        Checks what the repo DECLARES is actually WIRED on this machine:
+                          hooks registered, skills installed, no second engine copy, projects
+                          still exist. `--fix` installs what's missing (`npm run doctor`).
 scripts/validate.mjs      Self-check: skill frontmatter, installed-skill drift, pack refs, README
                           accuracy, portability, gitignore of engagement data, safety contracts.
 packs/packs.json + *.md   Per-domain methodology (app-dev, tool-dev, web/api/mobile/red-team/network).
