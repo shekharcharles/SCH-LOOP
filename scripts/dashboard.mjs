@@ -188,16 +188,42 @@ const PAGE = `<!doctype html>
   .catchip{font-size:9px;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;border:1px solid var(--line);color:var(--dim)}
   .brief-empty{border-left-color:var(--line);color:var(--dim);font-size:12px}
   .brief-empty code{font-size:11px;color:var(--fg);background:#171717;padding:1px 5px}
-  /* phase progress: category groups → named phases with counts + a bar */
-  .phase-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+  /* LIVE WORK TREE: category › phase › tasks. Everything visible at once. */
+  .phase-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px;align-items:start}
   .cat{border:1px solid var(--line);background:var(--panel)}
   .cat-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:8px 11px;
          background:#151515;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
-  .cat-n{color:var(--fg);font-weight:700}.cat-c{color:var(--dim)}
-  .pp .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .pp .pmeta{opacity:.65;padding-left:13px;font-size:10px}
-  .pbar{height:3px;background:#222;margin:5px 0 0 13px}
+  .cat-n{color:var(--fg);font-weight:700}.cat-c{color:var(--dim);font-size:10px}
+  .ph{border-top:1px solid var(--line)}
+  .ph:first-of-type{border-top:0}
+  .ph-h{display:flex;align-items:center;gap:8px;padding:6px 11px;background:#121212}
+  .ph-n{flex:1;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg);
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ph-c{font-size:10px;color:var(--dim)}
+  .pbar{width:52px;height:3px;background:#222;flex:none}
   .pbar i{display:block;height:100%;background:var(--green)}
+  /* one task line */
+  .tk{display:flex;align-items:center;gap:8px;padding:5px 11px 5px 14px;font-size:11.5px;border-top:1px solid #1a1a1a}
+  .tk-d{width:6px;height:6px;flex:none;background:var(--dim)}
+  .tk-id{color:var(--dim);font-size:10px;flex:none}
+  .tk-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);opacity:.9}
+  .tk-s{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);flex:none}
+  .tk.st-merged .tk-d{background:var(--green)} .tk.st-merged .tk-t{opacity:.5;text-decoration:line-through}
+  .tk.st-building .tk-d{background:var(--amber)} .tk.st-review .tk-d,.tk.st-changes .tk-d{background:#58a6ff}
+  .tk.st-blocked .tk-d,.tk.st-stuck .tk-d{background:var(--red)}
+  .tk.st-blocked .tk-s,.tk.st-stuck .tk-s{color:var(--red)}
+  .tk.st-superseded{display:none}
+  /* RUNNING NOW — pulsing green ring so you can see what the loop is building */
+  @keyframes ring{0%,100%{box-shadow:inset 0 0 0 1px rgba(74,246,38,.9),0 0 6px rgba(74,246,38,.25)}
+                  50%{box-shadow:inset 0 0 0 1px rgba(74,246,38,.35),0 0 14px rgba(74,246,38,.5)}}
+  .tk.running{animation:ring 1.5s ease-in-out infinite;background:rgba(74,246,38,.06)}
+  .tk.running .tk-t{opacity:1;color:#fff}
+  .tk.running .tk-s{color:var(--green);font-weight:700}
+  .tk.running .tk-d{background:var(--green)}
+  .ph.running .ph-n{color:var(--green)}
+  .cat.running{border-color:rgba(74,246,38,.55)}
+  .livenow{color:var(--green);text-transform:none;letter-spacing:0;font-size:11px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media(prefers-reduced-motion:reduce){.tk.running{animation:none;box-shadow:inset 0 0 0 1px var(--green)}}
   .pp.clickable{cursor:pointer}.pp.clickable:hover{background:#1b1b1b}
   .pp{font-size:11px;padding:7px 10px;background:var(--panel);text-transform:uppercase;letter-spacing:.03em;min-width:0}
   .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
@@ -393,27 +419,39 @@ function projApply(id,r){
     const key=t.phaseName||("Phase "+t.phase);
     (groups[cat]=groups[cat]||{})[key]=(groups[cat][key]||[]).concat(t);
   }
+  // LIVE WORK TREE: category › phase › every task, all visible. The task the
+  // loop is working on right now gets a pulsing green ring so you can see, at a
+  // glance, exactly what is building.
+  const RUNNING=new Set(["building","review","changes"]);
   let phHtml="";
   for(const cat of Object.keys(groups).sort()){
     const phases=groups[cat];
     const all=Object.values(phases).flat();
     const cd=all.filter(t=>t.status==="merged").length;
     const nPh=Object.keys(phases).length;
-    phHtml+='<div class="cat"><div class="cat-h"><span class="cat-n">'+esc(cat)+'</span>'+
-      '<span class="cat-c mono">'+nPh+' phase'+(nPh>1?'s':'')+' · '+cd+'/'+all.length+' tasks · '+Math.round(cd/all.length*100)+'%</span></div>';
+    const catRunning=all.some(t=>RUNNING.has(t.status));
+    phHtml+='<div class="cat'+(catRunning?' running':'')+'"><div class="cat-h"><span class="cat-n">'+esc(cat)+'</span>'+
+      '<span class="cat-c mono">'+nPh+' phase'+(nPh>1?'s':'')+' · '+cd+'/'+all.length+' done · '+Math.round(cd/all.length*100)+'%</span></div>';
     for(const name of Object.keys(phases)){
       const list=phases[name], d=list.filter(t=>t.status==="merged").length;
-      const active=list.find(t=>t.status==="building"||t.status==="review"||t.status==="changes");
-      const blocked=list.find(t=>t.status==="blocked"||t.status==="stuck");
-      const state=blocked?blocked.status:(active?active.status:(d===list.length?"merged":"queued"));
-      phHtml+='<div class="pp st-'+state+' clickable" data-phase="'+esc(name)+'" title="Phase: '+esc(name)+' — '+list.length+' task'+(list.length>1?'s':'')+', '+d+' complete. Click to list them below.">'+
-        '<span class="t"><span class="d"></span>'+esc(name)+'</span>'+
-        '<span class="t pmeta">'+d+' of '+list.length+' tasks · '+(STMAP[state]?STMAP[state][0]:state)+'</span>'+
+      const phRunning=list.some(t=>RUNNING.has(t.status));
+      phHtml+='<div class="ph'+(phRunning?' running':'')+'">'+
+        '<div class="ph-h"><span class="ph-n">'+esc(name)+'</span><span class="ph-c mono">'+d+'/'+list.length+'</span>'+
         '<div class="pbar"><i style="width:'+Math.round(d/list.length*100)+'%"></i></div></div>';
+      for(const t of list.sort((a,b)=>(a.priority??3)-(b.priority??3)||a.id-b.id)){
+        const run=RUNNING.has(t.status);
+        phHtml+='<div class="tk st-'+t.status+(run?' running':'')+'" data-task="'+t.id+'" title="'+esc(t.title)+(t.notes?' — '+esc(t.notes.slice(0,120)):'')+'">'+
+          '<span class="tk-d"></span><span class="tk-id mono">#'+t.id+'</span>'+
+          '<span class="tk-t">'+esc(t.title)+'</span>'+
+          '<span class="tk-s">'+(STMAP[t.status]?STMAP[t.status][0]:t.status)+'</span></div>';
+      }
+      phHtml+='</div>';
     }
     phHtml+='</div>';
   }
-  set("phase",'<h2>phase progress — grouped by category › phase (click a phase to list its tasks)<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
+  const nowRunning=ph.filter(t=>RUNNING.has(t.status));
+  set("phase",'<h2>work tree — every task, live'+(nowRunning.length?'<span class="livenow">● building: '+esc(nowRunning[0].title)+'</span>':'')+
+    '<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
     (ph.length?'<div class="phase-strip">'+phHtml+'</div>':'<div class="empty">no phases planned yet — run /sch-plan</div>'));
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
