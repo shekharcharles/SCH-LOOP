@@ -33,6 +33,13 @@ nothing from memory.
   methodology), only the files the task touches. Do not re-read files already in
   context. Do not dump long logs — quote the one decisive line.
 - **One task per pass.** Do not wander into adjacent work; the queue holds it.
+- **Stateless by design — a fresh context loses nothing.** Everything durable is
+  on disk: `state.json` (tasks/findings/events), `CHANGELOG.md` + `HANDOFF.md`
+  (what's done / in flight / next), `git log`, `knowledge/<pack>.md`,
+  `logs/`. This pass re-reads what it needs and needs no memory of prior passes.
+  So the session context should be **cleared, not compacted** — run `/clear`
+  before a run rather than letting context accumulate. Best of all, run each pass
+  with clean context (a cloud routine via `/schedule` does this automatically).
 
 (If the loop session has the `caveman` and `ponytail` plugins active, keep them at
 `ultra`. This section enforces the same behavior even without them.)

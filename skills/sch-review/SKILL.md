@@ -61,6 +61,30 @@ Return `changes` — the task does not pass review. Only waive it when the skill
 genuinely irrelevant to this task (e.g. a design skill on a pure backend task),
 and say so in the verdict.
 
+## 3c. Verify from ALL aspects — evidence, not claims (two-stage)
+
+Do not approve on "looks right". Check every aspect, and demand evidence.
+
+**Stage 1 — spec compliance:** does it meet every `AC-N`, respect every `NG-N`,
+and nothing beyond scope?
+
+**Stage 2 — code quality (all aspects):**
+- **Correctness:** logic, edge cases, empty/error/loading states, off-by-one,
+  null/undefined, race conditions.
+- **Real checks — run them, paste the result** (evidence over claims): lint,
+  typecheck, and the relevant tests for the changed code. A green claim without
+  output is not accepted. `[DEFECT]` if any fails.
+- **Tests exist:** logic/data/permission/UI-behaviour changes must add or update
+  tests. Missing tests on real logic = must-fix.
+- **Security:** injection, authz, secrets, unsafe HTML/eval, dependency risk.
+- **Accessibility (UI):** focus states, contrast, labels, keyboard path.
+- **Performance:** obvious N+1, layout thrash, unbounded work, large payloads.
+- **Maintainability:** duplication, dead code, a future agent can modify it.
+- **No regression:** behaviour outside the task's scope still works.
+
+Any failure → `changes` with a tagged must-fix (`[DEFECT]`/`[SECURITY]`/`[AC-N]`/
+`[TEST]`/`[A11Y]`). Approve only when spec + quality + real checks all pass.
+
 ## 4. Return one verdict
 
 Return to the caller (do not merge, do not push, do not label anything):
