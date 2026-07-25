@@ -42,3 +42,4 @@ node_modules/
 *.png
 .DS_Store
 Thumbs.db
+.sessions.json
