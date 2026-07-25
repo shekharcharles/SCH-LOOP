@@ -1,0 +1,27 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # No dependencies by design — nothing to install.
+      - name: Validate (skills, packs, docs, portability, safety contracts)
+        run: npm run validate
+      - name: Test (scope gate, authorizations, queue, chains, secret-scan)
+        run: npm test
+      - name: Assert no engagement data is tracked
+        run: |
+          if git ls-files | grep -E '^(projects/|projects\.json|authorizations/|logs/)|CLAUDE\.md$'; then
+            echo "::error::engagement data or CLAUDE.md is tracked — must stay local"; exit 1
+          fi
+          echo "clean: tooling only"

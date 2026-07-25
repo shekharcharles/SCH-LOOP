@@ -174,94 +174,55 @@ Re-read it; if it changed under you, drop and re-pick.
 
 ## 5. Execute — in a FRESH-CONTEXT subagent, one task only (v3, kills rot + drift)
 
-**Do NOT build inline in the loop session.** The accumulating loop context is what
-made a build task wander into product-strategy essays and burn tokens. Instead,
-**spawn a fresh `Agent`** (model `sonnet`) with a tight brief for this ONE task,
-clean context. The loop session stays a lean orchestrator.
+**Never build inline** — an accumulating loop context is what makes a build task
+wander off-topic and burn tokens. **Spawn a fresh `Agent`** (model `sonnet`), clean
+context, one task. The loop session stays a lean orchestrator.
 
-The subagent brief contains ONLY: the task id, its `AC-N`/`NG-N`, the project
-`path` + `CLAUDE.md`/`HANDOFF.md`, and the pack's relevant phase. Tell it:
+Brief it with ONLY: the task id, its `AC-N`/`NG-N`, the project `path` +
+`CLAUDE.md`/`HANDOFF.md`, and the pack's relevant phase. Its rules:
 
-1. **Stay strictly on this task.** Implement only its `AC-N`. **Do not redesign
-   the product, do not amend the PRD, do not touch adjacent features.** If you
-   discover a product/scope decision (e.g. "this contradicts NG-4"), **do not act
-   on it** — return it as a one-line blocked question for the operator. Wandering
-   off-task is the failure we are eliminating.
-2. **Ground in the REAL code before editing** (this fixes the regressions):
-   - Before renaming/removing any symbol, key, class, or string, **grep every
-     usage** and update all of them, or don't rename. (A `translateString("SAVE")`
-     key lives in 21 locale files — never change it blind.)
-   - Before writing CSS/DOM, **read the actual markup** the selectors target — do
-     not style against assumed structure.
-   - Verify the element/class you rely on actually exists and co-occurs.
-3. **TDD where it applies:** write/adjust the test first, watch it fail, then make
-   it pass (superpowers RED-GREEN). Dispatch to the fitting installed skill
-   (design skill for UI, backend skill for API — best-fit, not all).
-4. **If a fix makes things worse, STOP guessing** — do 4-phase root-cause
-   (systematic-debugging), don't pile on more edits.
-5. **Coding discipline (Karpathy's 4 — non-negotiable):**
-   - **Think before coding:** state your assumptions explicitly; if the task is
-     ambiguous or you're confused, ask ONE question — do not silently guess.
-   - **Simplicity first:** implement only what the AC asks. No speculative
-     abstractions, no "future-proofing", no unrequested error handling. If it can
-     be 50 lines instead of 200, write 50. Ruthlessly reduce.
-   - **Surgical:** change only code directly required by this task. Match the
-     existing style — no drive-by "improvements". Remove only dead code your own
-     change created. Preserve existing patterns.
-   - **Goal-driven:** treat the AC as the pass/fail success criteria; write the
-     test first, then satisfy it. Nothing irrelevant gets written or left behind.
+1. **On-task only.** Implement just its `AC-N`; `NG-N` binding. Do not redesign the
+   product, amend the PRD, or touch adjacent features. A discovered product/scope
+   decision (e.g. "contradicts NG-4") is **returned as a one-line blocked question**,
+   never acted on.
+2. **Ground in the REAL code before editing.** Before renaming/removing any symbol,
+   key, class or string, **grep every usage** and update all — or don't rename (an
+   i18n key like `translateString("SAVE")` lives in ~21 locale files). Before writing
+   CSS/DOM, **read the actual markup**; confirm the selector exists and co-occurs.
+3. **TDD:** test first, watch it fail, make it pass.
+4. **A fix that worsens things → stop guessing;** do 4-phase root-cause debugging.
+5. **Karpathy's 4:** *think before coding* (state assumptions; ask one question if
+   confused, never silently guess) · *simplicity first* (only what the AC asks; no
+   speculative abstractions or unrequested error handling; 50 lines over 200) ·
+   *surgical* (only code this task requires; match style; remove only dead code you
+   created) · *goal-driven* (AC = pass/fail).
 
-The subagent returns: what changed, files touched, test/lint/type results, and
-any blocked question. The orchestrator records it and moves to validate/review.
+Returns: what changed, files touched, test/lint/type results, any blocked question.
 
-**Offensive packs (pentest / red-team / mobile / web / api / network) — same v3
-model:** each phase runs in a fresh-context subagent too (kills the same rot +
-drift), with the project's **`SCOPE.md` as its constitution** (in-scope targets,
-RoE, off-limits, box type, creds). The subagent tests ONLY the in-scope target for
-this phase, stays on the phase's objectives, and a discovered lead/finding → the
-queue (`--source build`) or the report, never a scope expansion. **Data safety:**
-client findings, credentials, PII, and evidence live in `projects/<id>/reports/`
-and are **NEVER git-committed or pushed** to a public/tooling repo; if any pentest
-tooling/code is committed, the secret-scan gate still applies and client detail is
-stripped first.
+**Dispatch skills for real.** Reading a skill name in `packs/*.md` is NOT dispatch —
+call it with the **Skill tool** (the transcript is the audit trail; `skills-used.mjs`
+verifies it), then record `task-set --skills "a|b"`. Claimed-but-not-invoked is a
+reporting failure.
 
-If an objective is ambiguous, conflicts with an `NG`/RoE, or needs a human
-decision, go to step 7-blocked — never guess.
+**Design skills — best-fit, per task.** The operator pins design skills to the
+project; they apply **only to UI/design tasks**, and you pick the 1-2 that fit — not
+all: new screen → `taste-skill`; polish/audit → `impeccable`; upgrade → `redesign-skill`;
+tokens → `design-dna`; animation → `motion-design`/`gsap-*`. **Backend/DRM/infra/recon/
+test tasks need none.** The engine hard-gates merge: a UI task can't complete unless
+≥1 pinned design skill appears in the transcript. If a task is wrongly flagged as
+design, complete with `--force true --note "not design work"` (logged).
 
-**Actually invoke them.** Reading a skill's name in `packs/*.md` is NOT dispatch.
-For each skill the task needs, call it with the **Skill tool** so the invocation
-is recorded in the session transcript (that transcript is the audit trail —
-`scripts/skills-used.mjs` verifies it). Then record what you used:
-`task-set --skills "<skill1>|<skill2>"`. Claimed skills that never appear in the
-transcript are a reporting failure — the two must match.
+**Offensive packs — same model.** Each phase runs in a fresh-context subagent with
+`SCOPE.md` as its constitution (in-scope targets, RoE, off-limits, box type, creds).
+Test ONLY this phase's in-scope target, stay on its objectives; a discovered lead →
+the queue (`--source build`) or the report, **never a scope expansion**. Run the
+methodology from `packs/<method>.md` within the RoE; `sequential`/`sequential-device`
+packs run one active task at a time (arm → test → disarm, never leave a device armed).
+**Data safety:** client findings, creds, PII and evidence stay in
+`projects/<id>/reports/` — **never git-committed or pushed**.
 
-**DESIGN SKILLS — smart, per-task (not all, not every task).** The operator pins
-a set of good design/UI skills to the project (dashboard picker / `skills-set`).
-These apply **only to UI/design tasks**, and you use the **best-fit one(s) for
-this specific task**, not the whole set:
-
-- New screen/component → `taste-skill`; polish/audit an existing screen →
-  `impeccable`; upgrade/redesign → `redesign-skill`; tokens/system → `design-dna`;
-  animation → `motion-design` / `gsap-*`. Pick 1–2 that fit — do not fire all six.
-- **Backend / DRM / infra / recon / test tasks are NOT design work — no design
-  skill is required or expected.** Just build.
-
-For a UI/design task, invoke the fitting design skill with the **Skill tool**
-before writing the UI, then complete. The engine hard-gates the merge: a UI task
-won't complete unless **at least one** of the operator's design skills shows up in
-the transcript (unfakeable). Non-design tasks are never gated. If the engine
-wrongly flags a task as design when it isn't, complete with `--force true --note
-"not design work"` (logged).
-
-- **Dev/tool:** implement only this task's `AC-N`; `NG-N` binding; repo style.
-- **Offensive:** run this phase's methodology from `packs/<method>.md`, against
-  the task's in-scope `target` only, within the RoE (rate limits, window,
-  no-destruction) recorded in the scope. Orchestrate with background sub-agents;
-  for `sequential`/`sequential-device` packs run one active task at a time and
-  never leave a device armed idle (arm → test → disarm).
-
-If an objective is ambiguous, conflicts with an `NG`/RoE, or needs a human
-decision, go to step 7-blocked. Never guess.
+Ambiguous objective, conflict with an `NG`/RoE, or a decision only a human can make
+→ step 7-blocked. Never guess.
 
 ## 6. Validate → review → complete
 

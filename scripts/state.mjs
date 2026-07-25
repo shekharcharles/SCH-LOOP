@@ -10,7 +10,7 @@
 // Usage:  node scripts/state.mjs <command> --project <id> [--flag value]
 //         node scripts/state.mjs help
 
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, copyFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -71,15 +71,58 @@ const SCOPE_EMPTY = { authorized: false, targets: [], outOfScope: [], roe: "", r
 const now = () => new Date().toISOString();
 const statePath = (id) => join(PROJECTS_DIR, id, "state.json");
 
+// Corrupt-state recovery: a truncated/invalid file must never hard-crash every
+// command. Fall back to the .bak written on the previous successful write; if
+// that is also unusable, quarantine the bad file and start from the empty shape
+// rather than throwing.
 function readJson(path, fallback) {
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : structuredClone(fallback);
+  if (!existsSync(path)) return structuredClone(fallback);
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    const bak = path + ".bak";
+    if (existsSync(bak)) {
+      try {
+        const recovered = JSON.parse(readFileSync(bak, "utf8"));
+        console.error(`warn: ${path} was corrupt — recovered from .bak`);
+        return recovered;
+      } catch { /* fall through */ }
+    }
+    try { renameSync(path, path + ".corrupt-" + Date.now()); } catch {}
+    console.error(`warn: ${path} was corrupt and unrecoverable — quarantined, starting fresh`);
+    return structuredClone(fallback);
+  }
 }
-// Atomic: temp file then rename, so a crash mid-write never corrupts state.
+// Atomic write + keep one backup: temp file → rename, previous good copy kept as
+// .bak so a crash mid-write can always be recovered from.
 function writeJson(path, obj) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = path + ".tmp";
   writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  if (existsSync(path)) { try { copyFileSync(path, path + ".bak"); } catch {} }
   renameSync(tmp, path);
+}
+
+// --- write lock (fixes read-modify-write races) ---------------------------
+// Concurrent writers (parallel waves + the dashboard) could previously clobber
+// each other last-write-wins. mkdir is atomic on every OS, so we use a lock dir:
+// acquire → read → mutate → write → release. Stale locks (crashed holder) expire.
+const LOCK_TTL = 10000, LOCK_WAIT = 5000;
+function withFileLock(path, fn) {
+  const lock = path + ".lock";
+  const start = Date.now();
+  for (;;) {
+    try { mkdirSync(lock); break; }                        // acquired
+    catch {
+      let age = Infinity;
+      try { age = Date.now() - statSync(lock).mtimeMs; } catch { break; }
+      if (age > LOCK_TTL) { try { rmSync(lock, { recursive: true, force: true }); } catch {} continue; }
+      if (Date.now() - start > LOCK_WAIT) break;           // give up waiting; proceed (availability > perfection)
+      // busy-wait briefly (sync API by design — these are millisecond-scale ops)
+      const until = Date.now() + 25; while (Date.now() < until);
+    }
+  }
+  try { return fn(); } finally { try { rmSync(lock, { recursive: true, force: true }); } catch {} }
 }
 
 export const loadRegistry = () => readJson(REGISTRY_PATH, REGISTRY_EMPTY);
@@ -155,8 +198,13 @@ export const CHAIN_MAX = 3;
 
 // Is this task UI/design work? (drives whether the design-skill gate applies)
 const DESIGN_RE = /\b(ui|ux|design|redesign|restyle|frontend|front-end|css|style|styling|theme|layout|component|primitive|mockup|page|screen|dashboard|responsive|accessib|animation|motion|visual)\b/i;
+// Words that mean the task is really backend/infra even if a design word appears
+// ("DRM settings admin screen" is config work; "nginx: gate /media" is infra).
+const NOT_DESIGN_RE = /\b(nginx|migration|celery|cron|smtp|webhook|api endpoint|database|schema|docker|deploy|packaging|encoding|transcode|token|rate.?limit|scan|recon|exploit|payload)\b/i;
 export function isDesignTask(t) {
-  return DESIGN_RE.test((t.title || "") + " " + (t.notes || "") + " " + (t.ac || []).join(" "));
+  const text = (t.title || "") + " " + (t.notes || "") + " " + (t.ac || []).join(" ");
+  if (NOT_DESIGN_RE.test(text) && !/\b(ui-\d|redesign|mockup|responsive|accessib)\b/i.test(text)) return false;
+  return DESIGN_RE.test(text);
 }
 
 export function nextReady(state) {
@@ -562,9 +610,16 @@ const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-f
   "auth-add", "auth-add-domain", "auth-remove", "cr-new", "task-add", "task-set",
   "finding-add", "finding-set", "inbox-add", "inbox-mark"]);
 
+// Commands that mutate state must hold the write lock for the whole
+// read-modify-write, or concurrent writers (parallel waves + dashboard) clobber
+// each other. Pure reads run without a lock.
+const MUTATING = new Set([...AUDITED, "init", "skills-set", "task-answer", "retest-new",
+  "lock-acquire", "lock-release", "event-add", "project-remove"]);
+
 if (process.argv[1] && process.argv[1].endsWith("state.mjs")) {
   const [cmd, ...rest] = process.argv.slice(2);
   const parsed = parseFlags(rest);
   if (AUDITED.has(cmd)) auditLog({ kind: "command", cmd, flags: parsed.flags, pos: parsed.pos });
-  (commands[cmd] ?? commands.help)(parsed);
+  const run = () => (commands[cmd] ?? commands.help)(parsed);
+  MUTATING.has(cmd) ? withFileLock(REGISTRY_PATH, run) : run();
 }
