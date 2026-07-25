@@ -176,9 +176,25 @@ const PAGE = `<!doctype html>
   .empty{color:var(--dim);padding:12px 14px;border:1px dashed var(--line);text-transform:uppercase;font-size:11px;letter-spacing:.1em}
   .ev{color:var(--dim);font-size:11.5px;padding:4px 0;border-bottom:1px solid var(--line)}.ev b{color:var(--fg)}
   /* phase strip */
-  /* uniform grid — equal cells, no ragged flex-wrap */
-  .phase-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+  /* project brief + tech stack */
+  .brief{background:var(--panel);border:1px solid var(--line);border-left:2px solid var(--green);padding:11px 14px;margin-bottom:10px}
+  .bdesc{margin:0 0 8px;font-size:13px;line-height:1.65;color:var(--fg);opacity:.92}
+  .stack{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+  .slabel{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-right:4px}
+  .schip{font-size:11px;padding:2px 8px;border:1px solid var(--line);color:var(--fg);background:#171717}
+  .catchip{font-size:9px;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;border:1px solid var(--line);color:var(--dim)}
+  .brief-empty{border-left-color:var(--line);color:var(--dim);font-size:12px}
+  .brief-empty code{font-size:11px;color:var(--fg);background:#171717;padding:1px 5px}
+  /* phase progress: category groups → named phases with counts + a bar */
+  .phase-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+  .cat{border:1px solid var(--line);background:var(--panel)}
+  .cat-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:8px 11px;
+         background:#151515;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+  .cat-n{color:var(--fg);font-weight:700}.cat-c{color:var(--dim)}
   .pp .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pp .pmeta{opacity:.65;padding-left:13px;font-size:10px}
+  .pbar{height:3px;background:#222;margin:5px 0 0 13px}
+  .pbar i{display:block;height:100%;background:var(--green)}
   .pp{font-size:11px;padding:7px 10px;background:var(--panel);text-transform:uppercase;letter-spacing:.03em;min-width:0}
   .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
   .pp.st-merged .d,.pp.st-completed .d{background:var(--green)}.pp.st-building .d{background:var(--amber)}.pp.st-review .d,.pp.st-changes .d{background:var(--blue)}.pp.st-queued .d{background:var(--dim)}.pp.st-blocked .d,.pp.st-stuck .d{background:var(--red)}
@@ -308,6 +324,7 @@ function projSkeleton(id){
   document.getElementById("app").innerHTML=\`
     <div class="bar"><a class="back" href="/">‹ ALL PROJECTS</a><span><span class="dot"></span><span id="livemark" class="live">live</span></span><span class="mono" id="clk"></span></div>
     <h1 id="pname">…</h1><div class="sub" id="pmeta"></div>
+    <section id="brief"></section>
     <section id="attn"></section>
     <section id="scope"></section>
     <section id="chips"></section>
@@ -330,6 +347,12 @@ function projApply(id,r){
   document.getElementById("clk").textContent=clock();
   document.getElementById("pname").textContent=p.name;
   document.getElementById("pmeta").innerHTML=\`\${esc(p.domain)} · \${esc(p.path)||"no path"} \${OFF(p.domain)?(sc.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>'):''}\${sc.halt?' <span class="badge b-halt">halt</span>':''}\`;
+  // brief + tech stack — what this project actually is, at a glance
+  const stack=(p.stack||[]);
+  set("brief",(p.description||stack.length)?'<div class="brief">'+
+    (p.description?'<p class="bdesc">'+esc(p.description)+'</p>':'')+
+    (stack.length?'<div class="stack"><span class="slabel">stack</span>'+stack.map(x=>'<span class="schip">'+esc(x)+'</span>').join("")+'</div>':'')+
+    '</div>':'<div class="brief brief-empty">No project brief yet — add one: <code>state.mjs project-meta --project '+esc(id)+' --description "…" --stack "Django|React|Postgres"</code></div>');
   // attention
   const attn=s.tasks.filter(t=>t.status==="blocked"||t.status==="stuck");
   var attnHtml="";
@@ -356,7 +379,36 @@ function projApply(id,r){
   set("chips",'<div class="chips">'+[["active",by("building").length,"active"],["in progress",by("review").length+by("changes").length,"inprogress"],["queued",by("queued").length,""],["completed",done,"completed"],["awaiting",by("blocked").length,"awaiting"],["failed",by("stuck").length,"failed"],["findings",finds.length,""]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
   // phase strip
   const ph=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
-  set("phase",'<h2>phase progress<span class="n mono">'+pct+'% done</span></h2><div class="phase-strip">'+(ph.length?ph.map(t=>\`<div class="pp st-\${t.status}" title="\${esc(t.title)} · \${t.status}"><span class="t"><span class="d"></span>P\${t.phase} \${esc(t.title)}</span><span class="t" style="opacity:.6;padding-left:13px">\${t.status}</span></div>\`).join(""):'<div class="empty">no phases</div>')+'</div>');
+  // Phase progress grouped: category (frontend/backend/…) → named phase, each
+  // with its own task counts and bar. Falls back to "P<n>" when the planner
+  // hasn't set a category/phaseName yet.
+  const groups={};
+  for(const t of ph){
+    const cat=(t.category||"general").toLowerCase();
+    const key=t.phaseName||("Phase "+t.phase);
+    (groups[cat]=groups[cat]||{})[key]=(groups[cat][key]||[]).concat(t);
+  }
+  let phHtml="";
+  for(const cat of Object.keys(groups).sort()){
+    const phases=groups[cat];
+    const all=Object.values(phases).flat();
+    const cd=all.filter(t=>t.status==="merged").length;
+    phHtml+='<div class="cat"><div class="cat-h"><span class="cat-n">'+esc(cat)+'</span>'+
+      '<span class="cat-c mono">'+cd+'/'+all.length+' tasks · '+Math.round(cd/all.length*100)+'%</span></div>';
+    for(const name of Object.keys(phases)){
+      const list=phases[name], d=list.filter(t=>t.status==="merged").length;
+      const active=list.find(t=>t.status==="building"||t.status==="review"||t.status==="changes");
+      const blocked=list.find(t=>t.status==="blocked"||t.status==="stuck");
+      const state=blocked?blocked.status:(active?active.status:(d===list.length?"merged":"queued"));
+      phHtml+='<div class="pp st-'+state+'" title="'+esc(name)+' — '+d+' of '+list.length+' complete">'+
+        '<span class="t"><span class="d"></span>'+esc(name)+'</span>'+
+        '<span class="t pmeta">'+d+'/'+list.length+' · '+(STMAP[state]?STMAP[state][0]:state)+'</span>'+
+        '<div class="pbar"><i style="width:'+Math.round(d/list.length*100)+'%"></i></div></div>';
+    }
+    phHtml+='</div>';
+  }
+  set("phase",'<h2>phase progress<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
+    (ph.length?'<div class="phase-strip">'+phHtml+'</div>':'<div class="empty">no phases planned yet — run /sch-plan</div>'));
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
   const rowActs=(t)=>t.status==="queued"?actForm(id,t.id,"bump","▲")+actForm(id,t.id,"hold","⏸"):(t.status==="blocked"||t.status==="stuck")?actForm(id,t.id,"requeue","↻","go"):"";
@@ -367,7 +419,7 @@ function projApply(id,r){
   if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" P"+t.phase).toLowerCase().includes(q));}
   const trows=ts.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
     <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
-    <td data-l="Phase">P\${t.phase}</td><td data-l="Pri">\${t.priority??3}</td>
+    <td data-l="Phase">\${t.category?'<span class="catchip">'+esc(t.category)+'</span> ':''}\${esc(t.phaseName||("P"+t.phase))}</td><td data-l="Pri">\${t.priority??3}</td>
     <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
     <td data-l="Target">\${esc(t.target||"—")}</td>
     <td data-l="Activity">\${esc(t.notes||t.branch||"—")}</td>

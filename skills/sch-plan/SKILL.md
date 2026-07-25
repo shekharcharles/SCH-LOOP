@@ -36,11 +36,22 @@ focused change, not a whole page). "UI-4 watch-page redesign" is TOO BIG; split
 it (layout shell → player block → related rail → comments → responsive pass).
 A too-big task is what let the loop wander and regress.
 
-Each task carries:
+**Group the work: category → named phase → tasks.** Every task carries:
+- `--category` — one of `frontend`, `backend`, `ui-ux`, `infra`, `security`,
+  `testing`, `docs`. This is the top-level grouping the dashboard shows.
+- `--phase-name "<human name>"` — the phase it belongs to, named in plain English
+  (e.g. "Auth & accounts", "Media pipeline", "Discovery UI"), plus `--phase <n>`
+  for ordering. Several tasks share one phase name; the dashboard rolls them up
+  with a count and progress bar (e.g. `backend › Auth & accounts — 3/7`).
 - its own `AC-N` (observable) + relevant PRD `NG-N` (binding);
 - **explicit target files** (name the files it should touch);
 - a **verify step** (the exact check that proves it works — a test, a command,
   a specific DOM/behaviour to confirm).
+
+```bash
+node scripts/state.mjs task-add --project <id> --phase 2 --phase-name "Auth & accounts" \
+  --category backend --title "Email + password login" --ac "..." --ng "..."
+```
 
 Order so each task builds only on merged code of its `deps`.
 

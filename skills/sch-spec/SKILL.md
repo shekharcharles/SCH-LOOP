@@ -148,8 +148,14 @@ loop compound instead of repeating mistakes.
 Register + plan:
 
 ```bash
-node scripts/state.mjs project-add --id <slug> --name "<Name>" --domain app-dev --path "<abs path>"
+node scripts/state.mjs project-add --id <slug> --name "<Name>" --domain app-dev --path "<abs path>" \
+  --description "<one-paragraph plain-English: what this product is, who it's for>" \
+  --stack "<Django|React SPA|PostgreSQL|Docker>"
 ```
+
+`--description` and `--stack` are **required** — the dashboard shows them at the
+top of the project so you can see at a glance what it is and what it's built on.
+(Update later with `project-meta --project <id> --description … --stack …`.)
 ```
 /sch-plan --project <slug>
 ```
