@@ -90,6 +90,15 @@ const server = createServer(async (req, res) => {
       if (getProject(project) && text) { const s = loadState(project); const t = s.tasks.find((x) => x.id === id); if (t) { t.answers = [...(t.answers || []), { text, ts: new Date().toISOString() }]; t.status = "queued"; t.priority = 1; t.notes = "ANSWERED: " + text; t.updatedAt = new Date().toISOString(); event(s, `task #${id} answered -> requeued p1`); saveState(project, s); } }
       return back(project);
     }
+    if (url.pathname === "/inbox-del") {
+      const project = p.get("project"), id = Number(p.get("id"));
+      if (getProject(project)) {
+        const s = loadState(project);
+        const item = s.inbox.find((i) => i.id === id);
+        if (item) { s.inbox = s.inbox.filter((i) => i.id !== id); event(s, `inbox item #${id} deleted: ${item.text.slice(0, 60)}`); saveState(project, s); }
+      }
+      return back(project);
+    }
     if (url.pathname === "/task") {
       const project = p.get("project"), id = Number(p.get("id")), action = p.get("action");
       if (getProject(project)) { const s = loadState(project); const t = s.tasks.find((x) => x.id === id); if (t) { if (action === "requeue") t.status = "queued"; else if (action === "bump") { t.phase = 0; t.priority = 1; } else if (action === "hold") t.status = "blocked"; else if (action === "close") t.status = "superseded"; t.updatedAt = new Date().toISOString(); event(s, `dashboard: task #${id} ${action}`); saveState(project, s); } }
@@ -222,6 +231,10 @@ const PAGE = `<!doctype html>
   .tk.running .tk-d{background:var(--green)}
   .ph.running .ph-n{color:var(--green)}
   .cat.running{border-color:rgba(74,246,38,.55)}
+  .ibx{border:1px solid var(--line);border-left:2px solid var(--amber);background:var(--panel);margin-bottom:6px}
+  .ibx-h{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);background:#141414}
+  .ibx-t{font-size:10px;color:var(--dim)}
+  .ibx-b{padding:9px 11px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;color:var(--fg);opacity:.92;max-height:180px;overflow-y:auto}
   .livenow{color:var(--green);text-transform:none;letter-spacing:0;font-size:11px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media(prefers-reduced-motion:reduce){.tk.running{animation:none;box-shadow:inset 0 0 0 1px var(--green)}}
   .pp.clickable{cursor:pointer}.pp.clickable:hover{background:#1b1b1b}
@@ -486,7 +499,14 @@ function projApply(id,r){
   set("findsec",!OFF(p.domain)?"":'<h2>findings<span class="n mono">'+vf.length+'V / '+cn+'C</span></h2>'+(vf.length?vf.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="pctn">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>'));
   // inbox + activity
   const nb=s.inbox.filter(i=>i.status==="new");
-  set("inboxsec",nb.length?'<h2>inbox<span class="n mono">'+nb.length+'</span></h2>'+nb.map(i=>\`<div class="frow">\${esc(i.text)}</div>\`).join(""):"");
+  // Inbox: what you submitted, waiting for the next loop pass to plan it.
+  // Full text (so you can re-read what you sent) + delete if you change your mind.
+  set("inboxsec",nb.length?'<h2>inbox — waiting to be planned by the next loop pass<span class="n mono">'+nb.length+'</span></h2>'+
+    nb.map(i=>'<div class="ibx"><div class="ibx-h"><span class="ibx-t mono">submitted '+esc(i.createdAt.slice(0,16).replace("T"," "))+'</span>'+
+      '<form class="inl confirm-del" method="POST" action="/inbox-del">'+
+      '<input type="hidden" name="project" value="'+esc(id)+'"><input type="hidden" name="id" value="'+i.id+'">'+
+      '<button class="mini danger" title="Delete this submission before the loop plans it">delete</button></form></div>'+
+      '<div class="ibx-b">'+esc(i.text)+'</div></div>').join(""):"");
   set("actsec",'<h2>activity<span class="n mono">'+s.events.length+'</span></h2>'+(s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'));
   // keep skill picker selection in sync (only when not focused)
 }
@@ -502,6 +522,11 @@ function clearPhase(){ taskFilter.phase=""; reapplyTasks(); }
 document.addEventListener("click",function(e){
   const c=e.target.closest&&e.target.closest(".pp[data-phase]");
   if(c)filterPhase(c.dataset.phase);
+});
+// delegated: confirm before deleting an unplanned inbox submission
+document.addEventListener("submit",function(e){
+  const f=e.target.closest&&e.target.closest("form.confirm-del");
+  if(f&&!confirm("Delete this submission? It has not been planned into tasks yet."))e.preventDefault();
 });
 // copy the brief + stack as plain text, ready to paste anywhere
 function copyBrief(btn){
