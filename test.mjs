@@ -202,3 +202,18 @@ test("suggestInterval: matches the reason the loop would be stopped", () => {
   assert.equal(suggestInterval(st([t("blocked"), ...Array.from({ length: 6 }, () => t("queued"))])).minutes, 30,
     "blocked but plenty ready → keep batching");
 });
+
+// --- a question must be born blocked ----------------------------------------
+// Three real operator questions once sat in the queue as "queued" because the
+// follow-up task-set that blocks them was never issued. Queued means invisible in
+// the dashboard's NEEDS YOU banner, so they could not be answered from a phone at
+// all — the exact failure the whole design exists to prevent.
+test("addTask: a DECISION task cannot be created unblocked", () => {
+  const s = { tasks: [], inbox: [], events: [], findings: [], seq: { task: 0, inbox: 0, event: 0, finding: 0 } };
+  assert.equal(addTask(s, { title: "DECISION: which auth method?" }).status, "blocked");
+  assert.equal(addTask(s, { title: "decision: lower case still counts" }).status, "blocked");
+  assert.equal(addTask(s, { title: "Build the login form" }).status, "queued");
+  // an explicit status is still honoured for everything else
+  assert.equal(addTask(s, { title: "Retry me", status: "stuck" }).status, "stuck");
+  assert.equal(addTask(s, { title: "Bad status falls back", status: "nonsense" }).status, "queued");
+});
