@@ -30,6 +30,14 @@ fills each `<…>` from the interview + a read of the real codebase; keep it SHO
   question, not a code change.
 - <project-specific binding constraints, e.g. security/DRM/compliance posture>
 
+## Coding discipline (Karpathy's 4 — every change)
+- **Think before coding:** state assumptions; ask if confused, don't guess.
+- **Simplicity first:** only what's asked; no speculative abstractions; 50 lines
+  over 200; ruthlessly reduce. Nothing irrelevant.
+- **Surgical:** touch only code this task requires; match existing style; remove
+  only dead code you created; preserve patterns.
+- **Goal-driven:** AC = pass/fail; test first, then satisfy it.
+
 ## Quality bar
 - Tests required for logic/data/permission/UI-behaviour changes (<test runners>).
   Test-first where practical.
