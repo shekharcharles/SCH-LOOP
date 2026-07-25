@@ -78,6 +78,10 @@ gone. The answer is appended, never overwrites the question.
 - **Never read a large file whole.** Bundles / minified JS / lockfiles / big
   data (>~50 KB) — use `grep`/`head`/targeted line-ranges, never a full Read.
   (A single 2.9 MB bundle read can blow an entire budget.)
+- **Read the function, not the neighbourhood.** Observed in real passes: 260-line
+  and 335-line ranges pulled in to look at one function. Grep for the symbol to
+  get its line number, then read ~40 lines around it. Widen only if that genuinely
+  is not enough. Ten targeted reads cost less than two speculative ones.
 - **Model routing.** Run the loop and its review sub-agents on **Sonnet** for
   routine build/validate/review; reserve Opus for genuinely hard reasoning. On a
   Max plan, Opus consumes the limit several times faster for the same work.
@@ -344,9 +348,43 @@ Budget this at ~2-4 searches. You are locating, not solving.
 task was underspecified or too big — it must return what it learned (as a file
 map) rather than grinding on. The next pass then starts informed.
 
+### 5b. Hand over the ENVIRONMENT FACTS — establish them once, not once per task
+
+A fresh builder also rediscovers the environment every single time. Observed
+across three consecutive passes on the same project, each builder independently
+worked out that `pytest` is missing from the web image — roughly eight wasted
+tool calls each, three times over:
+
+```
+pytest … → not found → python -m pytest → which pytest → pip show pytest
+→ manage.py test → find requirements → cat requirements-dev.txt → pip install …
+```
+
+**Establish these once at the start of the pass, then paste them into every
+brief:**
+
+- **The exact command that runs tests**, verified working (e.g.
+  `docker compose exec -T web python -m pytest tests/api/x.py -q`), plus any
+  one-off setup already done this pass (`pytest is already installed in the
+  running container`).
+- **The exact build/deploy commands** for frontend work, from `HANDOFF.md` —
+  including the copy step and any cache-buster bump, since a source edit without
+  them is a silent no-op.
+- **Known-broken things not to chase**: pre-existing failing tests and why
+  (e.g. `tests/api/test_new_media.py::test_file_upload` fails on missing ffmpeg,
+  unrelated to any change).
+
+When the builder reports a new environment fact, **write it into the project's
+`CLAUDE.md`** — that file is auto-read by every future subagent, which is the
+only way the discovery stops repeating.
+
+**Shell paths:** the Bash tool is POSIX. `D:\pmcms\x` fails; use `D:/pmcms/x` or
+`/d/pmcms/x`. Wrong-form paths cost a call each and are a recurring tax on
+Windows.
+
 Brief it with: the task id, its `AC-N`/`NG-N`, **the target files you just
-located and what each one is for**, the project `path` + `CLAUDE.md`/`HANDOFF.md`,
-and the pack's relevant phase. Its rules:
+located and what each one is for**, **the environment facts above**, the project
+`path` + `CLAUDE.md`/`HANDOFF.md`, and the pack's relevant phase. Its rules:
 
 1. **On-task only.** Implement just its `AC-N`; `NG-N` binding. Do not redesign the
    product, amend the PRD, or touch adjacent features. A discovered product/scope
