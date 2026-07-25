@@ -363,6 +363,19 @@ const commands = {
     out("RELEASED");
   },
   "lock-status"({ flags }) { out(loadState(pid(flags)).lock ?? "free"); },
+  // ONE cheap call the loop makes at the very start of every pass, BEFORE loading
+  // the heavy pack/knowledge/PRD. Decides in a few tokens whether the pass should
+  // do anything at all — the main lever against token burn on idle/overlapping passes.
+  "pass-gate"({ flags }) {
+    const s = loadState(pid(flags));
+    const l = s.lock, ttl = l?.ttlMs ?? 45 * 60000;
+    if (l && Date.now() - new Date(l.ts).getTime() < ttl) return out("BUSY");        // another pass running → exit
+    const changes = s.tasks.some((t) => t.status === "changes");
+    const inbox = s.inbox.some((i) => i.status === "new");
+    const ready = !!nextReady(s);
+    if (changes || inbox || ready) return out("WORK");                                // real work → proceed
+    out("IDLE");                                                                      // nothing to do → exit cheaply
+  },
 
   "provenance"({ flags }) {
     const a = (loadRegistry().authorizations ?? []).find((x) => x.ref === flags.ref);

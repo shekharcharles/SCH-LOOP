@@ -176,9 +176,9 @@
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Reviewer (UI-1) located the gap: there is NO AGPL notice or source link anywhere in templates/ or frontend/src. Footer resolves via templates/config/installation/contents.html:30 -> SIDEBAR_FOOTER_TEXT, which is \"\" in cms/settings.py:691, falling back to 'Powered by pixelmantra.local'. AGPL 13 obligation currently unmet. Coordinate with UI-2 (app shell).",
       "createdAt": "2026-07-23T15:14:24.446Z",
-      "updatedAt": "2026-07-23T15:14:24.446Z"
+      "updatedAt": "2026-07-23T20:42:45.206Z"
     },
     {
       "id": 10,
@@ -323,14 +323,14 @@
       "deps": [
         15
       ],
-      "status": "blocked",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
       "notes": "Superseded: decomposed into UI-1..UI-14 (tasks 21-34) per user demo-first reprioritization",
       "createdAt": "2026-07-23T15:14:49.390Z",
-      "updatedAt": "2026-07-23T20:17:37.703Z"
+      "updatedAt": "2026-07-23T20:42:13.973Z"
     },
     {
       "id": 17,
@@ -758,6 +758,21 @@
   ],
   "events": [
     {
+      "id": 53,
+      "ts": "2026-07-23T20:43:12.176Z",
+      "msg": "run-lock acquired (sch-run)"
+    },
+    {
+      "id": 52,
+      "ts": "2026-07-23T20:42:45.206Z",
+      "msg": "task #9 -> queued (Reviewer (UI-1) located the gap: there is NO AGPL notice or source link anywhere in templates/ or frontend/src. Footer resolves via templates/config/installation/contents.html:30 -> SIDEBAR_FOOTER_TEXT, which is \"\" in cms/settings.py:691, falling back to 'Powered by pixelmantra.local'. AGPL 13 obligation currently unmet. Coordinate with UI-2 (app shell).)"
+    },
+    {
+      "id": 51,
+      "ts": "2026-07-23T20:42:13.974Z",
+      "msg": "dashboard: task #16 close"
+    },
+    {
       "id": 50,
       "ts": "2026-07-23T20:38:28.735Z",
       "msg": "required skills set: impeccable, taste-skill, design-dna, redesign-skill, motion-design, output-skill"
@@ -1012,7 +1027,12 @@
   "seq": {
     "task": 34,
     "inbox": 1,
-    "event": 50,
+    "event": 53,
     "finding": 0
+  },
+  "lock": {
+    "holder": "sch-run",
+    "ts": "2026-07-23T20:43:12.176Z",
+    "ttlMs": 2700000
   }
 }
