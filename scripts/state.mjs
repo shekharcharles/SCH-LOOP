@@ -140,6 +140,8 @@ export function addTask(state, t) {
   const task = {
     id: ++state.seq.task,
     phase: Number(t.phase ?? 1),
+    phaseName: t.phaseName ?? "",      // human name of the phase, e.g. "Auth & accounts"
+    category: t.category ?? "",        // frontend | backend | ui-ux | infra | security | testing | docs
     priority: Number(t.priority ?? 3), // 1=highest … 5=lowest; picked before phase order
     title: t.title ?? "(untitled)",
     ac: t.ac ?? [],           // dev: acceptance criteria; offensive: phase objectives
@@ -303,6 +305,8 @@ const commands = {
       id: flags.id,
       name: flags.name ?? flags.id,
       domain: flags.domain ?? "app-dev", // the pack
+      description: flags.description ?? "",   // one-paragraph "what this project is"
+      stack: splitList(flags.stack),          // e.g. "Django|React SPA|PostgreSQL|Docker"
       path: flags.path ?? "",
       scope: structuredClone(SCOPE_EMPTY),
       createdAt: now(),
@@ -313,6 +317,15 @@ const commands = {
     out(p);
   },
   "project-list"() { out(loadRegistry().projects); },
+  // Set/update a project's brief + tech stack (shown at the top of its dashboard).
+  "project-meta"({ flags }) {
+    const r = loadRegistry(); const p = r.projects.find((x) => x.id === pid(flags));
+    if (!p) die("no such project");
+    if (flags.description !== undefined) p.description = flags.description;
+    if (flags.stack !== undefined) p.stack = splitList(flags.stack);
+    if (flags.name !== undefined) p.name = flags.name;
+    saveRegistry(r); out({ name: p.name, description: p.description, stack: p.stack });
+  },
   // Skills the operator REQUIRES this project to use. The loop must invoke them
   // (verified against the session transcript by scripts/verify-skills.mjs), and
   // a task cannot complete if a required skill for its kind was never invoked.
@@ -525,7 +538,7 @@ const commands = {
 
   "task-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
-    const t = addTask(s, { phase: flags.phase, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target });
+    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target });
     saveState(id, s); out(t.id.toString());
   },
   "task-list"({ flags }) {
@@ -553,7 +566,7 @@ const commands = {
       }
     }
     if (flags.status === "merged" && flags.force === "true") event(s, `merge FORCED past skill gate: ${flags.note || "(no reason)"}`);
-    for (const k of ["status", "branch", "notes", "phase", "target", "priority"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
+    for (const k of ["status", "branch", "notes", "phase", "target", "priority", "category", "phaseName"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
     // record which installed skills this task dispatched to (visible on the dashboard)
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
     // a status note (the "what it's doing" / the blocked question) sticks to the
