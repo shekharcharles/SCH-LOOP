@@ -38,7 +38,9 @@ export function invokedSkills(sinceMs) {
   return set;
 }
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// SCH_HOME overrides where state lives (documented as the engine home; also lets
+// tests run against a throwaway directory instead of the real registry).
+const ROOT = process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
 export const REGISTRY_PATH = join(ROOT, "projects.json");
 const PROJECTS_DIR = join(ROOT, "projects");
 const LOGS_DIR = join(ROOT, "logs");
@@ -457,12 +459,17 @@ const commands = {
   // ONE cheap call the loop makes at the very start of every pass, BEFORE loading
   // the heavy pack/knowledge/PRD. Decides in a few tokens whether the pass should
   // do anything at all — the main lever against token burn on idle/overlapping passes.
+  // Called at the start of a pass, and again after each completed task so the pass
+  // can keep working instead of sleeping out the rest of its interval.
+  //   --holder <name>  the caller already holds the lock (a continuing pass), so
+  //                    its OWN lock must not read as BUSY.
   "pass-gate"({ flags }) {
     const id = pid(flags);
     const s = loadState(id);
     const l = s.lock, ttl = l?.ttlMs ?? 45 * 60000;
+    const mine = !!flags.holder && l?.holder === flags.holder;
     let verdict;
-    if (l && Date.now() - new Date(l.ts).getTime() < ttl) verdict = "BUSY";           // another pass running → exit
+    if (!mine && l && Date.now() - new Date(l.ts).getTime() < ttl) verdict = "BUSY";  // another pass running → exit
     else {
       const changes = s.tasks.some((t) => t.status === "changes");
       const inbox = s.inbox.some((i) => i.status === "new");
@@ -471,10 +478,12 @@ const commands = {
     // HEARTBEAT — this is the only call guaranteed to happen on every pass, so it
     // is where "the loop is alive" gets recorded. Without it the dashboard cannot
     // tell a healthy idle loop from a cron that died hours ago: both look empty.
-    // --interval <minutes> lets the dashboard compute when the next pass is due.
+    // A continuing pass refreshes the timestamp (so a long pass still looks alive)
+    // but does not increment the pass counter — it is the same pass.
     const prev = s.run ?? {};
     const interval = Number(flags.interval ?? prev.intervalMin ?? 0) || 0;
-    s.run = { lastPass: now(), passN: (prev.passN ?? 0) + 1, verdict, intervalMin: interval };
+    s.run = { lastPass: now(), passN: (prev.passN ?? 0) + (mine ? 0 : 1), verdict, intervalMin: interval };
+    if (mine) { s.lock = { ...l, ts: now() }; }   // keep our own lock fresh across a long pass
     saveState(id, s);
     out(verdict);
   },

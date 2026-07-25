@@ -153,3 +153,35 @@ test("secret-scan hook: blocks git commit, allows other commands", () => {
   execFileSync("node", [hook], { cwd: dir, input: JSON.stringify({ tool_input: { command: "ls -la" } }), stdio: ["pipe", "ignore", "ignore"] }); // must not throw
   rmSync(dir, { recursive: true, force: true });
 });
+
+// --- pass-gate: the two interval scenarios -------------------------------
+// 1) a task finishes long before the next alarm → the SAME pass must be able to
+//    keep working instead of sleeping out the rest of the interval.
+// 2) the alarm fires while a task is still running → the new pass must refuse.
+test("pass-gate: own pass continues, a second pass is refused", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-gate-"));
+  const P = "gp";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "gate", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+
+  S("task-add", "--project", P, "--title", "job A", "--ac", "x");
+  assert.equal(S("pass-gate", "--project", P, "--interval", "30"), "WORK");
+  assert.match(S("lock-acquire", "--project", P, "--ttl", "45", "--holder", "sch-run"), /ACQUIRED/);
+
+  // scenario 2 — a different pass wakes mid-task and must back off
+  assert.equal(S("pass-gate", "--project", P), "BUSY");
+  // scenario 1 — the pass that HOLDS the lock keeps going
+  assert.equal(S("pass-gate", "--project", P, "--holder", "sch-run"), "WORK");
+
+  S("task-set", "--project", P, "1", "--status", "merged");
+  assert.equal(S("pass-gate", "--project", P, "--holder", "sch-run"), "IDLE",
+    "queue drained → the continuing pass must stop, not spin");
+
+  // continuing must NOT inflate the pass counter — it is still one wake-up
+  const st = JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8"));
+  assert.equal(st.run.passN, 2, "two real wake-ups (initial + the refused one), not five");
+  rmSync(home, { recursive: true, force: true });
+});
