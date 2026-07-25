@@ -1,0 +1,16 @@
+{
+  "name": "sch-loop",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous multi-domain build + security loop for Claude Code (dev, web/api/mobile pentest, red team).",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test.mjs",
+    "validate": "node scripts/validate.mjs",
+    "check": "npm run validate && npm test",
+    "dashboard": "node scripts/dashboard.mjs",
+    "init": "node scripts/state.mjs init",
+    "scan": "node scripts/secret-scan.mjs"
+  }
+}

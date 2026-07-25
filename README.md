@@ -124,6 +124,10 @@ scripts/report.mjs        Findings → CERT-In report (Markdown + print-to-PDF H
 scripts/verify-skills.mjs Proves (from the session transcript) which skills were actually used.
 scripts/skills-used.mjs   Lists real skill invocations across sessions.
 scripts/notify.mjs        Push a blocked-question / done notice to Slack/Teams/ntfy (SCH_NOTIFY_WEBHOOK).
+scripts/dashboard-ctl.mjs Ref-counted auto start/stop of the dashboard, driven by Claude's
+                          SessionStart/SessionEnd hooks (up on first session, down on the last).
+scripts/validate.mjs      Self-check: skill frontmatter, pack refs, README accuracy, portability,
+                          gitignore of engagement data, and the loop's safety contracts (`npm run validate`).
 packs/packs.json + *.md   Per-domain methodology (app-dev, tool-dev, web/api/mobile/red-team/network).
 knowledge/*.md            Self-learning knowledge base per pack.
 skills/sch-*              The loop skills: spec, plan, run, review, ship, learn.
@@ -159,9 +163,20 @@ scope-get | scope-check | scope-set | scope-arm-from-auth   (offensive)
 skills-set --project <id> --skills a|b | skills-get --project <id>
 task-add | task-list [--status] | task-set <n> --status ... | task-next | task-answer   (all --project)
 finding-add | finding-list | finding-set | chains   (offensive)
+retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
+provenance --ref <auth-ref>                          (who shared which asset, when, how)
 inbox-add | inbox-list [--new] | inbox-mark
 lock-acquire | lock-release | lock-status
 ```
+
+## ✅ Development / self-check
+
+```bash
+npm run validate   # skills, packs, README accuracy, portability, safety contracts
+npm test           # engine tests: scope gate, authorizations, queue, chains, secret-scan
+npm run check      # both (what CI runs)
+```
+Requires **Node >= 20**. No dependencies.
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.

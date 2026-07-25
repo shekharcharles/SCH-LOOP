@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REG = join(ROOT, ".sessions.json");
 const PORT = Number(process.env.SCH_PORT || 4600);
-const TTL_MS = 12 * 60 * 60 * 1000;             // prune sessions older than 12h
+const TTL_MS = 3 * 60 * 60 * 1000;             // prune sessions idle > 3h (crashed session can't hold it up)
 
 const portOpen = (p) => new Promise((r) => {
   const s = net.connect(p, "127.0.0.1");
