@@ -7,6 +7,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fail = [];
@@ -24,6 +25,14 @@ for (const s of SKILLS) {
   if (!fm) continue;
   ok(new RegExp(`^name:\\s*${s}\\s*$`, "m").test(fm[1]), `${p}: frontmatter name must be "${s}"`);
   ok(/^description:\s*\S/m.test(fm[1]), `${p}: needs a description`);
+  // 1b. the repo is the source of truth, but Claude Code loads ~/.claude/skills.
+  // Editing the source and forgetting to install it means the loop keeps running
+  // the OLD instructions with no visible symptom — the worst kind of drift.
+  const installed = join(homedir(), ".claude", "skills", s, "SKILL.md");
+  if (existsSync(installed)) {
+    ok(readFileSync(installed, "utf8") === t,
+      `${p}: installed copy is out of date — run: node scripts/sync-skills.mjs`);
+  }
 }
 
 // 2. packs: every method/knowledge file referenced must exist

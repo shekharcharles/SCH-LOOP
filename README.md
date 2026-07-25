@@ -126,8 +126,10 @@ scripts/skills-used.mjs   Lists real skill invocations across sessions.
 scripts/notify.mjs        Push a blocked-question / done notice to Slack/Teams/ntfy (SCH_NOTIFY_WEBHOOK).
 scripts/dashboard-ctl.mjs Ref-counted auto start/stop of the dashboard, driven by Claude's
                           SessionStart/SessionEnd hooks (up on first session, down on the last).
-scripts/validate.mjs      Self-check: skill frontmatter, pack refs, README accuracy, portability,
-                          gitignore of engagement data, and the loop's safety contracts (`npm run validate`).
+scripts/sync-skills.mjs   Installs skills/ into ~/.claude/skills (where Claude Code loads them).
+                          `--check` reports drift; validate fails if the installed copy is stale.
+scripts/validate.mjs      Self-check: skill frontmatter, installed-skill drift, pack refs, README
+                          accuracy, portability, gitignore of engagement data, safety contracts.
 packs/packs.json + *.md   Per-domain methodology (app-dev, tool-dev, web/api/mobile/red-team/network).
 knowledge/*.md            Self-learning knowledge base per pack.
 skills/sch-*              The loop skills: spec, plan, run, review, ship, learn.

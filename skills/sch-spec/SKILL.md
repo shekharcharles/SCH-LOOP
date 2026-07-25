@@ -101,6 +101,9 @@ truth beyond the raw target.
 /sch-plan --project <cr-slug>
 ```
 
+`sch-plan` is **interactive** — it plays back what it understood, agrees the phase
+map with the operator, and only then writes tasks. Do not treat it as a formality.
+
 Then tell the user the single command to run: `/loop 15m /sch-run --project <cr-slug>`.
 
 ## A2) Consistency check before planning (spec-kit "analyze")
@@ -120,9 +123,56 @@ surface the core user + primary flow, the one metric of success, and 2-3 design
 forks, presenting your recommended direction. Get the shape agreed, THEN spec. For
 a concrete/existing codebase, skip straight to the interview.
 
-Research the code first. Interview in rounds (1-4 questions, options, recommended
-first) — only genuine product decisions. Confidence test: *could two engineers
-ship the same observable behavior?* No round cap. Write `<path>/PRD.md`:
+**Research the code first.** Read the routes, models and components that already
+exist before asking anything. Half of a good interview is not asking what the
+codebase already answers — and the other half is asking about the things the
+operator did not think to mention.
+
+### The interview — cover the ground, don't stop at four questions
+
+The operator gives a **general overview**; the PRD has to be specific enough that
+a stranger can build from it. Closing that gap is this step's entire job. Ask in
+**rounds of 1–4 questions**, each with concrete options and your recommendation
+first, so "use your default" is always a valid reply. **There is no round cap** —
+five rounds is normal for a real product, and far cheaper than discovering a
+misunderstanding after twenty tasks are built.
+
+Work through this checklist. Every line ends up **answered, or explicitly marked
+not-applicable** — never silently skipped. Skip a line only when the codebase or
+the operator has already answered it.
+
+1. **The point** — what problem, for whom, and how do we know it worked? What
+   happens today without it?
+2. **Users and roles** — every kind of person who touches this, and what each is
+   allowed to do. Where the overview says "admin", find out what admin actually
+   does.
+3. **Core journeys** — the 3–6 paths a real person takes end to end. Walk each one
+   out loud with the operator; this is where missing requirements surface.
+4. **The objects** — what things exist (a video, a comment, an account), their
+   important fields, and their life story: created how, changed by whom, ends how.
+   Deleted for real, or hidden?
+5. **Permissions in practice** — for each role against each object: see, create,
+   edit, delete? Who can see something before it is published?
+6. **The MVP line** — what is the smallest version genuinely worth having, and
+   what is explicitly later? Ask this directly. It decides the whole build order.
+7. **Empty, error and limit states** — what is on screen before any data exists?
+   What happens when an upload fails, a file is too large, a name is taken, a
+   payment declines? Rarely in an overview; always half the real work.
+8. **External systems** — what does it talk to (payments, email, SSO, storage,
+   another team's API), and what should happen when that is down?
+9. **Constraints that change the design if true** — expected scale, offline use,
+   devices and browsers, data residency, regulated or personal data, a deadline,
+   an existing stack it must fit into.
+10. **Non-goals** — what should this deliberately NOT do? Push for these; a
+    binding non-goal prevents more wasted work than any requirement creates.
+11. **Proof** — how will the operator personally check it is done? That sentence
+    becomes the verification section, and the reviewer's yardstick.
+
+**The stopping test:** *could two different engineers read this and ship the same
+observable behaviour?* If not, keep asking. Before writing the PRD, play back a
+short summary of what you understood and let the operator correct it.
+
+Write `<path>/PRD.md`:
 
 ```md
 # <Project> — PRD
