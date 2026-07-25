@@ -19,6 +19,21 @@ review. Under `/loop /sch-run --project <id>` each interval runs this once for
 that project. All durable state is in `state.json`; re-read every pass, trust
 nothing from memory.
 
+## THE OPERATOR IS USUALLY AWAY — every question goes to the dashboard
+
+Assume the person is **not watching this terminal**; they have the dashboard on a
+phone. Therefore: **anything that needs their input must be written into state**,
+never only printed here. A question, a blocked decision, a dirty tree, an expired
+authorization — record it as a `blocked` task with the question in `--note` (plain
+language, options, example, your recommended default). It then appears in the
+dashboard's red **NEEDS YOU** banner with an answer box, and their answer requeues
+it at priority 1. Print it in the terminal too, and push it via
+`scripts/notify.mjs` if a webhook is set. **Never end a pass with an unanswered
+question that exists only in terminal output.**
+
+Also: **always release the run-lock before ending a pass**, including when you
+stop to ask something — a held lock makes every later pass no-op.
+
 ## Token discipline (applies to EVERY pass — the loop runs unattended, tokens add up)
 
 - **Output: caveman-ultra.** Terse. No narration of tool calls, no filler, no
@@ -103,7 +118,13 @@ path — planned before executed.
 ## 2. Preflight + scope gate
 
 - **Dev packs:** confirm the project `path` repo, `origin` reachable, and a clean
-  tree (`git status --porcelain` empty). Dirty → log paths, end pass.
+  tree (`git status --porcelain` empty). **A dirty tree must not silently no-op
+  every pass** — it blocks all work, so surface it where the operator will see it:
+  record it once as a blocked task
+  (`task-add --title "BLOCKED: uncommitted changes in the working tree" --notes
+  "<the exact file list> — commit or revert them, then this clears"`, then
+  `task-set --status blocked`), and notify. Do not create a duplicate on later
+  passes if one already exists. Then end the pass.
 - **Offensive packs (`scope_required: true`):** read the gate.
   ```bash
   node scripts/state.mjs scope-get --project <id>
