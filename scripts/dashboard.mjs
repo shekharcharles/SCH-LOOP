@@ -181,7 +181,10 @@ const PAGE = `<!doctype html>
   .bdesc{margin:0 0 8px;font-size:13px;line-height:1.65;color:var(--fg);opacity:.92}
   .stack{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
   .slabel{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-right:4px}
-  .schip{font-size:11px;padding:2px 8px;border:1px solid var(--line);color:var(--fg);background:#171717}
+  /* stack as plain selectable text (copy/paste friendly), not chips */
+  .stext{font-size:12.5px;color:var(--fg);opacity:.9;user-select:all;line-height:1.6}
+  .copy{margin-left:8px;padding:2px 8px;font-size:10px}
+  .bdesc{user-select:all}
   .catchip{font-size:9px;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;border:1px solid var(--line);color:var(--dim)}
   .brief-empty{border-left-color:var(--line);color:var(--dim);font-size:12px}
   .brief-empty code{font-size:11px;color:var(--fg);background:#171717;padding:1px 5px}
@@ -351,7 +354,8 @@ function projApply(id,r){
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
     (p.description?'<p class="bdesc">'+esc(p.description)+'</p>':'')+
-    (stack.length?'<div class="stack"><span class="slabel">stack</span>'+stack.map(x=>'<span class="schip">'+esc(x)+'</span>').join("")+'</div>':'')+
+    (stack.length?'<div class="stack"><span class="slabel">stack</span><span class="stext">'+esc(stack.join(", "))+'</span>'+
+      '<button class="mini copy" title="Copy the description + stack as plain text" onclick="copyBrief(this)">copy</button></div>':'')+
     '</div>':'<div class="brief brief-empty">No project brief yet — add one: <code>state.mjs project-meta --project '+esc(id)+' --description "…" --stack "Django|React|Postgres"</code></div>');
   // attention
   const attn=s.tasks.filter(t=>t.status==="blocked"||t.status==="stuck");
@@ -445,6 +449,19 @@ function projApply(id,r){
   // keep skill picker selection in sync (only when not focused)
 }
 function reapplyTasks(){ if(LAST&&LAST.project)projApply(qp("project"),LAST); }
+// copy the brief + stack as plain text, ready to paste anywhere
+function copyBrief(btn){
+  const b=btn.closest(".brief"); if(!b)return;
+  const d=b.querySelector(".bdesc"), s=b.querySelector(".stext");
+  const txt=[(LAST&&LAST.project?LAST.project.name:""), d?d.textContent.trim():"", s?"Stack: "+s.textContent.trim():""].filter(Boolean).join("\\n\\n");
+  const done=()=>{const o=btn.textContent;btn.textContent="copied";setTimeout(()=>btn.textContent=o,1200);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done).catch(()=>fallback(txt,done));}
+  else fallback(txt,done);
+}
+function fallback(txt,done){
+  const ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.opacity="0";
+  document.body.appendChild(ta);ta.select();try{document.execCommand("copy");done();}catch{}document.body.removeChild(ta);
+}
 
 // skills picker — plain string concat (no nested templates) + event delegation
 
