@@ -10,9 +10,33 @@
 // Usage:  node scripts/state.mjs <command> --project <id> [--flag value]
 //         node scripts/state.mjs help
 
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+
+// Skills actually invoked in Claude Code's session transcripts since `sinceMs`.
+// Ground truth the agent cannot fake — used to hard-gate completion.
+export function invokedSkills(sinceMs) {
+  const root = join(homedir(), ".claude", "projects");
+  const set = new Set();
+  if (!existsSync(root)) return set;
+  for (const dir of readdirSync(root)) {
+    let files = [];
+    try { files = readdirSync(join(root, dir)).filter((x) => x.endsWith(".jsonl")); } catch { continue; }
+    for (const file of files) {
+      const fp = join(root, dir, file);
+      try { if (statSync(fp).mtimeMs < sinceMs) continue; } catch { continue; }
+      let t = ""; try { t = readFileSync(fp, "utf8"); } catch { continue; }
+      for (const line of t.split("\n")) {
+        if (!line.includes('"name":"Skill"')) continue;
+        const s = line.match(/"skill":"([^"]+)"/)?.[1];
+        if (s) { set.add(s); set.add(s.split(":").pop()); }
+      }
+    }
+  }
+  return set;
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const REGISTRY_PATH = join(ROOT, "projects.json");
@@ -462,6 +486,18 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
+    // HARD GATE: cannot mark a task done unless the project's required skills were
+    // actually invoked (verified against the transcript). Unfakeable. Override
+    // only with --force (logged) when a required skill genuinely does not apply.
+    if (flags.status === "merged" && !(flags.force === "true")) {
+      const req = getProject(id)?.requiredSkills ?? [];
+      if (req.length) {
+        const inv = invokedSkills(Date.now() - Number(flags.window ?? 120) * 60000);
+        const missing = req.filter((sk) => !inv.has(sk) && !inv.has(sk.split(":").pop()));
+        if (missing.length) die(`MERGE BLOCKED — required skill(s) not invoked in transcript: ${missing.join(", ")}. Invoke them + redo the work, or pass --force with a reason if genuinely N/A.`);
+      }
+    }
+    if (flags.status === "merged" && flags.force === "true") event(s, `merge FORCED past skill gate: ${flags.note || "(no reason)"}`);
     for (const k of ["status", "branch", "notes", "phase", "target", "priority"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
     // record which installed skills this task dispatched to (visible on the dashboard)
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
