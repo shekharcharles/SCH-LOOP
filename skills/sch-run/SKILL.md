@@ -164,15 +164,26 @@ node scripts/state.mjs pass-gate --project <id> --holder sch-run
   carries none of the drift risk of a long-lived builder.
 - **`IDLE`** → nothing left. Go to step 8 (deliver-check), release, end.
 
-**Stop the pass immediately (release the lock, end) when any of these hit:**
+**Stop the pass (release the lock, end) ONLY when one of these hits:**
 
-1. **A task went `blocked` or `stuck`** — a human is needed; continuing would
-   burn budget on work that may depend on the answer.
+1. **The gate says `IDLE`** — genuinely nothing left that can run.
 2. **5 tasks completed in this pass** — a hard cap. Keeps the orchestrator's
    context lean and gives the operator a natural checkpoint.
 3. **25 minutes of wall-clock in this pass** — end cleanly before the next alarm
    rather than being interrupted mid-task.
-4. **The same task has bounced twice** — it goes `stuck`, per step 3.
+4. **A preflight condition blocks ALL work** — a dirty tree (dev) or a closed
+   scope gate (offensive). Nothing can proceed, so ending is the only option.
+
+**A blocked task is NOT a reason to stop the pass.** This is the mistake to
+avoid: one task raising a question, or planning producing a `DECISION:` task,
+says nothing about the other forty in the queue. Mark it blocked, notify, and
+**move to the next ready task**. Only when the gate itself returns `IDLE` — no
+ready task, no `changes`, no new inbox — is the pass actually finished.
+
+The same applies to a task that goes `stuck`: record it, leave it for the human,
+and carry on with work that is unaffected. Stopping the whole pass because one
+item needs an answer is how an operator ends up watching an idle loop with a full
+queue.
 
 The lock TTL (45 min) is deliberately longer than the wall-clock cap, so a pass
 that is genuinely working is never mistaken for an abandoned one.
