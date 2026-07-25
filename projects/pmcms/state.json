@@ -633,14 +633,17 @@
       "deps": [
         21
       ],
-      "status": "building",
+      "status": "merged",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "claimed; attempt 1",
+      "notes": "approved r1; merged to develop. Fixed invisible active filter chip (blanket 'a{color:!important}' beat .nc-chip.on) + pink notification titles. Admin tokens consolidated: 3 brand-colour definitions -> 1; both templates lost inline <style>. Dashboard cards now a real grid with actionable counts as links; badge-success/warning -> on-system tags. NOTE: jazzmin custom_css cannot take ?v= (static encodes ? to %3F, 404) - admin CSS is uncacheable-busted, verify restyles with cache disabled. Undisclosed in commit msg: mark-all-read form wrapped in {% if unread_total %} (no-op change, reviewer flagged).",
       "createdAt": "2026-07-23T20:17:22.202Z",
-      "updatedAt": "2026-07-25T13:54:39.231Z"
+      "updatedAt": "2026-07-25T14:09:49.446Z",
+      "skills": [
+        "impeccable"
+      ]
     },
     {
       "id": 29,
@@ -832,6 +835,12 @@
   ],
   "inbox": [
     {
+      "id": 3,
+      "text": "Re-slice all oversized UI-* tasks (22-34) into small verifiable units per the v3 rule: each = a focused change with explicit target files + one verify step (e.g. split a page task into shell / main block / secondary rail / responsive pass). Do this before building them.",
+      "status": "new",
+      "createdAt": "2026-07-25T14:10:51.211Z"
+    },
+    {
       "id": 1,
       "text": "Add a DRM. We have implemented a DRM, so make sure that the user is not able to download the videos, and even if he downloads the video, the video should show blank.",
       "status": "processed",
@@ -839,6 +848,36 @@
     }
   ],
   "events": [
+    {
+      "id": 99,
+      "ts": "2026-07-25T14:11:36.876Z",
+      "msg": "run-lock acquired (sch-run)"
+    },
+    {
+      "id": 98,
+      "ts": "2026-07-25T14:10:53.719Z",
+      "msg": "run-lock released"
+    },
+    {
+      "id": 97,
+      "ts": "2026-07-25T14:10:53.628Z",
+      "msg": "sch-learn: +2 knowledge entries (blanket !important link rules, verifying uncachebusted stylesheets)"
+    },
+    {
+      "id": 96,
+      "ts": "2026-07-25T14:10:51.282Z",
+      "msg": "CONSTITUTION.md written at project root (v3)"
+    },
+    {
+      "id": 95,
+      "ts": "2026-07-25T14:10:51.211Z",
+      "msg": "inbox +: Re-slice all oversized UI-* tasks (22-34) into small verifia"
+    },
+    {
+      "id": 94,
+      "ts": "2026-07-25T14:09:49.446Z",
+      "msg": "task #28 -> merged (approved r1; merged to develop. Fixed invisible active filter chip (blanket 'a{color:!important}' beat .nc-chip.on) + pink notification titles. Admin tokens consolidated: 3 brand-colour definitions -> 1; both templates lost inline <style>. Dashboard cards now a real grid with actionable counts as links; badge-success/warning -> on-system tags. NOTE: jazzmin custom_css cannot take ?v= (static encodes ? to %3F, 404) - admin CSS is uncacheable-busted, verify restyles with cache disabled. Undisclosed in commit msg: mark-all-read form wrapped in {% if unread_total %} (no-op change, reviewer flagged).)"
+    },
     {
       "id": 93,
       "ts": "2026-07-25T13:54:39.231Z",
@@ -1308,13 +1347,13 @@
   "findings": [],
   "seq": {
     "task": 36,
-    "inbox": 2,
-    "event": 93,
+    "inbox": 3,
+    "event": 99,
     "finding": 0
   },
   "lock": {
     "holder": "sch-run",
-    "ts": "2026-07-25T13:54:22.949Z",
+    "ts": "2026-07-25T14:11:36.875Z",
     "ttlMs": 2700000
   }
 }

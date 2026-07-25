@@ -129,12 +129,13 @@ ship the same observable behavior?* No round cap. Write `<path>/PRD.md`:
 ## How to verify (product level)
 ```
 
-**Write `CONSTITUTION.md`** in the project path — the non-negotiables every build
-pass must respect (so a fresh-context subagent inherits them without re-deriving):
-tech stack + versions, folder/naming conventions, the design system source of
-truth, testing requirement, "never do" list (e.g. never commit secrets/CLAUDE.md,
-never rename a shared i18n key without updating all locales, never edit outside
-the task's files). Keep it short. `sch-run` feeds it into every task's subagent.
+**Write `CONSTITUTION.md`** in the project path (ALWAYS — every project gets one).
+Copy `docs/CONSTITUTION.template.md` and fill each `<…>` from the interview + a
+read of the real codebase (stack, the design-system single-source file + theme
+mechanism, test runners, and the project-specific binding constraints). Keep it
+short. `sch-run` feeds it into every task's fresh-context subagent, so it inherits
+the rules without re-deriving them — this is what keeps passes on-task and stops
+blind renames.
 
 Register + plan:
 

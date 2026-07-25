@@ -193,6 +193,17 @@ The subagent brief contains ONLY: the task id, its `AC-N`/`NG-N`, the project
 The subagent returns: what changed, files touched, test/lint/type results, and
 any blocked question. The orchestrator records it and moves to validate/review.
 
+**Offensive packs (pentest / red-team / mobile / web / api / network) — same v3
+model:** each phase runs in a fresh-context subagent too (kills the same rot +
+drift), with the project's **`SCOPE.md` as its constitution** (in-scope targets,
+RoE, off-limits, box type, creds). The subagent tests ONLY the in-scope target for
+this phase, stays on the phase's objectives, and a discovered lead/finding → the
+queue (`--source build`) or the report, never a scope expansion. **Data safety:**
+client findings, credentials, PII, and evidence live in `projects/<id>/reports/`
+and are **NEVER git-committed or pushed** to a public/tooling repo; if any pentest
+tooling/code is committed, the secret-scan gate still applies and client detail is
+stripped first.
+
 If an objective is ambiguous, conflicts with an `NG`/RoE, or needs a human
 decision, go to step 7-blocked — never guess.
 
