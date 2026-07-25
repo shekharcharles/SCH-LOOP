@@ -8,7 +8,7 @@ description: Distill reusable, generalizable lessons from a finished SCH Loop ta
 Turn one engagement's experience into durable methodology. Runs after a phase or
 at ship. Always `--project <id>`.
 
-> **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Run
+> **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Run
 > `node scripts/state.mjs …` from there or via the absolute path; the knowledge
 > base lives at `SCH_HOME/knowledge/<pack>.md`.
 

@@ -5,10 +5,10 @@ description: Turn a project's PRD (dev) or SCOPE + pack phases (offensive) into 
 
 # SCH Loop — planner
 
-> **Engine home (`SCH_HOME`):** `C:\Users\r00t\Desktop\loop\SCH-loop`. Every
+> **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Every
 > `node scripts/state.mjs …` command and every `packs/…` file below lives there.
 > If your terminal is in another folder, use the absolute path, e.g.
-> `node C:/Users/r00t/Desktop/loop/SCH-loop/scripts/state.mjs …`.
+> `node $HOME/.claude/SCH-loop/scripts/state.mjs …`.
 > **`--project` is optional** — if omitted it is auto-detected from the current
 > folder (the registered project whose `path` contains your cwd). Check with
 > `state.mjs project-here`..
