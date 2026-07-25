@@ -88,9 +88,24 @@ gone. The answer is appended, never overwrites the question.
   on disk: `state.json` (tasks/findings/events), `CHANGELOG.md` + `HANDOFF.md`
   (what's done / in flight / next), `git log`, `knowledge/<pack>.md`,
   `logs/`. This pass re-reads what it needs and needs no memory of prior passes.
-  So the session context should be **cleared, not compacted** — run `/clear`
-  before a run rather than letting context accumulate. Best of all, run each pass
-  with clean context (a cloud routine via `/schedule` does this automatically).
+
+- **Keep the orchestrator's own footprint tiny — this is what bounds context.**
+  An in-session `/loop` enqueues each pass into the SAME conversation, so whatever
+  this session prints stays in context for every later pass. Therefore:
+  - **Never build or review inline.** Both run in subagents, whose own context is
+    discarded when they return — only their short report reaches this session.
+    This is the main reason the subagent rule exists.
+  - **Brief the subagent, then summarise its return in one or two lines.** Never
+    paste a subagent's full report, a diff, a file, or a test log into this
+    session. Quote the one decisive line.
+  - **End every pass with at most 5 short lines** — what was done, its status,
+    what is next. A pass that prints half a page costs that half page on every
+    remaining pass of the day.
+  - Target: **under ~2k tokens of orchestrator output per task.** At that size a
+    long run compacts rarely and cheaply.
+  - For genuinely fresh context per pass, the loop must be driven from **outside**
+    the session (a scheduler running headless `claude -p`), because nothing inside
+    a session can clear its own context.
 
 (If the loop session has the `caveman` and `ponytail` plugins active, keep them at
 `ultra`. This section enforces the same behavior even without them.)

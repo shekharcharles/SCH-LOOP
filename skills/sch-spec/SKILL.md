@@ -128,6 +128,83 @@ exist before asking anything. Half of a good interview is not asking what the
 codebase already answers — and the other half is asking about the things the
 operator did not think to mention.
 
+### B0. EXISTING repo? Survey it before you ask anything (brownfield)
+
+Decide which you are in: **greenfield** (empty or near-empty folder → the
+interview below is the whole story) or **brownfield** (real code already there).
+Most work is brownfield, and it is a different job: most of the product already
+exists, the operator wants a *change* to it, and the biggest risk is not building
+the wrong thing — it is **breaking something that already worked**.
+
+Never interview the operator about a brownfield repo before you have read it. You
+will ask questions the code already answers and miss the constraints that matter.
+
+**1. Survey — build an as-built inventory.** Use search tools, not full-file
+reads; do not load bundles or lockfiles. Establish:
+
+- **Shape** — languages, frameworks, package manifests, how it is run and built,
+  where the entry points are, how it is deployed (CI config, Dockerfile).
+- **The domain** — data models / schema / migrations. This is the fastest route
+  to what the product actually *is*.
+- **The surface** — routes, endpoints, screens, CLI commands. This is the feature
+  list, whether or not anyone wrote one down.
+- **Roles and permissions** as they exist today.
+- **What is tested** — test directories, what they cover, whether they pass right
+  now. Run them once. A suite that is already red changes the whole plan, and you
+  must know it was red *before* you touched anything.
+- **What the repo says about itself** — README, CHANGELOG, HANDOFF, docs, and any
+  existing `CLAUDE.md` (its rules are binding, and they are not yours to rewrite).
+- **Recent history** — `git log` for the last few weeks: what is being actively
+  worked on, and what is stable and should be left alone.
+- **Danger zones** — TODO/FIXME/HACK comments, files with unusually heavy churn,
+  anything the README warns about.
+
+**2. Play the inventory back — and separate fact from inference.**
+
+> **Here is what I found already built.** [surface, grouped by area] · **Here is
+> what is tested** [and whether it currently passes] · **Here is what looks
+> half-finished** [with the evidence] · **Here is what I could not work out.**
+
+Mark clearly which parts you *verified by running something* versus *inferred by
+reading*. An inference stated as fact is how a plan quietly builds on something
+that does not actually work.
+
+**3. Then interview about the DELTA, not the product.** The operator does not
+need to re-describe what exists. Ask:
+
+- **What is wrong or missing today?** The actual reason for this work.
+- **Which of what I found is right, and which is wrong?** Existing behaviour they
+  consider a bug is very different from behaviour they want preserved — and you
+  cannot tell which is which from the code.
+- **What must NOT change?** The single most valuable brownfield question. Anything
+  named here becomes a binding `NG-N` and protects working behaviour from a
+  refactor nobody asked for.
+- **Is any of the half-finished work meant to be finished, or dropped?**
+- **How will you know I have not broken anything?** Their answer becomes the
+  regression check every task runs.
+
+**4. The PRD describes the change, not the whole product.** Add two sections a
+greenfield PRD does not need:
+
+```md
+## As-built (what already exists)     — the verified inventory, so no task rebuilds it
+## Must not break                     — existing behaviour that is binding, as NG-N
+```
+
+**5. Rules that apply to every brownfield task from here on.**
+
+- **Match the code that is there.** Its patterns, naming and structure win over
+  your preferences. A change that reads as though it was always there is correct;
+  a "better" pattern introduced in one file is a mess.
+- **Ground before editing** — grep every usage before renaming anything, read the
+  real markup before writing styles. In a codebase you did not write, an
+  assumption is a regression.
+- **Characterise before changing.** If a task changes existing behaviour and
+  nothing covers it, write the test that captures how it works *now*, then change
+  it. Otherwise nobody can tell a fix from a break.
+- **Put these in the project's `CLAUDE.md`**, which is auto-read by every future
+  fresh-context subagent — that is what makes them stick.
+
 ### The interview — cover the ground, don't stop at four questions
 
 The operator gives a **general overview**; the PRD has to be specific enough that
