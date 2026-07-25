@@ -149,7 +149,13 @@ export function addTask(state, t) {
     ac: t.ac ?? [],           // dev: acceptance criteria; offensive: phase objectives
     ng: t.ng ?? [],
     deps: (t.deps ?? []).map(Number),
-    status: "queued",
+    // A question for the operator MUST be born blocked. Creating it queued and
+    // blocking it in a second call is how three real questions ended up invisible:
+    // the second call was simply never made, so they sat in the queue looking like
+    // work, absent from the dashboard's NEEDS YOU banner, unanswerable from a
+    // phone. A "DECISION:" title now forces blocked — it cannot be got wrong.
+    status: /^\s*DECISION\b/i.test(t.title ?? "") ? "blocked"
+      : (STATUSES.includes(t.status) ? t.status : "queued"),
     branch: "",               // dev only
     active: t.active === true || t.active === "true", // offensive: does this run active/attack tooling?
     target: t.target ?? "",   // offensive: which in-scope target
@@ -585,7 +591,7 @@ const commands = {
 
   "task-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
-    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target });
+    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status });
     saveState(id, s); out(t.id.toString());
   },
   "task-list"({ flags }) {
