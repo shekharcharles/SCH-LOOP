@@ -21,6 +21,11 @@ nothing from memory.
 
 ## THE OPERATOR IS USUALLY AWAY — every question goes to the dashboard
 
+A phone notification is configured (`SCH_NOTIFY_WEBHOOK`), so **every time you
+block on a question, push it**:
+`node <SCH_HOME>/scripts/notify.mjs "<project>: #<task id> needs you — <one-line question>" --title "SCH Loop"`.
+Push once per blocked task, not on every pass.
+
 Assume the person is **not watching this terminal**; they have the dashboard on a
 phone. Therefore: **anything that needs their input must be written into state**,
 never only printed here. A question, a blocked decision, a dirty tree, an expired

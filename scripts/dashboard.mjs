@@ -222,6 +222,17 @@ const PAGE = `<!doctype html>
   .tk.st-blocked .tk-d,.tk.st-stuck .tk-d{background:var(--red)}
   .tk.st-blocked .tk-s,.tk.st-stuck .tk-s{color:var(--red)}
   .tk.st-superseded{display:none}
+  .donebox>summary{cursor:pointer;padding:4px 11px 4px 14px;font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;border-top:1px solid #1a1a1a;list-style:none}
+  .donebox>summary::-webkit-details-marker{display:none}
+  .donebox>summary::before{content:"▸ ";color:var(--green)}
+  .donebox[open]>summary::before{content:"▾ "}
+  .donebox>summary:hover{color:var(--fg)}
+  /* .tk sets display:flex, which overrides the browser's hiding of closed
+     <details> content — so hide it explicitly when the box is collapsed. */
+  .donebox:not([open])>.tk{display:none}
+  /* .tk sets display:flex, which overrides the browser hiding closed <details> content — hide it explicitly */
+  .donebox:not([open]) .tk{display:none}
+  .tk-none{padding:5px 11px 5px 14px;font-size:10.5px;color:var(--dim);font-style:italic}
   /* RUNNING NOW — pulsing green ring so you can see what the loop is building */
   @keyframes ring{0%,100%{box-shadow:inset 0 0 0 1px rgba(74,246,38,.9),0 0 6px rgba(74,246,38,.25)}
                   50%{box-shadow:inset 0 0 0 1px rgba(74,246,38,.35),0 0 14px rgba(74,246,38,.5)}}
@@ -451,13 +462,17 @@ function projApply(id,r){
       phHtml+='<div class="ph'+(phRunning?' running':'')+'">'+
         '<div class="ph-h"><span class="ph-n">'+esc(name)+'</span><span class="ph-c mono">'+d+'/'+list.length+'</span>'+
         '<div class="pbar"><i style="width:'+Math.round(d/list.length*100)+'%"></i></div></div>';
-      for(const t of list.sort((a,b)=>(a.priority??3)-(b.priority??3)||a.id-b.id)){
-        const run=RUNNING.has(t.status);
-        phHtml+='<div class="tk st-'+t.status+(run?' running':'')+'" data-task="'+t.id+'" title="'+esc(t.title)+(t.notes?' — '+esc(t.notes.slice(0,120)):'')+'">'+
+      const sorted=list.sort((a,b)=>(a.priority??3)-(b.priority??3)||a.id-b.id);
+      const open=sorted.filter(t=>t.status!=="merged"), doneList=sorted.filter(t=>t.status==="merged");
+      const line=(t)=>{const run=RUNNING.has(t.status);
+        return '<div class="tk st-'+t.status+(run?' running':'')+'" data-task="'+t.id+'" title="'+esc(t.title)+(t.notes?' — '+esc(t.notes.slice(0,120)):'')+'">'+
           '<span class="tk-d"></span><span class="tk-id mono">#'+t.id+'</span>'+
           '<span class="tk-t">'+esc(t.title)+'</span>'+
-          '<span class="tk-s">'+(STMAP[t.status]?STMAP[t.status][0]:t.status)+'</span></div>';
-      }
+          '<span class="tk-s">'+(STMAP[t.status]?STMAP[t.status][0]:t.status)+'</span></div>';};
+      // pending work is always visible; completed work collapses out of the way
+      phHtml+=open.map(line).join("");
+      if(!open.length&&!doneList.length)phHtml+='<div class="tk-none">no tasks</div>';
+      if(doneList.length)phHtml+='<details class="donebox"><summary>'+doneList.length+' completed</summary>'+doneList.map(line).join("")+'</details>';
       phHtml+='</div>';
     }
     phHtml+='</div>';
