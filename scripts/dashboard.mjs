@@ -179,7 +179,14 @@ const PAGE = `<!doctype html>
   .attn{border:1px solid var(--red);border-left:4px solid var(--red);background:rgba(255,42,42,.07);padding:12px 15px}
   .attn>b{color:var(--red);letter-spacing:.1em;display:block;margin-bottom:8px}
   .attn-row{padding:8px 0;border-top:1px solid rgba(255,42,42,.25)}.attn-row:first-of-type{border-top:0}
-  .attn-row .q{opacity:.9;margin:5px 0 9px;line-height:1.55}
+  /* A question is READ, on a phone, before a decision. It gets real line breaks
+     (the loop writes them; this used to collapse them all into a wall of text),
+     a readable measure, and its own scroll if it is long. */
+  .attn-row .q{opacity:.92;margin:7px 0 11px;line-height:1.62;white-space:pre-wrap;
+               max-width:88ch;font-size:12.5px;max-height:44vh;overflow-y:auto;
+               padding:10px 12px;background:rgba(0,0,0,.28);border-left:2px solid rgba(255,42,42,.4)}
+  .attn-row .q .qlabel{color:var(--red);letter-spacing:.06em;font-weight:700}
+  .attn-row .q .qopt{color:var(--green);font-weight:700}
   .ans{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}.ans input{flex:1;min-width:180px;font-family:inherit;font-size:15px;padding:9px 11px;background:var(--panel);color:var(--fg);border:1px solid var(--line)}.ans input:focus{outline:none;border-color:var(--green)}
   .ans button,.go{font-family:inherit;padding:8px 14px;background:var(--green);color:#000;border:0;font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
   .scope{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--red);padding:12px 15px;font-size:12px;line-height:1.7}.scope b{color:var(--red);letter-spacing:.1em}
@@ -373,21 +380,48 @@ function loopBar(run,advice){
 // ---- tap-to-answer ---------------------------------------------------------
 // A DECISION task carries its options as words. Pull them out so the answer is
 // one tap instead of typing the exact token on a phone keyboard.
+// Pull the REAL options out of a question. Order matters: a numbered list is an
+// explicit answer set, so it wins. The loose slash heuristic runs only when there
+// is no numbered list — left to itself it happily turned the prose phrase
+// "request/response" into buttons, and a button that sends a meaningless answer
+// is worse than no button at all.
 function parseOpts(notes){
   const t=(notes||"");
-  const out=[];
-  // explicit list: "OPTIONS: sign | encrypt | https-only"
-  const m=t.match(/options?\\s*[:\\-]\\s*([^\\n]+)/i);
-  if(m)for(const x of m[1].split(/[|\\/,]/))push(x);
-  // inline alternation: "sign / encrypt / https-only" or \`sign\` / \`encrypt\`
-  for(const g of t.matchAll(/\`?\\b([a-z][a-z0-9-]{1,24})\`?(?:\\s*\\/\\s*\`?([a-z][a-z0-9-]{1,24})\`?){1,4}/g)){
-    for(const x of g[0].split("/"))push(x);
+  // 1) numbered options: "1) Keep signing only - ..."  → self-describing value
+  const num=[...t.matchAll(/(?:^|\\n|\\s)(\\d)\\)\\s+([^\\n]{3,80}?)(?:\\s+[-–—]\\s|\\.\\s|\\n|\$)/g)];
+  if(num.length>=2){
+    const seen=new Set();
+    return num.filter(m=>!seen.has(m[1])&&seen.add(m[1]))
+      .slice(0,5).map(m=>{
+        const words=m[2].trim().split(/\\s+/).slice(0,5).join(" ").replace(/[,;:]\$/,"");
+        return {label:m[1]+") "+words, value:m[1]+") "+words};
+      });
   }
+  // 2) an explicit one-line list: "OPTIONS: untrack / allow / manual"
+  const out=[];
+  const m=t.match(/options?[^:\\n]{0,24}:\\s*([^\\n]+)/i);
+  if(m)for(const x of m[1].split(/[|\\/,]/))push(x);
+  // 3) last resort: inline alternation somewhere in the prose
+  if(!out.length)
+    for(const g of t.matchAll(/\`?\\b([a-z][a-z0-9-]{1,24})\`?(?:\\s*\\/\\s*\`?([a-z][a-z0-9-]{1,24})\`?){1,4}/g))
+      for(const x of g[0].split("/"))push(x);
   function push(x){
     const v=x.replace(/[\`'"]/g,"").trim();
-    if(v&&v.length<=24&&!out.includes(v)&&!/^(and|or|the|a|an|of|to)$/.test(v))out.push(v);
+    if(v&&v.length<=24&&!out.includes(v)&&!/^(and|or|the|a|an|of|to)\$/.test(v))out.push(v);
   }
-  return out.slice(0,5);
+  return out.slice(0,5).map(v=>({label:v,value:v}));
+}
+// Lay a question out so it can be READ. The loop writes structure, but it also
+// runs options together mid-paragraph; on a phone that is an unreadable slab. Put
+// every label and every numbered option on its own line. Escape FIRST, then add
+// markup — the text is operator/agent-supplied.
+function fmtQ(s){
+  let t=esc(s||"");
+  t=t.replace(/\\s*(\\d\\))\\s+/g,"\\n\\n<span class=\\"qopt\\">$1</span> ");           // 1) 2) 3) each on its own line
+  t=t.replace(/(^|\\n|\\s)(THE QUESTION|OPTIONS[^:\\n]{0,24}|WHAT EACH ONE DOES|RECOMMENDATION|RECOMMENDED|QUESTION ASKED|ANSWERED)\\s*:/g,
+              "\\n\\n<span class=\\"qlabel\\">$2:</span>\\n");
+  t=t.replace(/\\s*(Example:)/g,"\\n    $1");                                       // examples sit under their option
+  return t.replace(/\\n{3,}/g,"\\n\\n").trim();
 }
 // a task planned out of an inbox submission carries its id (source "inbox#6"),
 // so you can see what your message became — and filter the table by it
@@ -402,7 +436,7 @@ function answerBlock(pid,t,home){
   return '<form class="ans ansform" method="POST" action="/answer">'+csrf+
     (home?'<input type="hidden" name="back" value="home">':'')+
     '<input type="hidden" name="project" value="'+esc(pid)+'"><input type="hidden" name="id" value="'+t.id+'">'+
-    (opts.length?'<div class="opts">'+opts.map(o=>'<button type="submit" class="opt" name="text" value="'+esc(o)+'" title="Answer: '+esc(o)+'">'+esc(o)+'</button>').join("")+'</div>':'')+
+    (opts.length?'<div class="opts">'+opts.map(o=>'<button type="submit" class="opt" name="text" value="'+esc(o.value)+'" title="Answer: '+esc(o.value)+'">'+esc(o.label)+'</button>').join("")+'</div>':'')+
     '<input type="text" name="text" placeholder="'+(opts.length?'…or type a different answer':'Answer — task resumes at top')+'" autocomplete="off">'+
     '<button title="Submit this answer and put the task back at the front of the queue">Answer &amp; unblock</button></form>';
 }
@@ -481,7 +515,7 @@ function homeApply(ps){
     new Set(xs.map(x=>x.p.id)).size+' project(s)</b>'+
     xs.map(({p,t})=>'<div class="attn-row"><div class="xp"><a href="/?project='+encodeURIComponent(p.id)+'">'+esc(p.name)+'</a> · task #'+t.id+'</div>'+
       '<div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <strong>'+esc(t.title)+'</strong></div>'+
-      '<div class="q">'+esc(t.notes||"(open the project)")+'</div>'+answerBlock(p.id,t,true)+'</div>').join("")+
+      '<div class="q">'+fmtQ(t.notes||"(open the project)")+'</div>'+answerBlock(p.id,t,true)+'</div>').join("")+
     '</div>':"");
   const by=(c)=>ps.filter(p=>p.status===c).length;
   set("pchips",'<div class="chips">'+[["active",by("active"),"active"],["in progress",by("inprogress"),"inprogress"],["failed / awaiting",by("attention"),"attention"],["completed",by("completed"),"completed"],["new",by("new"),"new"]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
@@ -537,7 +571,7 @@ function projApply(id,r){
   if(attn.length){
     attnHtml='<div class="attn"><b>&#9888; NEEDS YOU — '+attn.length+' task(s)</b>';
     for(const t of attn){
-      attnHtml+='<div class="attn-row"><div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <span class="id">TASK #'+t.id+'</span> <strong>'+esc(t.title)+'</strong></div><div class="q">'+esc(t.notes||"(open the task)")+'</div>'+
+      attnHtml+='<div class="attn-row"><div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <span class="id">TASK #'+t.id+'</span> <strong>'+esc(t.title)+'</strong></div><div class="q">'+fmtQ(t.notes||"(open the task)")+'</div>'+
         answerBlock(id,t)+
         actForm(id,t.id,"close","&#10005; close (superseded)")+'</div>';
     }
