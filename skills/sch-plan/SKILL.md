@@ -28,12 +28,21 @@ node scripts/state.mjs project-get --project <id>      # domain + scope
 Read `packs/packs.json` for the project's `domain`, and `packs/<method>.md`.
 Read the contract: `PRD.md` (dev) or `SCOPE.md` (offensive).
 
-## 2A. Dev / tool packs → feature tasks
+## 2A. Dev / tool packs → SMALL, verifiable feature tasks
 
-Decompose the PRD into ordered phases and smallest-buildable feature tasks (one
-day or less each). Each task gets its own `AC-N` and inherits relevant PRD
-`NG-N`; no task's AC may require an NG. Order so each task is buildable from
-merged code of its `deps`.
+Decompose the PRD into ordered phases and the **smallest** buildable+verifiable
+units — each doable by a fresh-context subagent in one clean pass (think a
+focused change, not a whole page). "UI-4 watch-page redesign" is TOO BIG; split
+it (layout shell → player block → related rail → comments → responsive pass).
+A too-big task is what let the loop wander and regress.
+
+Each task carries:
+- its own `AC-N` (observable) + relevant PRD `NG-N` (binding);
+- **explicit target files** (name the files it should touch);
+- a **verify step** (the exact check that proves it works — a test, a command,
+  a specific DOM/behaviour to confirm).
+
+Order so each task builds only on merged code of its `deps`.
 
 ```bash
 node scripts/state.mjs task-add --project <id> --phase 2 \
