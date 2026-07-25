@@ -123,6 +123,16 @@ A task in `changes` → fix only the reviewer's must-fix findings, re-validate,
 send back to review. Cap **2 fix rounds** per task; on the third set it `stuck`
 and end the pass for a human.
 
+**COMPOUND every correction (Boris's #1 habit — run-forever unlock).** When a
+review returns `changes`, or you catch a regression, do not just fix it — **write
+the rule to the project's `CLAUDE.md`** (append one line under `## Lessons
+(auto-added)`), because `CLAUDE.md` is auto-read every future pass so the mistake
+can never recur. Example: a bad blind rename → add "never rename i18n key X
+without updating all locale files." A fix that only lives in this pass fixes one
+task; a rule in `CLAUDE.md` fixes every future task. This is what stops the loop
+re-making the same regression. (Also mirror durable/generalizable lessons to
+`knowledge/<pack>.md` via `sch-learn`.)
+
 ## 3d. Parallel wave (optional — throughput for independent tasks)
 
 When several **ready** tasks are independent — deps met, and they touch
@@ -170,7 +180,7 @@ made a build task wander into product-strategy essays and burn tokens. Instead,
 clean context. The loop session stays a lean orchestrator.
 
 The subagent brief contains ONLY: the task id, its `AC-N`/`NG-N`, the project
-`path` + `CONSTITUTION.md`/`HANDOFF.md`, and the pack's relevant phase. Tell it:
+`path` + `CLAUDE.md`/`HANDOFF.md`, and the pack's relevant phase. Tell it:
 
 1. **Stay strictly on this task.** Implement only its `AC-N`. **Do not redesign
    the product, do not amend the PRD, do not touch adjacent features.** If you

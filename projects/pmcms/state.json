@@ -25,7 +25,7 @@
     {
       "id": 2,
       "phase": 1,
-      "priority": 3,
+      "priority": 1,
       "title": "Per-role upload/storage/playback limits + super-admin config",
       "ac": [
         "AC-8: upload/storage/playback quotas enforced server-side per role; super-admin configurable; over-quota rejected"
@@ -34,14 +34,20 @@
         "NG-2: single-instance, no multi-tenant"
       ],
       "deps": [],
-      "status": "blocked",
+      "status": "queued",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "Needs product decision: role axis (User/Admin/SuperAdmin tiers vs RBAC member/contributor/manager), which quota dimensions (per-file size / total storage / upload count / concurrent playback), and defaults. Asked user.",
+      "notes": "ANSWERED: Anyone who registers AND is approved by an admin can upload. Limit: max 5 videos per user for now — that is the only cap (no separate per-file size or total-storage limit yet). Admin approves users and can manage/remove content. No separate super-admin tier needed for now.",
       "createdAt": "2026-07-23T15:14:23.031Z",
-      "updatedAt": "2026-07-23T18:50:25.539Z"
+      "updatedAt": "2026-07-25T14:18:39.816Z",
+      "answers": [
+        {
+          "text": "Anyone who registers AND is approved by an admin can upload. Limit: max 5 videos per user for now — that is the only cap (no separate per-file size or total-storage limit yet). Admin approves users and can manage/remove content. No separate super-admin tier needed for now.",
+          "ts": "2026-07-25T14:18:39.816Z"
+        }
+      ]
     },
     {
       "id": 3,
@@ -53,14 +59,14 @@
       ],
       "ng": [],
       "deps": [],
-      "status": "queued",
+      "status": "merged",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "Implementation drafted + committed UNVALIDATED (docker daemon died mid-pass): backend tests not run, frontend not rebuilt/deployed, no browser validation. Resume from validation.",
+      "notes": "approved r1; merged to develop 50ebe3e (commit bf4f722). Backend + guarded seek were already correct and already live; the real AC-11 gap was that resume was silent - added a toast reusing the unused .pm-toast primitive (reviewer confirmed it renders, 156x47, not a repeat of the invisible-toast class of bug). Backend drm 24/25 (test_mock_default pre-existing: container DRM_PROVIDER=clearkey vs code default 'mock'). Frontend 212/212. LIMITATION: all seed videos are 4-9s vs RESUME_MIN_SECONDS=10, so no live seek-leave-return demo is possible on this data - re-verify when a longer video exists.",
       "createdAt": "2026-07-23T15:14:23.172Z",
-      "updatedAt": "2026-07-23T20:14:16.369Z"
+      "updatedAt": "2026-07-25T14:28:03.654Z"
     },
     {
       "id": 4,
@@ -587,14 +593,14 @@
       "deps": [
         null
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 37,38 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:22.095Z",
-      "updatedAt": "2026-07-23T20:17:22.095Z"
+      "updatedAt": "2026-07-25T14:13:42.594Z"
     },
     {
       "id": 27,
@@ -610,14 +616,14 @@
       "deps": [
         null
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 39,40 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:22.144Z",
-      "updatedAt": "2026-07-23T20:17:22.144Z"
+      "updatedAt": "2026-07-25T14:13:42.679Z"
     },
     {
       "id": 28,
@@ -659,14 +665,14 @@
       "deps": [
         23
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 41,42 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:37.313Z",
-      "updatedAt": "2026-07-23T20:17:37.313Z"
+      "updatedAt": "2026-07-25T14:13:42.764Z"
     },
     {
       "id": 30,
@@ -682,14 +688,14 @@
       "deps": [
         null
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 43,44 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:37.391Z",
-      "updatedAt": "2026-07-23T20:17:37.391Z"
+      "updatedAt": "2026-07-25T14:13:42.825Z"
     },
     {
       "id": 31,
@@ -704,14 +710,14 @@
       "deps": [
         null
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 45,46 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:37.470Z",
-      "updatedAt": "2026-07-23T20:17:37.470Z"
+      "updatedAt": "2026-07-25T14:13:42.886Z"
     },
     {
       "id": 32,
@@ -728,14 +734,14 @@
       "deps": [
         21
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 47,48 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:37.534Z",
-      "updatedAt": "2026-07-23T20:17:37.534Z"
+      "updatedAt": "2026-07-25T14:13:42.976Z"
     },
     {
       "id": 33,
@@ -753,14 +759,14 @@
       "deps": [
         null
       ],
-      "status": "queued",
+      "status": "superseded",
       "branch": "",
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Superseded: re-sliced into 49,50 per inbox #3 (v3 small-verifiable-unit rule)",
       "createdAt": "2026-07-23T20:17:37.592Z",
-      "updatedAt": "2026-07-23T20:17:37.592Z"
+      "updatedAt": "2026-07-25T14:13:43.045Z"
     },
     {
       "id": 34,
@@ -781,9 +787,9 @@
       "active": false,
       "target": "",
       "source": "plan",
-      "notes": "",
+      "notes": "Kept whole: this IS the single cross-page verify pass; slicing it would defeat its purpose. deps: all UI-* children.",
       "createdAt": "2026-07-23T20:17:37.647Z",
-      "updatedAt": "2026-07-23T20:17:37.647Z"
+      "updatedAt": "2026-07-25T14:13:43.108Z"
     },
     {
       "id": 35,
@@ -831,13 +837,320 @@
       "answers": [],
       "createdAt": "2026-07-25T13:12:32.493Z",
       "updatedAt": "2026-07-25T13:12:32.493Z"
+    },
+    {
+      "id": 37,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-6a Forum index: category list + recent activity",
+      "ac": [
+        "Category rows read as a scannable list, not 6 identical heading+text cards",
+        "Empty categories invite a first post instead of showing bare '0 topics'",
+        "Recent activity rows carry author avatar and last-reply time"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: forum/templates/forum/*.html, static/css/pixel-mantra-theme.css | VERIFY: load /discussions, confirm no 6-up equal card grid and that a 0-topic category shows an invitation",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:32.621Z",
+      "updatedAt": "2026-07-25T14:13:32.621Z"
+    },
+    {
+      "id": 38,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-6b Forum topic + reply thread",
+      "ac": [
+        "Topic page, reply list and reply form use UI-1 primitives",
+        "Moderator pin/lock/hide controls legible and not competing with the reply CTA"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: forum/templates/forum/topic.html, static/css/pixel-mantra-theme.css | VERIFY: open a topic with replies, confirm .pm-btn variants in use and one primary action",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:32.716Z",
+      "updatedAt": "2026-07-25T14:13:32.716Z"
+    },
+    {
+      "id": 39,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-7a Profile tab row: label the icon-only controls",
+      "ac": [
+        "The 4 circular icon buttons (search, filter, tags, sort) have visible or accessible labels",
+        "Owner-only tooling is not shown to visitors on a public portfolio"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/components/profile-page/ProfilePagesHeader.js | VERIFY: open /user/<name> as a non-owner, confirm no Bulk Actions and every control has an accessible name",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:32.816Z",
+      "updatedAt": "2026-07-25T14:13:32.816Z"
+    },
+    {
+      "id": 40,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-7b Profile sub-pages: about, playlists, liked, history",
+      "ac": [
+        "about/playlists/liked/history use the same card + empty-state system as the media tab"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/Profile*.js | VERIFY: visit each sub-tab with no data, confirm a real empty state not a blank region",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:32.892Z",
+      "updatedAt": "2026-07-25T14:13:32.892Z"
+    },
+    {
+      "id": 41,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-9a Search results page",
+      "ac": [
+        "Results use the discovery grid and card anatomy",
+        "No-results state explains and offers a next step"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/SearchPage.js | VERIFY: search a nonsense string, confirm empty state; search a real term, confirm grid",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:32.962Z",
+      "updatedAt": "2026-07-25T14:13:32.962Z"
+    },
+    {
+      "id": 42,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-9b Categories taxonomy tiles",
+      "ac": [
+        "Category tiles show real cover imagery or a designed fallback, not a grey icon block",
+        "Taxonomy reflects the course domain rather than stock Art/Documentary/Film"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/CategoriesPage.tsx, fixtures | VERIFY: /categories shows no grey placeholder tiles; NOTE renaming categories is a content decision - ask before changing fixture data",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.054Z",
+      "updatedAt": "2026-07-25T14:13:33.054Z"
+    },
+    {
+      "id": 43,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-10a Playlist page",
+      "ac": [
+        "Playlist header, ordered item rows and empty state styled to the system"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/PlaylistPage.js | VERIFY: open a playlist and an empty playlist",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.124Z",
+      "updatedAt": "2026-07-25T14:13:33.124Z"
+    },
+    {
+      "id": 44,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-10b Embed page",
+      "ac": [
+        "Embed view is chrome-free and player-first at small sizes"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/EmbedPage.tsx | VERIFY: load /embed?m=<token> at 480x270, confirm no app shell and no overflow",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.197Z",
+      "updatedAt": "2026-07-25T14:13:33.197Z"
+    },
+    {
+      "id": 45,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-11a Upload page guidance",
+      "ac": [
+        "Dropzone states accepted formats and size limit",
+        "Copy states that uploads go to admin review before appearing"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/AddMediaPage or uploader templates | VERIFY: /upload shows formats, limit and the review notice",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.279Z",
+      "updatedAt": "2026-07-25T14:13:33.279Z"
+    },
+    {
+      "id": 46,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-11b Manage tables (media/users/comments)",
+      "ac": [
+        "The three /manage tables share one table style with the admin token set"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: frontend/src/static/js/pages/Manage*.js | VERIFY: load all three, confirm consistent header/row/action styling",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.389Z",
+      "updatedAt": "2026-07-25T14:13:33.389Z"
+    },
+    {
+      "id": 47,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-12a Static pages: about, contact, terms",
+      "ac": [
+        "About states what this platform is for this course, not MediaCMS boilerplate",
+        "About no longer prints the upstream version number",
+        "AGPL attribution present"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: templates/cms/about.html, files/views/pages.py | VERIFY: /about shows no '8.3.4' and carries the source-offer link",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.457Z",
+      "updatedAt": "2026-07-25T14:13:33.457Z"
+    },
+    {
+      "id": 48,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-12b Error pages: 404 and 500",
+      "ac": [
+        "404 has a heading, an explanation and a route back",
+        "Error pages use the auth-style focused layout"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: templates/404.html, templates/500.html | VERIFY: hit a bad URL, confirm it is not the bare 'you are lost!' string",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.561Z",
+      "updatedAt": "2026-07-25T14:13:33.561Z"
+    },
+    {
+      "id": 49,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-13a Responsive pass across merged pages",
+      "ac": [
+        "No horizontal overflow at 390 on home, watch, portfolio, forum, admin",
+        "Touch targets >= 44px on primary controls"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: static/css/pixel-mantra-theme.css | VERIFY: at 390 width assert document.scrollWidth <= innerWidth on each page",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.669Z",
+      "updatedAt": "2026-07-25T14:13:33.669Z"
+    },
+    {
+      "id": 50,
+      "phase": 4,
+      "priority": 3,
+      "title": "UI-13b Accessibility pass",
+      "ac": [
+        "Every icon-only control has an accessible name",
+        "Focus visible on all interactive elements",
+        "Body text meets 4.5:1 in both themes"
+      ],
+      "ng": [],
+      "deps": [],
+      "status": "queued",
+      "branch": "",
+      "active": false,
+      "target": "",
+      "source": "plan",
+      "notes": "FILES: static/css/pixel-mantra-theme.css, component JSX | VERIFY: axe-style check for unnamed buttons and measure contrast on a sample in both themes",
+      "skills": [],
+      "answers": [],
+      "createdAt": "2026-07-25T14:13:33.756Z",
+      "updatedAt": "2026-07-25T14:13:33.756Z"
     }
   ],
   "inbox": [
     {
       "id": 3,
       "text": "Re-slice all oversized UI-* tasks (22-34) into small verifiable units per the v3 rule: each = a focused change with explicit target files + one verify step (e.g. split a page task into shell / main block / secondary rail / responsive pass). Do this before building them.",
-      "status": "new",
+      "status": "processed",
       "createdAt": "2026-07-25T14:10:51.211Z"
     },
     {
@@ -848,6 +1161,146 @@
     }
   ],
   "events": [
+    {
+      "id": 127,
+      "ts": "2026-07-25T14:29:05.177Z",
+      "msg": "run-lock released"
+    },
+    {
+      "id": 126,
+      "ts": "2026-07-25T14:29:05.084Z",
+      "msg": "sch-learn: +2 knowledge entries (validating unvalidated work, git add -A hazards)"
+    },
+    {
+      "id": 125,
+      "ts": "2026-07-25T14:28:03.654Z",
+      "msg": "task #3 -> merged (approved r1; merged to develop 50ebe3e (commit bf4f722). Backend + guarded seek were already correct and already live; the real AC-11 gap was that resume was silent - added a toast reusing the unused .pm-toast primitive (reviewer confirmed it renders, 156x47, not a repeat of the invisible-toast class of bug). Backend drm 24/25 (test_mock_default pre-existing: container DRM_PROVIDER=clearkey vs code default 'mock'). Frontend 212/212. LIMITATION: all seed videos are 4-9s vs RESUME_MIN_SECONDS=10, so no live seek-leave-return demo is possible on this data - re-verify when a longer video exists.)"
+    },
+    {
+      "id": 124,
+      "ts": "2026-07-25T14:18:39.816Z",
+      "msg": "task #2 answered -> requeued p1"
+    },
+    {
+      "id": 123,
+      "ts": "2026-07-25T14:15:23.175Z",
+      "msg": "task #2 -> blocked (Who can upload videos, and how much can they store? Option A (simple, recommended): Viewer = watch only; Creator = can upload; Admin = manages everything. Option B: finer roles (member/contributor/manager). Which limits to enforce: size per video, total storage per person, number of uploads. Example with A: a Creator gets 2 GB per video and 50 GB total; Viewers can't upload; Admins unlimited. Reply with roles + limits, or say 'use default' to accept Option A with 2 GB / 50 GB.)"
+    },
+    {
+      "id": 122,
+      "ts": "2026-07-25T14:14:03.808Z",
+      "msg": "task #3 -> building (claimed; attempt 1 (validation resume))"
+    },
+    {
+      "id": 121,
+      "ts": "2026-07-25T14:13:43.108Z",
+      "msg": "task #34 -> queued"
+    },
+    {
+      "id": 120,
+      "ts": "2026-07-25T14:13:43.045Z",
+      "msg": "task #33 -> superseded"
+    },
+    {
+      "id": 119,
+      "ts": "2026-07-25T14:13:42.977Z",
+      "msg": "task #32 -> superseded"
+    },
+    {
+      "id": 118,
+      "ts": "2026-07-25T14:13:42.886Z",
+      "msg": "task #31 -> superseded"
+    },
+    {
+      "id": 117,
+      "ts": "2026-07-25T14:13:42.825Z",
+      "msg": "task #30 -> superseded"
+    },
+    {
+      "id": 116,
+      "ts": "2026-07-25T14:13:42.764Z",
+      "msg": "task #29 -> superseded"
+    },
+    {
+      "id": 115,
+      "ts": "2026-07-25T14:13:42.679Z",
+      "msg": "task #27 -> superseded"
+    },
+    {
+      "id": 114,
+      "ts": "2026-07-25T14:13:42.594Z",
+      "msg": "task #26 -> superseded"
+    },
+    {
+      "id": 113,
+      "ts": "2026-07-25T14:13:33.756Z",
+      "msg": "task #50 added (plan): UI-13b Accessibility pass"
+    },
+    {
+      "id": 112,
+      "ts": "2026-07-25T14:13:33.670Z",
+      "msg": "task #49 added (plan): UI-13a Responsive pass across merged pages"
+    },
+    {
+      "id": 111,
+      "ts": "2026-07-25T14:13:33.561Z",
+      "msg": "task #48 added (plan): UI-12b Error pages: 404 and 500"
+    },
+    {
+      "id": 110,
+      "ts": "2026-07-25T14:13:33.457Z",
+      "msg": "task #47 added (plan): UI-12a Static pages: about, contact, terms"
+    },
+    {
+      "id": 109,
+      "ts": "2026-07-25T14:13:33.389Z",
+      "msg": "task #46 added (plan): UI-11b Manage tables (media/users/comments)"
+    },
+    {
+      "id": 108,
+      "ts": "2026-07-25T14:13:33.279Z",
+      "msg": "task #45 added (plan): UI-11a Upload page guidance"
+    },
+    {
+      "id": 107,
+      "ts": "2026-07-25T14:13:33.197Z",
+      "msg": "task #44 added (plan): UI-10b Embed page"
+    },
+    {
+      "id": 106,
+      "ts": "2026-07-25T14:13:33.124Z",
+      "msg": "task #43 added (plan): UI-10a Playlist page"
+    },
+    {
+      "id": 105,
+      "ts": "2026-07-25T14:13:33.054Z",
+      "msg": "task #42 added (plan): UI-9b Categories taxonomy tiles"
+    },
+    {
+      "id": 104,
+      "ts": "2026-07-25T14:13:32.962Z",
+      "msg": "task #41 added (plan): UI-9a Search results page"
+    },
+    {
+      "id": 103,
+      "ts": "2026-07-25T14:13:32.892Z",
+      "msg": "task #40 added (plan): UI-7b Profile sub-pages: about, playlists, liked, history"
+    },
+    {
+      "id": 102,
+      "ts": "2026-07-25T14:13:32.816Z",
+      "msg": "task #39 added (plan): UI-7a Profile tab row: label the icon-only controls"
+    },
+    {
+      "id": 101,
+      "ts": "2026-07-25T14:13:32.716Z",
+      "msg": "task #38 added (plan): UI-6b Forum topic + reply thread"
+    },
+    {
+      "id": 100,
+      "ts": "2026-07-25T14:13:32.621Z",
+      "msg": "task #37 added (plan): UI-6a Forum index: category list + recent activity"
+    },
     {
       "id": 99,
       "ts": "2026-07-25T14:11:36.876Z",
@@ -1346,14 +1799,9 @@
   ],
   "findings": [],
   "seq": {
-    "task": 36,
+    "task": 50,
     "inbox": 3,
-    "event": 99,
+    "event": 127,
     "finding": 0
-  },
-  "lock": {
-    "holder": "sch-run",
-    "ts": "2026-07-25T14:11:36.875Z",
-    "ttlMs": 2700000
   }
 }
