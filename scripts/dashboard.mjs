@@ -265,9 +265,19 @@ const PAGE = `<!doctype html>
   .ph.running .ph-n{color:var(--green)}
   .cat.running{border-color:rgba(74,246,38,.55)}
   .ibx{border:1px solid var(--line);border-left:2px solid var(--amber);background:var(--panel);margin-bottom:6px}
-  .ibx-h{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);background:#141414}
-  .ibx-t{font-size:10px;color:var(--dim)}
-  .ibx-b{padding:9px 11px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;color:var(--fg);opacity:.92;max-height:180px;overflow-y:auto}
+  .ibx-h{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#141414;cursor:pointer;list-style:none}
+  .ibx-h::-webkit-details-marker{display:none}
+  .ibx-h::before{content:"▸";color:var(--amber);flex:none}
+  .ibx[open]>.ibx-h{border-bottom:1px solid var(--line)}
+  .ibx[open]>.ibx-h::before{content:"▾"}
+  .ibx-h:hover{background:#191919}
+  .ibx-id{font-size:10px;letter-spacing:.08em;color:var(--amber);font-weight:700;flex:none}
+  .ibx-t{font-size:10px;color:var(--dim);flex:none}
+  .ibx-pv{font-size:11.5px;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ibx-b{padding:9px 11px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;color:var(--fg);opacity:.92;max-height:240px;overflow-y:auto}
+  .ibx-f{padding:0 10px 9px;display:flex;justify-content:flex-end}
+  /* tasks planned out of an inbox submission carry its id, so a request is traceable */
+  .srcchip{font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--amber);border:1px solid rgba(227,179,65,.5);padding:1px 5px;margin-left:6px}
   .livenow{color:var(--green);text-transform:none;letter-spacing:0;font-size:11px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media(prefers-reduced-motion:reduce){.tk.running{animation:none;box-shadow:inset 0 0 0 1px var(--green)}}
   /* LOOP HEALTH — is the loop actually running, or is the page just "live"? */
@@ -364,11 +374,13 @@ function loopHealth(run){
   if(late)return{cls:"late",label:"LOOP LATE",detail:"last "+base,dead:false};
   return{cls:"ok",label:"LOOP RUNNING",detail:base,dead:false};
 }
-function loopBar(run,pid){
+function loopBar(run){
   const h=loopHealth(run);
+  // --project is auto-detected from the folder the terminal is in; showing it
+  // makes the command longer than it needs to be.
   return '<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
     '<span class="lx">'+esc(h.detail)+'</span>'+
-    (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop 30m /sch-run'+(pid?" --project "+esc(pid):"")+'</span>':'')+
+    (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop 30m /sch-run</span>':'')+
     '</div>';
 }
 
@@ -390,6 +402,12 @@ function parseOpts(notes){
     if(v&&v.length<=24&&!out.includes(v)&&!/^(and|or|the|a|an|of|to)$/.test(v))out.push(v);
   }
   return out.slice(0,5);
+}
+// a task planned out of an inbox submission carries its id (source "inbox#6"),
+// so you can see what your message became — and filter the table by it
+function srcChip(t){
+  const m=/^inbox#(\\d+)$/.exec(t.source||"");
+  return m?' <span class="srcchip" title="Planned from your inbox submission #'+m[1]+' — type inbox#'+m[1]+' in the filter to see all of them">inbox #'+m[1]+'</span>':'';
 }
 // one answer block, used by BOTH the project page and the home page. From home,
 // stay on home after answering so several projects can be cleared in a row.
@@ -519,7 +537,7 @@ function projApply(id,r){
   document.getElementById("clk").textContent=clock();
   document.getElementById("pname").textContent=p.name;
   document.getElementById("pmeta").innerHTML=\`\${esc(p.domain)} · \${esc(p.path)||"no path"} \${OFF(p.domain)?(sc.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>'):''}\${sc.halt?' <span class="badge b-halt">halt</span>':''}\`;
-  set("loop",loopBar(s.run,id));
+  set("loop",loopBar(s.run));
   // brief + tech stack — what this project actually is, at a glance
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
@@ -608,9 +626,10 @@ function projApply(id,r){
   // superseded = replaced by smaller/other tasks; hidden unless explicitly shown
   if(!taskFilter.showSuperseded && taskFilter.status!=="superseded")ts=ts.filter(t=>t.status!=="superseded");
   if(taskFilter.status)ts=ts.filter(t=>t.status===taskFilter.status);
-  if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" P"+t.phase).toLowerCase().includes(q));}
+  // searching "inbox#6" lists exactly what that submission became
+  if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" "+(t.source||"")+" P"+t.phase).toLowerCase().includes(q));}
   const trows=ts.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
-    <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
+    <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${srcChip(t)}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
     <td data-l="Phase">\${t.category?'<span class="catchip">'+esc(t.category)+'</span> ':''}\${esc(t.phaseName||("P"+t.phase))}</td><td data-l="Pri">\${t.priority??3}</td>
     <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
     <td data-l="Target">\${esc(t.target||"—")}</td>
@@ -634,12 +653,18 @@ function projApply(id,r){
   const nb=s.inbox.filter(i=>i.status==="new");
   // Inbox: what you submitted, waiting for the next loop pass to plan it.
   // Full text (so you can re-read what you sent) + delete if you change your mind.
+  // Inbox: what you submitted, waiting for the next pass to plan it. Collapsed —
+  // a submission is a receipt, not a working surface; the queue is what matters.
+  // INBOX #n is the trace id: tasks planned from it are tagged with the same id.
   set("inboxsec",nb.length?'<h2>inbox — waiting to be planned by the next loop pass<span class="n mono">'+nb.length+'</span></h2>'+
-    nb.map(i=>'<div class="ibx"><div class="ibx-h"><span class="ibx-t mono">submitted '+esc(i.createdAt.slice(0,16).replace("T"," "))+'</span>'+
-      '<form class="inl confirm-del" method="POST" action="/inbox-del">'+csrf+
+    nb.map(i=>'<details class="ibx"><summary class="ibx-h"><span class="ibx-id">INBOX #'+i.id+'</span>'+
+      '<span class="ibx-t mono">submitted '+esc(i.createdAt.slice(0,16).replace("T"," "))+'</span>'+
+      '<span class="ibx-pv">'+esc(i.text.replace(/\\s+/g," ").slice(0,70))+(i.text.length>70?'…':'')+'</span></summary>'+
+      '<div class="ibx-b">'+esc(i.text)+'</div>'+
+      '<div class="ibx-f"><form class="inl confirm-del" method="POST" action="/inbox-del">'+csrf+
       '<input type="hidden" name="project" value="'+esc(id)+'"><input type="hidden" name="id" value="'+i.id+'">'+
       '<button class="mini danger" title="Delete this submission before the loop plans it">delete</button></form></div>'+
-      '<div class="ibx-b">'+esc(i.text)+'</div></div>').join(""):"");
+      '</details>').join(""):"");
   set("actsec",'<h2>activity<span class="n mono">'+s.events.length+'</span></h2>'+(s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'));
   // keep skill picker selection in sync (only when not focused)
 }
