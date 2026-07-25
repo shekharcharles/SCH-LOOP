@@ -189,6 +189,17 @@ The subagent brief contains ONLY: the task id, its `AC-N`/`NG-N`, the project
    (design skill for UI, backend skill for API — best-fit, not all).
 4. **If a fix makes things worse, STOP guessing** — do 4-phase root-cause
    (systematic-debugging), don't pile on more edits.
+5. **Coding discipline (Karpathy's 4 — non-negotiable):**
+   - **Think before coding:** state your assumptions explicitly; if the task is
+     ambiguous or you're confused, ask ONE question — do not silently guess.
+   - **Simplicity first:** implement only what the AC asks. No speculative
+     abstractions, no "future-proofing", no unrequested error handling. If it can
+     be 50 lines instead of 200, write 50. Ruthlessly reduce.
+   - **Surgical:** change only code directly required by this task. Match the
+     existing style — no drive-by "improvements". Remove only dead code your own
+     change created. Preserve existing patterns.
+   - **Goal-driven:** treat the AC as the pass/fail success criteria; write the
+     test first, then satisfy it. Nothing irrelevant gets written or left behind.
 
 The subagent returns: what changed, files touched, test/lint/type results, and
 any blocked question. The orchestrator records it and moves to validate/review.
