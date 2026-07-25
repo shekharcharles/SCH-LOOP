@@ -283,7 +283,7 @@ function projSkeleton(id){
     <section id="phase"></section>
     <section id="tasksec"></section>
     <section id="findsec"></section>
-    <details class="box" id="skillbox"><summary>required skills — enforced (loop must invoke them to complete a task)</summary><div class="boxin" id="skillin"></div></details>
+    <details class="box" id="skillbox"><summary>design skills for UI tasks — loop uses the best-fit one per UI task (backend tasks unaffected)</summary><div class="boxin" id="skillin"></div></details>
     <details class="box"><summary>add lead / task &amp; activity</summary><div class="boxin">
       <form class="row-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" placeholder="NEW LEAD / TASK — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
       <section id="inboxsec"></section><section id="actsec"></section></div></details>\`;

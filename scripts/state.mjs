@@ -153,6 +153,12 @@ export function addFinding(state, f) {
 // past CHAIN_MAX (default 3) to avoid infinite self-spawning.
 export const CHAIN_MAX = 3;
 
+// Is this task UI/design work? (drives whether the design-skill gate applies)
+const DESIGN_RE = /\b(ui|ux|design|redesign|restyle|frontend|front-end|css|style|styling|theme|layout|component|primitive|mockup|page|screen|dashboard|responsive|accessib|animation|motion|visual)\b/i;
+export function isDesignTask(t) {
+  return DESIGN_RE.test((t.title || "") + " " + (t.notes || "") + " " + (t.ac || []).join(" "));
+}
+
 export function nextReady(state) {
   return state.tasks
     .filter((t) => t.status === "queued")
@@ -486,15 +492,16 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
-    // HARD GATE: cannot mark a task done unless the project's required skills were
-    // actually invoked (verified against the transcript). Unfakeable. Override
-    // only with --force (logged) when a required skill genuinely does not apply.
+    // HARD GATE (smart): a UI/design task cannot complete unless AT LEAST ONE of
+    // the project's chosen design skills was actually invoked (transcript-verified,
+    // unfakeable). Only fires on design tasks — backend/recon/etc are never blocked.
+    // The loop picks the best-fit skill per task; it need not use all of them.
     if (flags.status === "merged" && !(flags.force === "true")) {
       const req = getProject(id)?.requiredSkills ?? [];
-      if (req.length) {
+      if (req.length && isDesignTask(t)) {
         const inv = invokedSkills(Date.now() - Number(flags.window ?? 120) * 60000);
-        const missing = req.filter((sk) => !inv.has(sk) && !inv.has(sk.split(":").pop()));
-        if (missing.length) die(`MERGE BLOCKED — required skill(s) not invoked in transcript: ${missing.join(", ")}. Invoke them + redo the work, or pass --force with a reason if genuinely N/A.`);
+        const used = req.filter((sk) => inv.has(sk) || inv.has(sk.split(":").pop()));
+        if (!used.length) die(`MERGE BLOCKED — "${t.title}" is a UI/design task but none of your design skills were used (${req.join(", ")}). Use the best-fit one for this task, or pass --force with a reason if this task is genuinely not design work.`);
       }
     }
     if (flags.status === "merged" && flags.force === "true") event(s, `merge FORCED past skill gate: ${flags.note || "(no reason)"}`);
