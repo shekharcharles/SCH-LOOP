@@ -292,7 +292,7 @@ function projSkeleton(id){
     <section id="attn"></section>
     <section id="scope"></section>
     <section id="chips"></section>
-    <form class="row-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button>Add</button></form>
+    <form class="row-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" title="Describe a feature, fix or lead — the next loop pass reasons it into the right place in the queue" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button title="Send to the inbox — the next loop pass plans it into the queue">Add</button></form>
     <section id="inboxsec"></section>
     <section id="phase"></section>
     <section id="tasksec"></section>
@@ -300,7 +300,11 @@ function projSkeleton(id){
     <details class="box"><summary>activity log</summary><div class="boxin"><section id="actsec"></section></div></details>\`;
   for(const k in CACHE)delete CACHE[k];
 }
-function actForm(pid,id,a,l,c){return \`<form class="inl" method="POST" action="/task"><input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}">\${l}</button></form>\`;}
+// every action button carries a tooltip + aria-label so an icon is never mystery meat
+const ACT_TIP={bump:"Bump to the front of the queue (priority 1)",hold:"Put on hold — moves to awaiting, loop skips it",
+  requeue:"Requeue — put it back in the queue to be retried",close:"Close as superseded — replaced by other tasks, stop showing it"};
+function actForm(pid,id,a,l,c){const tip=ACT_TIP[a]||a;
+  return \`<form class="inl" method="POST" action="/task"><input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${tip}" aria-label="\${tip}">\${l}</button></form>\`;}
 function projApply(id,r){
   if(r.error){location.href="/";return;}
   const p=r.project,s=r.state,sc=p.scope||{},by=(st)=>s.tasks.filter(t=>t.status===st);
@@ -321,7 +325,11 @@ function projApply(id,r){
   }
   set("attn",attnHtml);
   // scope
-  const scForm=(a,l,c)=>\`<form class="inl" method="POST" action="/scope"><input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}">\${l}</button></form>\`;
+  const SCOPE_TIP={halt:"HALT — immediately stop all active work on this engagement",
+    resume:"Resume — lift the halt and let active work continue",
+    arm:"Arm — authorize active testing against the in-scope targets",
+    disarm:"Disarm — revoke authorization; active tasks will be refused"};
+  const scForm=(a,l,c)=>\`<form class="inl" method="POST" action="/scope"><input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${SCOPE_TIP[a]||a}" aria-label="\${SCOPE_TIP[a]||a}">\${l}</button></form>\`;
   set("scope",OFF(p.domain)?\`<div class="scope"><b>SCOPE //</b> \${sc.authorized?'authorized':'NOT authorized'}\${sc.halt?' · <span style="color:var(--red)">HALT</span>':''}<br>TARGETS: \${esc((sc.targets||[]).join(", "))||"(none)"}<br>REF: \${esc(sc.ref)||"(none)"}\${sc.expiry?' · EXPIRES '+esc(sc.expiry):''}<div class="acts">\${sc.halt?scForm("resume","▶ resume","go"):scForm("halt","■ halt","danger")} \${sc.authorized?scForm("disarm","disarm"):scForm("arm","arm","go")}</div></div>\`:"");
   // chips
   const done=by("merged").length,total=s.tasks.filter(t=>t.status!=="superseded").length,pct=total?Math.round(done/total*100):0;
@@ -348,9 +356,9 @@ function projApply(id,r){
   const statuses=["","queued","building","review","changes","blocked","stuck","merged","superseded"];
   const supN=s.tasks.filter(t=>t.status==="superseded").length;
   set("tasksec",'<h2>tasks<span class="n mono">'+ts.length+' shown / '+total+'</span></h2>'+
-    '<div class="toolbar"><input id="tq" placeholder="filter tasks…" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
-    '<select id="ts" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
-    (supN?'<button class="mini" onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
+    '<div class="toolbar"><input id="tq" placeholder="filter tasks…" title="Filter by task title, note or phase" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
+    '<select id="ts" title="Show only tasks in this status" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
+    (supN?'<button class="mini" title="Superseded = tasks replaced by other/smaller tasks. Their work still exists elsewhere; hidden by default to keep the queue clean." onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
     '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>');
   // findings
   const srank=(x)=>["critical","high","medium","low","info"].indexOf((x||"info").toLowerCase());
