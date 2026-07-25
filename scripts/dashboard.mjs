@@ -607,7 +607,13 @@ function projApply(id,r){
     (ph.length?'<div class="phase-strip">'+phHtml+'</div>':'<div class="empty">no phases planned yet — run /sch-plan</div>'));
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
-  const rowActs=(t)=>t.status==="queued"?actForm(id,t.id,"bump","▲")+actForm(id,t.id,"hold","⏸"):(t.status==="blocked"||t.status==="stuck")?actForm(id,t.id,"requeue","↻","go"):"";
+  // A BLOCKED task is waiting on an ANSWER. Requeueing it without one just sends
+  // it back to be asked again — so offer the answer box, not a requeue button.
+  // "stuck" is different: it failed rather than asked, so retrying is valid.
+  const rowActs=(t)=>t.status==="queued"?actForm(id,t.id,"bump","▲")+actForm(id,t.id,"hold","⏸")
+    :t.status==="stuck"?actForm(id,t.id,"requeue","↻","go")
+    :t.status==="blocked"?'<a class="mini go" href="#attn" title="This task is waiting on your answer — requeueing it without one only makes the loop ask again">answer ↑</a>'
+    :"";
   let ts=s.tasks.slice().sort((a,b)=>(a.priority??3)-(b.priority??3)||a.phase-b.phase||a.id-b.id);
   // superseded = replaced by smaller/other tasks; hidden unless explicitly shown
   if(!taskFilter.showSuperseded && taskFilter.status!=="superseded")ts=ts.filter(t=>t.status!=="superseded");
