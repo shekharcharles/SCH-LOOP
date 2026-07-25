@@ -2,22 +2,50 @@
   "//": "SCH Loop — copy to <project>/.claude/settings.json. Pre-approves safe commands (fewer prompts than a YOLO wrapper, and safer — you only see the ones that matter), auto-formats after edits, and makes the secret-scan an UNBYPASSABLE pre-commit hook. Adjust the format command to the project's formatter.",
   "permissions": {
     "allow": [
-      "Bash(git status)", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)",
-      "Bash(git diff:*)", "Bash(git log:*)", "Bash(git checkout:*)", "Bash(git branch:*)",
-      "Bash(git rebase:*)", "Bash(git merge:*)", "Bash(git worktree:*)",
-      "Bash(node:*)", "Bash(npm run:*)", "Bash(npm test:*)", "Bash(yarn:*)", "Bash(pnpm:*)",
-      "Bash(pytest:*)", "Bash(python manage.py:*)", "Bash(ruff:*)", "Bash(eslint:*)", "Bash(prettier:*)",
-      "Bash(docker compose:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)",
-      "Edit(*)", "Write(*)"
+      "Bash(git status)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git checkout:*)",
+      "Bash(git branch:*)",
+      "Bash(git rebase:*)",
+      "Bash(git merge:*)",
+      "Bash(git worktree:*)",
+      "Bash(node:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(yarn:*)",
+      "Bash(pnpm:*)",
+      "Bash(pytest:*)",
+      "Bash(python manage.py:*)",
+      "Bash(ruff:*)",
+      "Bash(eslint:*)",
+      "Bash(prettier:*)",
+      "Bash(docker compose:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Edit(*)",
+      "Write(*)"
     ],
-    "deny": ["Bash(git commit --no-verify:*)", "Bash(git push --no-verify:*)"]
+    "deny": [
+      "Bash(git commit --no-verify:*)",
+      "Bash(git push --no-verify:*)"
+    ]
   },
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "node $HOME/.claude/SCH-loop/scripts/secret-scan-hook.mjs" }
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/SCH-loop/scripts/secret-scan-hook.mjs"
+          }
         ]
       }
     ],
@@ -25,7 +53,32 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "npx --no-install prettier --write $CLAUDE_FILE_PATHS 2>/dev/null || true" }
+          {
+            "type": "command",
+            "command": "npx --no-install prettier --write $CLAUDE_FILE_PATHS 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'node \"$HOME/.claude/SCH-loop/scripts/dashboard-ctl.mjs\" start'"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'node \"$HOME/.claude/SCH-loop/scripts/dashboard-ctl.mjs\" stop'"
+          }
         ]
       }
     ]

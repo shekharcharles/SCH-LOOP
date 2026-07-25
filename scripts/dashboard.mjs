@@ -7,10 +7,9 @@
 
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { readFileSync, readdirSync, existsSync, watch } from "node:fs";
+import { readFileSync, existsSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
@@ -21,25 +20,6 @@ const REGISTRY = join(ROOT, "projects.json");
 const PORT = process.env.SCH_PORT || 4600;
 const BIND = process.env.SCH_BIND || "0.0.0.0";
 const json = (res, b) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
-
-// ---- skill catalog (categorized) ----
-const DESIGN = new Set(["impeccable", "taste-skill", "taste-skill-v1", "redesign-skill", "design-dna", "stitch-skill", "soft-skill", "minimalist-skill", "brutalist-skill", "brandkit", "image-to-code-skill", "gpt-tasteskill"]);
-const categorize = (n) => n.startsWith("gsap-") || n === "motion-design" ? "Motion / GSAP" : n.startsWith("threejs-") ? "3D / Three.js" : n.startsWith("imagegen-") ? "Image generation" : DESIGN.has(n) ? "Design & UI" : "Other";
-const CAT_ORDER = ["Design & UI", "Motion / GSAP", "Image generation", "3D / Three.js", "Other"];
-function skillCatalog() {
-  const root = join(homedir(), ".claude", "skills");
-  if (!existsSync(root)) return [];
-  const out = [];
-  for (const name of readdirSync(root)) {
-    if (name.startsWith("sch-")) continue;
-    const f = join(root, name, "SKILL.md");
-    if (!existsSync(f)) continue;
-    let desc = "";
-    try { desc = (readFileSync(f, "utf8").slice(0, 1200).match(/^description:\s*(.+)$/m)?.[1] || "").slice(0, 130); } catch {}
-    out.push({ name, desc, cat: categorize(name), legacy: name.endsWith("-v1") });
-  }
-  return out.sort((a, b) => CAT_ORDER.indexOf(a.cat) - CAT_ORDER.indexOf(b.cat) || a.name.localeCompare(b.name));
-}
 
 // ---- data shapes pushed to clients ----
 function rollup() {
@@ -142,15 +122,9 @@ const server = createServer(async (req, res) => {
       if (proj) { proj.scope = proj.scope || { targets: [], outOfScope: [], halt: false }; if (action === "halt") proj.scope.halt = true; else if (action === "resume") proj.scope.halt = false; else if (action === "disarm") proj.scope.authorized = false; else if (action === "arm") proj.scope.authorized = true; saveRegistry(reg); const s = loadState(id); event(s, `dashboard: scope ${action}`); saveState(id, s); }
       return back(id);
     }
-    if (url.pathname === "/skills") {
-      const id = p.get("project"); const reg = loadRegistry(); const proj = reg.projects.find((x) => x.id === id);
-      if (proj) { proj.requiredSkills = p.getAll("skills").filter(Boolean); saveRegistry(reg); const s = loadState(id); event(s, `required skills: ${proj.requiredSkills.join(", ") || "(none)"}`); saveState(id, s); }
-      return back(id);
-    }
     return forbid(res);
   }
 
-  if (url.pathname === "/api/skills") return json(res, skillCatalog());
   if (url.pathname === "/api/projects") return json(res, rollup());
   if (url.pathname === "/api/state") { const s = snapshot(url.searchParams.get("project")); return json(res, s); }
   if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE.replace("__CSRF__", CSRF)); return; }
@@ -336,22 +310,6 @@ const PAGE = `<!doctype html>
   .chips{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line)}
   .chip{background:var(--panel);padding:8px 11px;flex:1;min-width:82px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}.chip b{display:block;font-size:clamp(15px,2vw,18px);color:var(--fg);line-height:1;margin-bottom:2px}
   .chip.active b{color:var(--amber)}.chip.inprogress b,.chip.review b{color:var(--blue)}.chip.completed b{color:var(--green)}.chip.attention b,.chip.awaiting b,.chip.failed b{color:var(--red)}
-  /* collapsible skill picker */
-  details.box{border:1px solid var(--line);background:var(--panel);margin-bottom:8px}
-  details.box>summary{cursor:pointer;padding:9px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);user-select:none}
-  details.box[open]>summary{color:var(--fg);border-bottom:1px solid var(--line)}
-  .boxin{padding:12px 14px}
-  .sk-chip{background:var(--green);color:#000;font-size:10px;font-weight:700;padding:2px 8px;letter-spacing:.05em;text-transform:uppercase}
-  .sk-sel{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
-  .sk-search{width:100%;font-family:inherit;font-size:14px;padding:9px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);margin-bottom:8px}.sk-search:focus{outline:none;border-color:var(--green)}
-  .sk-list{max-height:300px;overflow-y:auto;border:1px solid var(--line);margin-bottom:8px}
-  .sk-cat>summary{cursor:pointer;padding:7px 10px;background:#141414;font-size:11px;text-transform:uppercase;letter-spacing:.08em;display:flex;gap:8px;align-items:center}
-  .sk-cn{font-weight:700;flex:1}.sk-cc{color:var(--dim)}
-  .sk-all{font-family:inherit;font-size:9px;text-transform:uppercase;padding:2px 7px;background:#222;color:var(--fg);border:1px solid var(--line);cursor:pointer}.sk-all:hover{border-color:var(--green);color:var(--green)}
-  .sk-item{display:flex;align-items:baseline;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px}.sk-item:hover{background:#171717}
-  .sk-item input{accent-color:#4af626}.sk-n{font-weight:700}.sk-d{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .sk-lg{font-size:9px;color:var(--red);border:1px solid var(--red);padding:0 4px;margin-left:4px}
-  .sk-save{font-family:inherit;padding:9px 16px;background:var(--green);color:#000;border:0;font-weight:700;font-size:11px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
   @media(max-width:640px){
     table.t thead{position:absolute;left:-9999px}
     table.t tbody tr{display:block;border:1px solid var(--line);border-left-width:3px;margin-bottom:6px}
@@ -369,7 +327,7 @@ const OFF=(d)=>OFFSET.has(d);
 const clock=()=>new Date().toISOString().slice(0,19).replace("T"," ")+" UTC";
 const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"],superseded:["SUPERSEDED","st-superseded"]};
 const PSTAT={new:["NEW","st-new"],inprogress:["IN PROGRESS","st-inprogress"],active:["ACTIVE","st-active"],attention:["FAILED / AWAITING","st-attention"],completed:["COMPLETED","st-completed"],idle:["IDLE","st-idle"]};
-let SKILLS=null, taskFilter={q:"",status:"",showSuperseded:false};
+let taskFilter={q:"",status:"",showSuperseded:false};
 const CSRF="__CSRF__";
 const csrf='<input type="hidden" name="csrf" value="'+CSRF+'">';
 
@@ -694,7 +652,6 @@ function projApply(id,r){
       '<button class="mini danger" title="Delete this submission before the loop plans it">delete</button></form></div>'+
       '</details>').join(""):"");
   set("actsec",'<h2>activity<span class="n mono">'+s.events.length+'</span></h2>'+(s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'));
-  // keep skill picker selection in sync (only when not focused)
 }
 function reapplyTasks(){ if(LAST&&LAST.project)projApply(qp("project"),LAST); }
 // delegated: confirm before deleting an unplanned inbox submission; and never
@@ -722,8 +679,6 @@ function fallback(txt,done){
   const ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.opacity="0";
   document.body.appendChild(ta);ta.select();try{document.execCommand("copy");done();}catch{}document.body.removeChild(ta);
 }
-
-// skills picker — plain string concat (no nested templates) + event delegation
 
 // ---- live stream (SSE) + graceful fallback ----
 let LAST=null, curProject=null, es=null;
