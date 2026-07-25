@@ -103,6 +103,15 @@ truth beyond the raw target.
 
 Then tell the user the single command to run: `/loop 15m /sch-run --project <cr-slug>`.
 
+## A2) Consistency check before planning (spec-kit "analyze")
+
+Before handing off to `/sch-plan`, cross-check the contract for **contradictions**
+— this catches the class of problem where a requirement silently reverses a
+binding constraint (e.g. "allow public browsing" vs an existing `NG: login-and-
+approval gated`). For each acceptance criterion, confirm no `NG` forbids it and
+no two criteria conflict. If a contradiction exists, surface it to the user and
+resolve it in the contract **now** — do not let the loop discover it mid-build.
+
 ## B) Dev — app / tool
 
 Research the code first. Interview in rounds (1-4 questions, options, recommended
@@ -119,6 +128,13 @@ ship the same observable behavior?* No round cap. Write `<path>/PRD.md`:
 ## Constraints
 ## How to verify (product level)
 ```
+
+**Write `CONSTITUTION.md`** in the project path — the non-negotiables every build
+pass must respect (so a fresh-context subagent inherits them without re-deriving):
+tech stack + versions, folder/naming conventions, the design system source of
+truth, testing requirement, "never do" list (e.g. never commit secrets/CLAUDE.md,
+never rename a shared i18n key without updating all locales, never edit outside
+the task's files). Keep it short. `sch-run` feeds it into every task's subagent.
 
 Register + plan:
 

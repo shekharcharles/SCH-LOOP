@@ -143,9 +143,39 @@ active tooling ever runs against an out-of-scope or unauthorized target.
 Then claim: `task-set --project <id> <taskId> --status building --note claimed`.
 Re-read it; if it changed under you, drop and re-pick.
 
-## 5. Execute (per pack method)
+## 5. Execute — in a FRESH-CONTEXT subagent, one task only (v3, kills rot + drift)
 
-Dispatch to the pack's installed skills — **use them, do not reinvent**.
+**Do NOT build inline in the loop session.** The accumulating loop context is what
+made a build task wander into product-strategy essays and burn tokens. Instead,
+**spawn a fresh `Agent`** (model `sonnet`) with a tight brief for this ONE task,
+clean context. The loop session stays a lean orchestrator.
+
+The subagent brief contains ONLY: the task id, its `AC-N`/`NG-N`, the project
+`path` + `CONSTITUTION.md`/`HANDOFF.md`, and the pack's relevant phase. Tell it:
+
+1. **Stay strictly on this task.** Implement only its `AC-N`. **Do not redesign
+   the product, do not amend the PRD, do not touch adjacent features.** If you
+   discover a product/scope decision (e.g. "this contradicts NG-4"), **do not act
+   on it** — return it as a one-line blocked question for the operator. Wandering
+   off-task is the failure we are eliminating.
+2. **Ground in the REAL code before editing** (this fixes the regressions):
+   - Before renaming/removing any symbol, key, class, or string, **grep every
+     usage** and update all of them, or don't rename. (A `translateString("SAVE")`
+     key lives in 21 locale files — never change it blind.)
+   - Before writing CSS/DOM, **read the actual markup** the selectors target — do
+     not style against assumed structure.
+   - Verify the element/class you rely on actually exists and co-occurs.
+3. **TDD where it applies:** write/adjust the test first, watch it fail, then make
+   it pass (superpowers RED-GREEN). Dispatch to the fitting installed skill
+   (design skill for UI, backend skill for API — best-fit, not all).
+4. **If a fix makes things worse, STOP guessing** — do 4-phase root-cause
+   (systematic-debugging), don't pile on more edits.
+
+The subagent returns: what changed, files touched, test/lint/type results, and
+any blocked question. The orchestrator records it and moves to validate/review.
+
+If an objective is ambiguous, conflicts with an `NG`/RoE, or needs a human
+decision, go to step 7-blocked — never guess.
 
 **Actually invoke them.** Reading a skill's name in `packs/*.md` is NOT dispatch.
 For each skill the task needs, call it with the **Skill tool** so the invocation
@@ -208,7 +238,15 @@ subtle. It returns `approved` / `changes` / `escalate`.
 - `escalate` → `task-set --status blocked`, end pass.
 - `approved` → **complete** per the pack, after re-verifying live state:
   - `git-merge` (dev): tree clean + branch still on reviewed commit + tests
-    green → merge to default, delete branch.
+    green. **SECRET-SCAN GATE before every commit/push** — the loop must never
+    push a secret:
+    ```bash
+    git add -A && node <SCH_HOME>/scripts/secret-scan.mjs   # exit 1 = BLOCKED
+    ```
+    If it exits 1, **do not commit** — remove the secret / gitignore the file /
+    use env vars, re-stage, re-scan. Never `--force` past it. Also confirm
+    `CLAUDE.md`, `.env*`, keys are git-ignored. Only on exit 0 → commit (with the
+    changelog entry) → merge to default → delete branch → push.
   - `finding-logged` / `objective-logged` (offensive): record each result with
     `state.mjs finding-add` — `validated` (with PoC evidence path) for issues,
     `tested-clean` for classes that held (this proves coverage). Write the
