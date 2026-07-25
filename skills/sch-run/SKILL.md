@@ -101,8 +101,15 @@ The single most important step for cost. Make ONE call before reading any pack,
 knowledge, PRD, or scope:
 
 ```bash
-node scripts/state.mjs pass-gate --project <id>
+node scripts/state.mjs pass-gate --project <id> --interval <loop interval in minutes>
 ```
+
+Pass `--interval` with the interval `/loop` is running at (e.g. `--interval 30`
+for `/loop 30m /sch-run`). This call is also the loop's **heartbeat** — it stamps
+`state.run` with the pass number and timestamp, which is the only way the
+dashboard can tell a healthy idle loop from a cron that died. Skip the flag and
+the dashboard falls back to a 45-minute grace window; skip the call entirely and
+the dashboard shows **LOOP NOT RUNNING**, which is correct — it isn't.
 
 - **`BUSY`** → another pass is still running. **STOP the pass right here.** Output
   one short line ("pass skipped — another running") and end. Do NOT load the pack,

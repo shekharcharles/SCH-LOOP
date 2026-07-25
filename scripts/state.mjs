@@ -458,14 +458,25 @@ const commands = {
   // the heavy pack/knowledge/PRD. Decides in a few tokens whether the pass should
   // do anything at all — the main lever against token burn on idle/overlapping passes.
   "pass-gate"({ flags }) {
-    const s = loadState(pid(flags));
+    const id = pid(flags);
+    const s = loadState(id);
     const l = s.lock, ttl = l?.ttlMs ?? 45 * 60000;
-    if (l && Date.now() - new Date(l.ts).getTime() < ttl) return out("BUSY");        // another pass running → exit
-    const changes = s.tasks.some((t) => t.status === "changes");
-    const inbox = s.inbox.some((i) => i.status === "new");
-    const ready = !!nextReady(s);
-    if (changes || inbox || ready) return out("WORK");                                // real work → proceed
-    out("IDLE");                                                                      // nothing to do → exit cheaply
+    let verdict;
+    if (l && Date.now() - new Date(l.ts).getTime() < ttl) verdict = "BUSY";           // another pass running → exit
+    else {
+      const changes = s.tasks.some((t) => t.status === "changes");
+      const inbox = s.inbox.some((i) => i.status === "new");
+      verdict = (changes || inbox || !!nextReady(s)) ? "WORK" : "IDLE";               // real work → proceed
+    }
+    // HEARTBEAT — this is the only call guaranteed to happen on every pass, so it
+    // is where "the loop is alive" gets recorded. Without it the dashboard cannot
+    // tell a healthy idle loop from a cron that died hours ago: both look empty.
+    // --interval <minutes> lets the dashboard compute when the next pass is due.
+    const prev = s.run ?? {};
+    const interval = Number(flags.interval ?? prev.intervalMin ?? 0) || 0;
+    s.run = { lastPass: now(), passN: (prev.passN ?? 0) + 1, verdict, intervalMin: interval };
+    saveState(id, s);
+    out(verdict);
   },
 
   "provenance"({ flags }) {

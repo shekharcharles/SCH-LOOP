@@ -35,6 +35,19 @@
         "gsap-utils",
         "motion-design",
         "output-skill"
+      ],
+      "description": "A private, DRM-protected video-sharing and discussion platform for a creative community — built by customizing MediaCMS. Members upload work, watch encrypted streams, and discuss in a forum, with admin moderation and LMS/SSO integration.",
+      "stack": [
+        "Django",
+        "Django REST",
+        "React SPA (TypeScript)",
+        "PostgreSQL",
+        "Redis",
+        "Celery",
+        "Nginx",
+        "Docker",
+        "FFMPEG + Bento4 HLS",
+        "video.js"
       ]
     }
   ],
