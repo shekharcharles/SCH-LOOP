@@ -198,6 +198,7 @@ const PAGE = `<!doctype html>
   .pp .pmeta{opacity:.65;padding-left:13px;font-size:10px}
   .pbar{height:3px;background:#222;margin:5px 0 0 13px}
   .pbar i{display:block;height:100%;background:var(--green)}
+  .pp.clickable{cursor:pointer}.pp.clickable:hover{background:#1b1b1b}
   .pp{font-size:11px;padding:7px 10px;background:var(--panel);text-transform:uppercase;letter-spacing:.03em;min-width:0}
   .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
   .pp.st-merged .d,.pp.st-completed .d{background:var(--green)}.pp.st-building .d{background:var(--amber)}.pp.st-review .d,.pp.st-changes .d{background:var(--blue)}.pp.st-queued .d{background:var(--dim)}.pp.st-blocked .d,.pp.st-stuck .d{background:var(--red)}
@@ -255,7 +256,7 @@ const OFF=(d)=>OFFSET.has(d);
 const clock=()=>new Date().toISOString().slice(0,19).replace("T"," ")+" UTC";
 const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"],superseded:["SUPERSEDED","st-superseded"]};
 const PSTAT={new:["NEW","st-new"],inprogress:["IN PROGRESS","st-inprogress"],active:["ACTIVE","st-active"],attention:["FAILED / AWAITING","st-attention"],completed:["COMPLETED","st-completed"],idle:["IDLE","st-idle"]};
-let SKILLS=null, taskFilter={q:"",status:"",showSuperseded:false};
+let SKILLS=null, taskFilter={q:"",status:"",phase:"",showSuperseded:false};
 
 // --- section patcher: write only sections whose HTML changed, and never a
 // --- section the user is currently focused in (protects inputs/typing).
@@ -397,21 +398,22 @@ function projApply(id,r){
     const phases=groups[cat];
     const all=Object.values(phases).flat();
     const cd=all.filter(t=>t.status==="merged").length;
+    const nPh=Object.keys(phases).length;
     phHtml+='<div class="cat"><div class="cat-h"><span class="cat-n">'+esc(cat)+'</span>'+
-      '<span class="cat-c mono">'+cd+'/'+all.length+' tasks · '+Math.round(cd/all.length*100)+'%</span></div>';
+      '<span class="cat-c mono">'+nPh+' phase'+(nPh>1?'s':'')+' · '+cd+'/'+all.length+' tasks · '+Math.round(cd/all.length*100)+'%</span></div>';
     for(const name of Object.keys(phases)){
       const list=phases[name], d=list.filter(t=>t.status==="merged").length;
       const active=list.find(t=>t.status==="building"||t.status==="review"||t.status==="changes");
       const blocked=list.find(t=>t.status==="blocked"||t.status==="stuck");
       const state=blocked?blocked.status:(active?active.status:(d===list.length?"merged":"queued"));
-      phHtml+='<div class="pp st-'+state+'" title="'+esc(name)+' — '+d+' of '+list.length+' complete">'+
+      phHtml+='<div class="pp st-'+state+' clickable" data-phase="'+esc(name)+'" title="Phase: '+esc(name)+' — '+list.length+' task'+(list.length>1?'s':'')+', '+d+' complete. Click to list them below.">'+
         '<span class="t"><span class="d"></span>'+esc(name)+'</span>'+
-        '<span class="t pmeta">'+d+'/'+list.length+' · '+(STMAP[state]?STMAP[state][0]:state)+'</span>'+
+        '<span class="t pmeta">'+d+' of '+list.length+' tasks · '+(STMAP[state]?STMAP[state][0]:state)+'</span>'+
         '<div class="pbar"><i style="width:'+Math.round(d/list.length*100)+'%"></i></div></div>';
     }
     phHtml+='</div>';
   }
-  set("phase",'<h2>phase progress<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
+  set("phase",'<h2>phase progress — grouped by category › phase (click a phase to list its tasks)<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
     (ph.length?'<div class="phase-strip">'+phHtml+'</div>':'<div class="empty">no phases planned yet — run /sch-plan</div>'));
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
@@ -420,6 +422,7 @@ function projApply(id,r){
   // superseded = replaced by smaller/other tasks; hidden unless explicitly shown
   if(!taskFilter.showSuperseded && taskFilter.status!=="superseded")ts=ts.filter(t=>t.status!=="superseded");
   if(taskFilter.status)ts=ts.filter(t=>t.status===taskFilter.status);
+  if(taskFilter.phase)ts=ts.filter(t=>(t.phaseName||("Phase "+t.phase))===taskFilter.phase);
   if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" P"+t.phase).toLowerCase().includes(q));}
   const trows=ts.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
     <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
@@ -433,6 +436,7 @@ function projApply(id,r){
   set("tasksec",'<h2>tasks<span class="n mono">'+ts.length+' shown / '+total+'</span></h2>'+
     '<div class="toolbar"><input id="tq" placeholder="filter tasks…" title="Filter by task title, note or phase" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
     '<select id="ts" title="Show only tasks in this status" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
+    (taskFilter.phase?'<button class="mini go" title="Clear the phase filter" onclick="clearPhase()">phase: '+esc(taskFilter.phase)+' &#10005;</button>':'')+
     (supN?'<button class="mini" title="Superseded = tasks replaced by other/smaller tasks. Their work still exists elsewhere; hidden by default to keep the queue clean." onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
     '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>');
   // findings
@@ -449,6 +453,18 @@ function projApply(id,r){
   // keep skill picker selection in sync (only when not focused)
 }
 function reapplyTasks(){ if(LAST&&LAST.project)projApply(qp("project"),LAST); }
+// click a phase → list exactly that phase's tasks in the table below
+function filterPhase(name){
+  taskFilter.phase = taskFilter.phase===name ? "" : name;
+  reapplyTasks();
+  const el=document.getElementById("tasksec"); if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+}
+function clearPhase(){ taskFilter.phase=""; reapplyTasks(); }
+// delegated: clicking a phase card filters the task table to that phase
+document.addEventListener("click",function(e){
+  const c=e.target.closest&&e.target.closest(".pp[data-phase]");
+  if(c)filterPhase(c.dataset.phase);
+});
 // copy the brief + stack as plain text, ready to paste anywhere
 function copyBrief(btn){
   const b=btn.closest(".brief"); if(!b)return;
