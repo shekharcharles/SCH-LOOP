@@ -48,9 +48,19 @@ const scanLine = (file, text) => {
   for (const [name, re] of PATTERNS) if (re.test(text)) { findings.push({ file, why: name, sample: text.trim().slice(0, 80) }); return; }
 };
 
-// 1) filenames vs the block list
-const files = (ALL ? git("ls-files") : git("diff", "--cached", "--name-only")).split("\n").map((s) => s.trim()).filter(Boolean);
+// 1) filenames vs the block list.
+// A staged DELETION of a blocked file is the fix, not the offence — it is exactly
+// how a tracked CLAUDE.md gets untracked. Blocking it made the gate unescapable:
+// the only commit that could remove the file was the one commit it refused.
+const staged = ALL ? git("ls-files").split("\n").map((s) => ["A", s.trim()])
+  : git("diff", "--cached", "--name-status").split("\n").map((l) => {
+      const [st, ...rest] = l.split(/\t/);
+      return [(st || "").trim()[0] || "", rest.join("\t").trim()];
+    });
+const files = staged.filter(([st, f]) => f && st !== "D").map(([, f]) => f);
+const removed = staged.filter(([st, f]) => f && st === "D").map(([, f]) => f);
 for (const f of files) for (const re of BLOCK_FILES) if (re.test(f)) findings.push({ file: f, why: "sensitive file must not be committed" });
+for (const f of removed) for (const re of BLOCK_FILES) if (re.test(f)) console.log(`secret-scan: allowing removal of ${f} from the repo`);
 
 // 2) added content
 if (ALL) {
