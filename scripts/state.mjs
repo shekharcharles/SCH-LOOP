@@ -583,9 +583,33 @@ const commands = {
     // a status note (the "what it's doing" / the blocked question) sticks to the
     // task so the dashboard can surface it, not just log it as an event.
     if (flags.note !== undefined) t.notes = flags.note;
+    // Time each task so the loop interval and lock TTL are set from measurement,
+    // not from a guess. Clock starts when work actually begins (building) — not
+    // at creation, which would just measure how long it sat in the queue.
+    if (flags.status === "building" && !t.startedAt) t.startedAt = now();
+    if (t.startedAt && (flags.status === "merged" || flags.status === "stuck")) {
+      t.durationMs = Date.now() - new Date(t.startedAt).getTime();
+    }
     t.updatedAt = now();
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);
+  },
+  // "How long do tasks actually take?" — the only honest basis for choosing the
+  // loop interval and the lock TTL. Reports the measured distribution.
+  timing({ flags }) {
+    const s = loadState(pid(flags));
+    const d = s.tasks.filter((t) => t.durationMs > 0).map((t) => t.durationMs).sort((a, b) => a - b);
+    if (!d.length) return out({ measured: 0, note: "no completed task has been timed yet — run a few passes" });
+    const at = (q) => Math.round(d[Math.min(d.length - 1, Math.floor(d.length * q))] / 60000);
+    const p95 = at(0.95);
+    out({
+      measured: d.length,
+      medianMin: at(0.5), p95Min: p95, maxMin: Math.round(d[d.length - 1] / 60000),
+      // TTL must cover the slow tail, or a still-running pass looks stale and a
+      // second pass takes the lock on top of it. Interval is a separate question:
+      // it is how fast you want NEW work picked up, not how long a task takes.
+      suggestedLockTtlMin: Math.max(15, Math.ceil(p95 * 1.5 / 5) * 5),
+    });
   },
   "task-next"({ flags }) { out(nextReady(loadState(pid(flags))) ?? "none"); },
   // Answer a blocked task's question → records the answer and returns it to the

@@ -103,8 +103,14 @@ new item: think it through against the contract + codebase/attack-surface, then
 - If it expands product scope / changes the engagement scope, flag it as a
   PRD/SCOPE change and — interactive — stop for the user; don't silently widen scope.
 
+**Tag every task you create from an inbox item with `--source inbox#<inboxId>`**
+(the literal id, e.g. `--source inbox#6`) — never a bare `inbox`. That id is the
+operator's trace: the dashboard shows an `INBOX #6` chip on each task, and typing
+`inbox#6` in the task filter lists exactly what that one submission became. A
+bare `inbox` makes every submission indistinguishable.
+
 ```bash
-node scripts/state.mjs task-add --project <id> --priority 1 --phase 4 --title "..." --source inbox --deps "..."
+node scripts/state.mjs task-add --project <id> --priority 1 --phase 4 --title "..." --source inbox#6 --deps "..."
 node scripts/state.mjs inbox-mark --project <id> <inboxId>
 ```
 
