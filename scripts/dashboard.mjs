@@ -11,7 +11,7 @@ import { readFileSync, readdirSync, existsSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE } from "./state.mjs";
+import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
 // different directory than the one being written to
@@ -57,7 +57,14 @@ function rollup() {
     return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false, status, total, done, pending: c("queued"), building: c("building"), review: c("review"), blocked: c("blocked"), stuck: c("stuck"), findings: (s.findings || []).length, inboxNew: s.inbox.filter((i) => i.status === "new").length, pct: total ? Math.round(done / total * 100) : 0, run: s.run || null, blockers };
   });
 }
-const snapshot = (project) => project ? (getProject(project) ? { project: getProject(project), state: loadState(project) } : { error: "gone" }) : { projects: rollup() };
+const snapshot = (project) => {
+  if (!project) return { projects: rollup() };
+  if (!getProject(project)) return { error: "gone" };
+  const state = loadState(project);
+  // recomputed from the live queue every push — the right interval changes as the
+  // queue drains or the loop ends up waiting on the operator
+  return { project: getProject(project), state, advice: suggestInterval(state) };
+};
 
 // ---- SSE ----
 const clients = new Set();
@@ -293,6 +300,13 @@ const PAGE = `<!doctype html>
   .loop .lx{color:var(--dim);text-transform:none;letter-spacing:0;font-size:11px}
   .loop .cmd{color:var(--fg);background:#1c1c1c;padding:1px 7px;border:1px solid var(--line);
              text-transform:none;letter-spacing:0;user-select:all}
+  .advice{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;margin:-10px 0 10px;
+          padding:6px 12px;border:1px solid var(--line);border-top:0;background:#111;font-size:11px}
+  .advice b{color:var(--green);text-transform:uppercase;letter-spacing:.08em;flex:none}
+  .advice span{color:var(--dim)}
+  .advice code{background:#1c1c1c;border:1px solid var(--line);padding:0 5px;color:var(--fg);user-select:all}
+  .advice.off{border-color:var(--amber)} .advice.off b{color:var(--amber)}
+  .advice .now{color:var(--amber)}
   /* tap-to-answer option buttons — one tap on a phone beats typing the exact word */
   .opts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
   .opt{font-family:inherit;font-size:12px;font-weight:700;padding:9px 14px;cursor:pointer;
@@ -376,14 +390,26 @@ function loopHealth(run){
   if(late)return{cls:"late",label:"LOOP LATE",detail:"last "+base,dead:false};
   return{cls:"ok",label:"LOOP RUNNING",detail:base,dead:false};
 }
-function loopBar(run){
+function loopBar(run,advice){
   const h=loopHealth(run);
+  const m=advice?advice.minutes:30;
   // --project is auto-detected from the folder the terminal is in; showing it
   // makes the command longer than it needs to be.
-  return '<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
+  let s='<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
     '<span class="lx">'+esc(h.detail)+'</span>'+
-    (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop 30m /sch-run</span>':'')+
+    (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop '+m+'m /sch-run</span>':'')+
     '</div>';
+  // The right interval is not a fixed preference — it depends on what the queue
+  // looks like right now, so say what it should be and why.
+  if(advice){
+    const cur=run&&run.intervalMin?run.intervalMin:0;
+    const off=cur&&Math.abs(cur-m)>=10;
+    s+='<div class="advice'+(off?' off':'')+'"><b>suggested interval '+m+'m</b>'+
+      '<span>'+esc(advice.why)+'</span>'+
+      (off?'<span class="now">running at '+cur+'m — restart with <code>/loop '+m+'m /sch-run</code></span>':'')+
+      '</div>';
+  }
+  return s;
 }
 
 // ---- tap-to-answer ---------------------------------------------------------
@@ -539,7 +565,7 @@ function projApply(id,r){
   document.getElementById("clk").textContent=clock();
   document.getElementById("pname").textContent=p.name;
   document.getElementById("pmeta").innerHTML=\`\${esc(p.domain)} · \${esc(p.path)||"no path"} \${OFF(p.domain)?(sc.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>'):''}\${sc.halt?' <span class="badge b-halt">halt</span>':''}\`;
-  set("loop",loopBar(s.run));
+  set("loop",loopBar(s.run,r.advice));
   // brief + tech stack — what this project actually is, at a glance
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
