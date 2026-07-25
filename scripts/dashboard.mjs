@@ -87,7 +87,20 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname === "/answer") {
       const project = p.get("project"), id = Number(p.get("id")), text = (p.get("text") || "").trim();
-      if (getProject(project) && text) { const s = loadState(project); const t = s.tasks.find((x) => x.id === id); if (t) { t.answers = [...(t.answers || []), { text, ts: new Date().toISOString() }]; t.status = "queued"; t.priority = 1; t.notes = "ANSWERED: " + text; t.updatedAt = new Date().toISOString(); event(s, `task #${id} answered -> requeued p1`); saveState(project, s); } }
+      if (getProject(project) && text) {
+        const s = loadState(project); const t = s.tasks.find((x) => x.id === id);
+        if (t) {
+          // Preserve the QUESTION — overwriting notes with the answer destroyed the
+          // option list, leaving a bare letter the loop could not resolve.
+          if (!t.question) t.question = t.notes || "";
+          t.answers = [...(t.answers || []), { text, ts: new Date().toISOString() }];
+          t.status = "queued"; t.priority = 1;
+          t.notes = "ANSWERED: " + text + (t.question ? "\n\nQUESTION ASKED: " + t.question : "");
+          t.updatedAt = new Date().toISOString();
+          event(s, `task #${id} answered "${text.slice(0, 40)}" -> requeued p1`);
+          saveState(project, s);
+        }
+      }
       return back(project);
     }
     if (url.pathname === "/inbox-del") {

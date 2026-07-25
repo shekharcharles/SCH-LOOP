@@ -50,6 +50,18 @@ question that exists only in terminal output.**
 Also: **always release the run-lock before ending a pass**, including when you
 stop to ask something — a held lock makes every later pass no-op.
 
+**NEVER stop the cron, and never require a terminal command to resume.** The
+operator may only have the dashboard. Being blocked is normal: keep firing, let
+each pass exit cheaply at the gate, and **resume automatically the moment the
+blocker clears** (they answered on the dashboard / committed the tree). Do not
+say "tell me to restart" — there is no terminal for them to say it in. Only stop
+the cron if the operator explicitly asks.
+
+**A DECISION task must carry its own options.** Put the full question — options
+written as WORDS, not letters (`sign` / `encrypt` / `https-only`, never `A/B/C`) —
+in the task `--notes`. A bare letter is unresolvable once the surrounding chat is
+gone. The answer is appended, never overwrites the question.
+
 ## Token discipline (applies to EVERY pass — the loop runs unattended, tokens add up)
 
 - **Output: caveman-ultra.** Terse. No narration of tool calls, no filler, no

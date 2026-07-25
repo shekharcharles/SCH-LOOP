@@ -585,7 +585,9 @@ const commands = {
     if (!t) return out("not found");
     const text = (flags.text ?? pos.slice(1).join(" ")).trim();
     if (!text) return out("need answer text");
+    if (!t.question) t.question = t.notes ?? "";   // keep the question; the answer must not erase it
     t.answers = [...(t.answers ?? []), { text, ts: now() }];
+    t.notes = "ANSWERED: " + text + (t.question ? "\n\nQUESTION ASKED: " + t.question : "");
     t.status = "queued"; t.priority = 1; t.updatedAt = now();
     event(s, `task #${t.id} answered by operator -> requeued (p1): ${text.slice(0, 80)}`);
     saveState(id, s); out(t);
