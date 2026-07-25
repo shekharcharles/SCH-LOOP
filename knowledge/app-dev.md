@@ -183,3 +183,27 @@ Generalizable techniques distilled from completed tasks. Never target-specific.
   `addEventListener` registered at parse time, because the element does not
   exist yet. Function declarations referenced by `onchange=` attributes still
   work (hoisting); listener registration needs `DOMContentLoaded`.
+
+## A blanket `!important` link rule is a silent label-killer (seen:1)
+- Admin/vendor theme overlays often contain one broad rule like
+  `a, a:hover { color: var(--brand) !important }`. Any later component that
+  colours an anchor — a selected chip's white label, a list title meant to be
+  body text — loses to it and renders brand-on-brand or brand-where-neutral.
+  The element is present and the text is in the DOM, so reading the template
+  proves nothing. **Diagnose colour bugs with `getComputedStyle`, never by
+  reading source.** I retracted a correct bug report once because the markup
+  looked right.
+- When a component must win against such a rule, override at the component with
+  a comment naming the blanket rule, so the next person does not "clean up" the
+  `!important` and silently reintroduce the bug.
+
+## Verifying a stylesheet with no cache-buster (seen:1)
+- Some frameworks link their custom stylesheet with no version query and do not
+  accept one (a `?v=` passed through Django's `{% static %}` is URL-encoded to
+  `%3F` and 404s — verify before shipping that "fix"). Such a sheet is cached
+  indefinitely, so a restyle appears to do nothing and the natural next move —
+  "the CSS must be wrong" — sends you rewriting correct code.
+- Before concluding a stylesheet change failed: `curl` the served file and grep
+  for the new rule. If it is there, the browser is stale, not the CSS. Force a
+  refetch (`fetch(href, {cache:'reload'})` then reassign `link.href` with a
+  dummy query) and re-read computed styles.
