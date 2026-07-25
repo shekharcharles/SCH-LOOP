@@ -182,9 +182,18 @@ const PAGE = `<!doctype html>
   /* A question is READ, on a phone, before a decision. It gets real line breaks
      (the loop writes them; this used to collapse them all into a wall of text),
      a readable measure, and its own scroll if it is long. */
+  /* Fill the row. A fixed ch-cap left most of a desktop row empty, which reads as
+     broken. Readable line length comes from multi-column on wide screens instead,
+     so the text stays scannable without wasting the space. */
   .attn-row .q{opacity:.92;margin:7px 0 11px;line-height:1.62;white-space:pre-wrap;
-               max-width:88ch;font-size:12.5px;max-height:44vh;overflow-y:auto;
-               padding:10px 12px;background:rgba(0,0,0,.28);border-left:2px solid rgba(255,42,42,.4)}
+               font-size:12.5px;padding:11px 14px;background:rgba(0,0,0,.28);
+               border-left:2px solid rgba(255,42,42,.4)}
+  @media(min-width:1100px){
+    .attn-row .q{column-count:2;column-gap:34px;column-rule:1px solid rgba(255,42,42,.18)}
+  }
+  @media(min-width:1800px){ .attn-row .q{column-count:3} }
+  /* keep a label and its option together rather than orphaned at a column break */
+  .attn-row .q .qlabel,.attn-row .q .qopt{break-after:avoid;page-break-after:avoid}
   .attn-row .q .qlabel{color:var(--red);letter-spacing:.06em;font-weight:700}
   .attn-row .q .qopt{color:var(--green);font-weight:700}
   .ans{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}.ans input{flex:1;min-width:180px;font-family:inherit;font-size:15px;padding:9px 11px;background:var(--panel);color:var(--fg);border:1px solid var(--line)}.ans input:focus{outline:none;border-color:var(--green)}
