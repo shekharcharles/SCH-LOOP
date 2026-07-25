@@ -13,7 +13,9 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE } from "./state.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// must resolve the same way state.mjs does, or the dashboard would watch a
+// different directory than the one being written to
+const ROOT = process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECTS_DIR = join(ROOT, "projects");
 const REGISTRY = join(ROOT, "projects.json");
 const PORT = process.env.SCH_PORT || 4600;

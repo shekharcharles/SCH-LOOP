@@ -120,7 +120,7 @@ the dashboard shows **LOOP NOT RUNNING**, which is correct — it isn't.
   just to discover there's no work.
 - **`WORK`** → there is real work. Take the lock and proceed:
   ```bash
-  node scripts/state.mjs lock-acquire --project <id> --ttl 45
+  node scripts/state.mjs lock-acquire --project <id> --ttl 45 --holder sch-run
   ```
   (If lock-acquire now says BUSY due to a race, stop.) **Always release** at the
   end of the pass (success, blocked, or error):
@@ -128,6 +128,39 @@ the dashboard shows **LOOP NOT RUNNING**, which is correct — it isn't.
 
 Only after `WORK` + lock do the heavy steps below run. This keeps idle and
 overlapping passes to a handful of tokens instead of a full methodology load.
+
+## 0b. KEEP WORKING — do not sleep out the rest of the interval
+
+A finished task does **not** end the pass. The interval decides how often a
+*stopped* loop wakes up; it must never decide how fast a *working* loop goes. A
+5-minute task under a 30-minute interval would otherwise waste 25 minutes, and a
+45-task queue would take a day and a half of wall-clock for a few hours of work.
+
+So after completing a task (step 6) — **and before ending the pass** — ask the
+gate again, passing your own holder name so your own lock does not read as BUSY:
+
+```bash
+node scripts/state.mjs pass-gate --project <id> --holder sch-run
+```
+
+- **`WORK`** and no stop-condition below → **go back to step 3** and do the next
+  task in this same pass. You still hold the lock, the pack is already loaded, and
+  each task still gets its own fresh-context subagent — so continuing is cheap and
+  carries none of the drift risk of a long-lived builder.
+- **`IDLE`** → nothing left. Go to step 8 (deliver-check), release, end.
+
+**Stop the pass immediately (release the lock, end) when any of these hit:**
+
+1. **A task went `blocked` or `stuck`** — a human is needed; continuing would
+   burn budget on work that may depend on the answer.
+2. **5 tasks completed in this pass** — a hard cap. Keeps the orchestrator's
+   context lean and gives the operator a natural checkpoint.
+3. **25 minutes of wall-clock in this pass** — end cleanly before the next alarm
+   rather than being interrupted mid-task.
+4. **The same task has bounced twice** — it goes `stuck`, per step 3.
+
+The lock TTL (45 min) is deliberately longer than the wall-clock cap, so a pass
+that is genuinely working is never mistaken for an abandoned one.
 
 ## 0c. Load the pack (only on a WORK pass)
 
