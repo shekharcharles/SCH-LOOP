@@ -32,6 +32,14 @@ nothing from memory.
 - **Read only what you need.** Load only the relevant pack phase (not the whole
   methodology), only the files the task touches. Do not re-read files already in
   context. Do not dump long logs — quote the one decisive line.
+- **Never read a large file whole.** Bundles / minified JS / lockfiles / big
+  data (>~50 KB) — use `grep`/`head`/targeted line-ranges, never a full Read.
+  (A single 2.9 MB bundle read can blow an entire budget.)
+- **Model routing.** Run the loop and its review sub-agents on **Sonnet** for
+  routine build/validate/review; reserve Opus for genuinely hard reasoning. On a
+  Max plan, Opus consumes the limit several times faster for the same work.
+- **Browser: screenshots + tiny evaluates only, never full snapshots** (see
+  Validate). A11y-tree snapshots are the single biggest per-pass token sink.
 - **One task per pass.** Do not wander into adjacent work; the queue holds it.
 - **Stateless by design — a fresh context loses nothing.** Everything durable is
   on disk: `state.json` (tasks/findings/events), `CHANGELOG.md` + `HANDOFF.md`
@@ -184,17 +192,25 @@ decision, go to step 7-blocked. Never guess.
 
 ## 6. Validate → review → complete
 
-**Validate** by the pack's `validate`:
-- `playwright` (web/app-dev): launch app, drive the AC flow in a real browser
-  (`mcp__playwright__*`), screenshot, check console/network. Fix + re-validate.
+**Validate** by the pack's `validate` — **keep it token-cheap:**
+- `playwright` (web/app-dev): **NEVER `browser_snapshot`** (it dumps the whole
+  accessibility tree = tens of thousands of tokens). Use **one targeted
+  screenshot** + `browser_evaluate` returning a **tiny** result (a boolean / a few
+  values: does the element exist, is the text/color right, any console error).
+  Cap total browser calls to **~2–3 per task**. Validate once at the end, not
+  after every edit. A failed check → fix, then one re-check, not a loop of snapshots.
 - `run-the-tool` (tool-dev): invoke the CLI/lib, assert output/exit code.
 - `poc-evidence` (pentest): reproduce each finding — raw request/response +
   screenshot / decrypted Burp request; ground truth, not a guess.
 - `objective-proof` (red team): beacon callback / access token / screenshot.
 
-**Review**: spawn a fresh **`Agent`** running `/sch-review --project <id>` for
-this task id (clean context — the executor never reviews itself). It returns
-`approved` / `changes` / `escalate`.
+**Review** (token-cheap): spawn a fresh **`Agent`** running `/sch-review` for this
+task id — but **scope it to the diff, not the repo**, and **on a cheaper model**.
+Pass the agent: the task's `AC-N`/`NG-N`, the `git diff` of the branch, and the
+list of changed files. Tell it NOT to re-explore the whole codebase (that re-read
+is what cost ~80k tokens/task). A fresh agent reviewing a focused diff costs a
+fraction. Run the agent with `model: "sonnet"` unless the change is genuinely
+subtle. It returns `approved` / `changes` / `escalate`.
 
 - `changes` → `task-set --status changes`, end pass (step 3 converges next).
 - `escalate` → `task-set --status blocked`, end pass.
