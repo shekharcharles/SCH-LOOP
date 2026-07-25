@@ -6,6 +6,7 @@
 // hide it from the local LAN.
 
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, existsSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -46,7 +47,12 @@ function rollup() {
     const c = (st) => s.tasks.filter((t) => t.status === st).length;
     const total = s.tasks.filter((t) => t.status !== "superseded").length, done = c("merged");
     const status = total === 0 ? "new" : (c("stuck") || c("blocked")) ? "attention" : done === total ? "completed" : (c("building") || c("review") || c("changes")) ? "active" : "inprogress";
-    return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false, status, total, done, pending: c("queued"), building: c("building"), review: c("review"), blocked: c("blocked"), stuck: c("stuck"), findings: (s.findings || []).length, inboxNew: s.inbox.filter((i) => i.status === "new").length, pct: total ? Math.round(done / total * 100) : 0 };
+    // Blockers travel with the rollup so the home page can answer questions from
+    // every project at once — the operator is on a phone and should not have to
+    // open each project to discover which one is waiting on them.
+    const blockers = s.tasks.filter((t) => t.status === "blocked" || t.status === "stuck")
+      .map((t) => ({ id: t.id, title: t.title, notes: t.notes || "", status: t.status }));
+    return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false, status, total, done, pending: c("queued"), building: c("building"), review: c("review"), blocked: c("blocked"), stuck: c("stuck"), findings: (s.findings || []).length, inboxNew: s.inbox.filter((i) => i.status === "new").length, pct: total ? Math.round(done / total * 100) : 0, run: s.run || null, blockers };
   });
 }
 const snapshot = (project) => project ? (getProject(project) ? { project: getProject(project), state: loadState(project) } : { error: "gone" }) : { projects: rollup() };
@@ -60,6 +66,10 @@ try { watch(PROJECTS_DIR, { recursive: true }, pushAll); } catch {}
 try { watch(REGISTRY, pushAll); } catch {}
 setInterval(() => clients.forEach((c) => { try { c.res.write(": ping\n\n"); } catch {} }), 25000); // keep-alive
 
+// CSRF: same-origin headers alone are spoofable by a non-browser client on the
+// tailnet. Every mutating form carries this per-process token; a POST without it
+// is rejected. Rotates on restart (a stale tab simply reloads).
+const CSRF = randomUUID();
 const sameOrigin = (req) => { const h = req.headers.host, s = req.headers.origin || req.headers.referer; if (!h || !s) return false; try { return new URL(s).host === h; } catch { return false; } };
 const forbid = (res) => { res.writeHead(403); res.end("forbidden"); };
 const body = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(new URLSearchParams(b))); });
@@ -79,6 +89,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST") {
     if (!sameOrigin(req)) return forbid(res);
     const p = await body(req);
+    if (p.get("csrf") !== CSRF) return forbid(res);
     const back = (id) => { res.writeHead(303, { location: id ? "/?project=" + encodeURIComponent(id) : "/" }); res.end(); };
     if (url.pathname === "/inbox") {
       const project = p.get("project"), text = (p.get("text") || "").trim();
@@ -101,7 +112,7 @@ const server = createServer(async (req, res) => {
           saveState(project, s);
         }
       }
-      return back(project);
+      return back(p.get("back") === "home" ? null : project);
     }
     if (url.pathname === "/inbox-del") {
       const project = p.get("project"), id = Number(p.get("id"));
@@ -133,7 +144,7 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/api/skills") return json(res, skillCatalog());
   if (url.pathname === "/api/projects") return json(res, rollup());
   if (url.pathname === "/api/state") { const s = snapshot(url.searchParams.get("project")); return json(res, s); }
-  if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE); return; }
+  if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE.replace("__CSRF__", CSRF)); return; }
   res.writeHead(404); res.end("not found");
 });
 server.listen(PORT, BIND, () => console.log(`SCH Loop dashboard (live) on http://${BIND}:${PORT}`));
@@ -242,8 +253,6 @@ const PAGE = `<!doctype html>
   .donebox>summary:hover{color:var(--fg)}
   /* .tk sets display:flex, which overrides the browser's hiding of closed
      <details> content — so hide it explicitly when the box is collapsed. */
-  .donebox:not([open])>.tk{display:none}
-  /* .tk sets display:flex, which overrides the browser hiding closed <details> content — hide it explicitly */
   .donebox:not([open]) .tk{display:none}
   .tk-none{padding:5px 11px 5px 14px;font-size:10.5px;color:var(--dim);font-style:italic}
   /* RUNNING NOW — pulsing green ring so you can see what the loop is building */
@@ -261,10 +270,25 @@ const PAGE = `<!doctype html>
   .ibx-b{padding:9px 11px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;color:var(--fg);opacity:.92;max-height:180px;overflow-y:auto}
   .livenow{color:var(--green);text-transform:none;letter-spacing:0;font-size:11px;flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media(prefers-reduced-motion:reduce){.tk.running{animation:none;box-shadow:inset 0 0 0 1px var(--green)}}
-  .pp.clickable{cursor:pointer}.pp.clickable:hover{background:#1b1b1b}
-  .pp{font-size:11px;padding:7px 10px;background:var(--panel);text-transform:uppercase;letter-spacing:.03em;min-width:0}
-  .pp .d{display:inline-block;width:7px;height:7px;margin-right:6px}
-  .pp.st-merged .d,.pp.st-completed .d{background:var(--green)}.pp.st-building .d{background:var(--amber)}.pp.st-review .d,.pp.st-changes .d{background:var(--blue)}.pp.st-queued .d{background:var(--dim)}.pp.st-blocked .d,.pp.st-stuck .d{background:var(--red)}
+  /* LOOP HEALTH — is the loop actually running, or is the page just "live"? */
+  .loop{display:flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);
+        background:var(--panel);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px}
+  .loop .lb{width:8px;height:8px;flex:none}
+  .loop.ok{border-color:rgba(74,246,38,.4)}.loop.ok .lb{background:var(--green);animation:blink 1.6s step-end infinite}
+  .loop.late{border-color:var(--amber)}.loop.late .lb{background:var(--amber)}
+  .loop.dead{border-color:var(--red);border-left:4px solid var(--red);background:rgba(255,42,42,.08)}
+  .loop.dead .lb{background:var(--red)} .loop.dead b{color:var(--red)}
+  .loop .lx{color:var(--dim);text-transform:none;letter-spacing:0;font-size:11px}
+  .loop .cmd{color:var(--fg);background:#1c1c1c;padding:1px 7px;border:1px solid var(--line);
+             text-transform:none;letter-spacing:0;user-select:all}
+  /* tap-to-answer option buttons — one tap on a phone beats typing the exact word */
+  .opts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
+  .opt{font-family:inherit;font-size:12px;font-weight:700;padding:9px 14px;cursor:pointer;
+       background:var(--panel2);color:var(--fg);border:1px solid var(--green);letter-spacing:.04em}
+  .opt:hover,.opt:active{background:var(--green);color:#000}
+  /* cross-project blockers on the home page */
+  .xp{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+  .xp a{color:var(--red)}
   /* task table */
   .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
   .toolbar input,.toolbar select{font-family:inherit;font-size:12px;padding:7px 10px;background:var(--panel);color:var(--fg);border:1px solid var(--line)}
@@ -319,7 +343,65 @@ const OFF=(d)=>OFFSET.has(d);
 const clock=()=>new Date().toISOString().slice(0,19).replace("T"," ")+" UTC";
 const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"],superseded:["SUPERSEDED","st-superseded"]};
 const PSTAT={new:["NEW","st-new"],inprogress:["IN PROGRESS","st-inprogress"],active:["ACTIVE","st-active"],attention:["FAILED / AWAITING","st-attention"],completed:["COMPLETED","st-completed"],idle:["IDLE","st-idle"]};
-let SKILLS=null, taskFilter={q:"",status:"",phase:"",showSuperseded:false};
+let SKILLS=null, taskFilter={q:"",status:"",showSuperseded:false};
+const CSRF="__CSRF__";
+const csrf='<input type="hidden" name="csrf" value="'+CSRF+'">';
+
+// ---- loop health -----------------------------------------------------------
+// "live" in the header means the browser socket is open. It says NOTHING about
+// whether the loop is running. sch-run stamps state.run on every pass-gate call,
+// so absence/age of that stamp is the only honest signal — render it loudly.
+const ago=(ms)=>{const m=Math.round(ms/60000);if(m<1)return"just now";if(m<60)return m+"m ago";
+  const h=Math.floor(m/60);if(h<24)return h+"h "+(m%60)+"m ago";return Math.floor(h/24)+"d ago";};
+function loopHealth(run){
+  if(!run||!run.lastPass) return {cls:"dead",label:"LOOP NEVER RAN",detail:"no pass has ever checked in",dead:true};
+  const age=Date.now()-new Date(run.lastPass).getTime();
+  const iv=(run.intervalMin||0)*60000;
+  const late=iv?age>iv*2:age>45*60000;          // no interval recorded → 45m grace
+  const dead=iv?age>iv*4:age>3*60000*60;
+  const base="pass #"+(run.passN||0)+" · "+ago(age)+(run.verdict?" · "+run.verdict.toLowerCase():"");
+  if(dead)return{cls:"dead",label:"LOOP NOT RUNNING",detail:"last "+base,dead:true};
+  if(late)return{cls:"late",label:"LOOP LATE",detail:"last "+base,dead:false};
+  return{cls:"ok",label:"LOOP RUNNING",detail:base,dead:false};
+}
+function loopBar(run,pid){
+  const h=loopHealth(run);
+  return '<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
+    '<span class="lx">'+esc(h.detail)+'</span>'+
+    (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop 30m /sch-run'+(pid?" --project "+esc(pid):"")+'</span>':'')+
+    '</div>';
+}
+
+// ---- tap-to-answer ---------------------------------------------------------
+// A DECISION task carries its options as words. Pull them out so the answer is
+// one tap instead of typing the exact token on a phone keyboard.
+function parseOpts(notes){
+  const t=(notes||"");
+  const out=[];
+  // explicit list: "OPTIONS: sign | encrypt | https-only"
+  const m=t.match(/options?\\s*[:\\-]\\s*([^\\n]+)/i);
+  if(m)for(const x of m[1].split(/[|\\/,]/))push(x);
+  // inline alternation: "sign / encrypt / https-only" or \`sign\` / \`encrypt\`
+  for(const g of t.matchAll(/\`?\\b([a-z][a-z0-9-]{1,24})\`?(?:\\s*\\/\\s*\`?([a-z][a-z0-9-]{1,24})\`?){1,4}/g)){
+    for(const x of g[0].split("/"))push(x);
+  }
+  function push(x){
+    const v=x.replace(/[\`'"]/g,"").trim();
+    if(v&&v.length<=24&&!out.includes(v)&&!/^(and|or|the|a|an|of|to)$/.test(v))out.push(v);
+  }
+  return out.slice(0,5);
+}
+// one answer block, used by BOTH the project page and the home page. From home,
+// stay on home after answering so several projects can be cleared in a row.
+function answerBlock(pid,t,home){
+  const opts=parseOpts(t.notes);
+  return '<form class="ans ansform" method="POST" action="/answer">'+csrf+
+    (home?'<input type="hidden" name="back" value="home">':'')+
+    '<input type="hidden" name="project" value="'+esc(pid)+'"><input type="hidden" name="id" value="'+t.id+'">'+
+    (opts.length?'<div class="opts">'+opts.map(o=>'<button type="submit" class="opt" name="text" value="'+esc(o)+'" title="Answer: '+esc(o)+'">'+esc(o)+'</button>').join("")+'</div>':'')+
+    '<input type="text" name="text" placeholder="'+(opts.length?'…or type a different answer':'Answer — task resumes at top')+'" autocomplete="off">'+
+    '<button title="Submit this answer and put the task back at the front of the queue">Answer &amp; unblock</button></form>';
+}
 
 // --- section patcher: write only sections whose HTML changed, and never a
 // --- section the user is currently focused in (protects inputs/typing).
@@ -348,11 +430,12 @@ function homeSkeleton(){
   document.getElementById("app").innerHTML=\`
     <div class="bar"><span><span class="dot"></span><span id="livemark" class="live">live</span></span><span class="mono" id="clk"></span><span id="ucount"></span></div>
     <h1>SCH·LOOP</h1><div class="sub">operations // all projects</div>
+    <section id="xattn"></section>
     <section id="pchips"></section>
     <div class="toolbar"><input id="pq" placeholder="search projects…" title="Search by project name, id or domain" value="" oninput="projQ=this.value;reapplyHome()"></div>
     <section id="devsec"></section>
     <section id="secsec"></section>\`;
-  CACHE.pchips=CACHE.devsec=CACHE.secsec=undefined;
+  CACHE.xattn=CACHE.pchips=CACHE.devsec=CACHE.secsec=undefined;
 }
 function reapplyHome(){ if(LAST&&LAST.projects)homeApply(LAST.projects); }
 function projRows(list){
@@ -363,18 +446,39 @@ function projRows(list){
     <td data-l="#" class="id">\${i+1}</td>
     <td data-l="Project"><strong>\${esc(p.name)}</strong> <span class="id">\${esc(p.domain)}</span>\${p.offensive&&p.halt?' <span class="badge b-halt">halt</span>':''}\${p.offensive&&!p.authorized?' <span class="badge b-off">unauthorized</span>':''}</td>
     <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
+    <td data-l="Loop">\${loopCell(p)}</td>
     <td data-l="Progress"><div class="bar2"><span style="width:\${p.pct}%"></span></div><span class="pctn">\${p.pct}%</span></td>
-    <td data-l="Done">\${p.done}</td><td data-l="Total">\${p.total}</td><td data-l="Pending">\${p.pending}</td>\${p.offensive?'<td data-l="Findings">'+p.findings+'</td>':'<td data-l="Findings">—</td>'}
+    <td data-l="Done">\${p.done}</td><td data-l="Total">\${p.total}</td><td data-l="Pending">\${p.pending}</td>\${p.offensive?'<td data-l="Findings">'+p.findings+'</td>':''}
     <td data-l="Inbox">\${p.inboxNew?'<span class="in">'+p.inboxNew+'</span>':'0'}</td></tr>\`;}).join("");
 }
-function projTable(title,list,emptyMsg){
-  const rows=projRows(list)||'<tr><td colspan="9" class="empty">'+emptyMsg+'</td></tr>';
+// per-project loop health, compact: this is where you notice a cron that died
+function loopCell(p){
+  const h=loopHealth(p.run);
+  const t=h.label+" — "+h.detail;
+  return '<span class="st '+(h.cls==="ok"?"st-merged":h.cls==="late"?"st-building":"st-blocked")+'" title="'+esc(t)+'">'+
+    (h.cls==="ok"?"RUNNING":h.cls==="late"?"LATE":"STOPPED")+'</span>';
+}
+function projTable(title,list,emptyMsg,offensive){
+  // "Findings" is a pentest concept — it was rendering as a dead "—" column on
+  // every development project.
+  const cols=["#","Project","Status","Loop","Progress","Done","Total","Pending"].concat(offensive?["Findings"]:[]).concat(["Inbox"]);
+  const rows=projRows(list)||'<tr><td colspan="'+cols.length+'" class="empty">'+emptyMsg+'</td></tr>';
   return '<h2>'+title+'<span class="n mono">'+list.length+'</span></h2>'+
-    '<div class="tbl-wrap"><table class="t projects"><thead><tr><th>#</th><th>Project</th><th>Status</th><th>Progress</th><th>Done</th><th>Total</th><th>Pending</th><th>Findings</th><th>Inbox</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    '<div class="tbl-wrap"><table class="t projects"><thead><tr>'+cols.map(c=>'<th>'+c+'</th>').join("")+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 function homeApply(ps){
   document.getElementById("clk").textContent=clock();
   document.getElementById("ucount").textContent="units // "+ps.length;
+  // EVERY blocked question, from EVERY project, answerable right here. Opening
+  // each project to discover which one is waiting is the main thing that stalls
+  // a phone-only operator.
+  const xs=ps.flatMap(p=>(p.blockers||[]).map(t=>({p,t})));
+  set("xattn",xs.length?'<div class="attn"><b>&#9888; NEEDS YOU — '+xs.length+' across '+
+    new Set(xs.map(x=>x.p.id)).size+' project(s)</b>'+
+    xs.map(({p,t})=>'<div class="attn-row"><div class="xp"><a href="/?project='+encodeURIComponent(p.id)+'">'+esc(p.name)+'</a> · task #'+t.id+'</div>'+
+      '<div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <strong>'+esc(t.title)+'</strong></div>'+
+      '<div class="q">'+esc(t.notes||"(open the project)")+'</div>'+answerBlock(p.id,t,true)+'</div>').join("")+
+    '</div>':"");
   const by=(c)=>ps.filter(p=>p.status===c).length;
   set("pchips",'<div class="chips">'+[["active",by("active"),"active"],["in progress",by("inprogress"),"inprogress"],["failed / awaiting",by("attention"),"attention"],["completed",by("completed"),"completed"],["new",by("new"),"new"]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
   // split by kind, then apply the search
@@ -382,8 +486,8 @@ function homeApply(ps){
   const match=(p)=>!q||((p.name+" "+p.id+" "+p.domain).toLowerCase().includes(q));
   const dev=ps.filter(p=>!p.offensive&&match(p));
   const sec=ps.filter(p=>p.offensive&&match(p));
-  set("devsec",projTable("development",dev,q?"no development project matches":"no development projects — run /sch-spec"));
-  set("secsec",projTable("security // pentest",sec,q?"no engagement matches":"no engagements — run /sch-spec with a target"));
+  set("devsec",projTable("development",dev,q?"no development project matches":"no development projects — run /sch-spec",false));
+  set("secsec",projTable("security // pentest",sec,q?"no engagement matches":"no engagements — run /sch-spec with a target",true));
 }
 
 // ---------- PROJECT ----------
@@ -391,11 +495,12 @@ function projSkeleton(id){
   document.getElementById("app").innerHTML=\`
     <div class="bar"><a class="back" href="/">‹ ALL PROJECTS</a><span><span class="dot"></span><span id="livemark" class="live">live</span></span><span class="mono" id="clk"></span></div>
     <h1 id="pname">…</h1><div class="sub" id="pmeta"></div>
+    <section id="loop"></section>
     <section id="brief"></section>
     <section id="attn"></section>
     <section id="scope"></section>
     <section id="chips"></section>
-    <form class="row-form" method="POST" action="/inbox"><input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" title="Describe a feature, fix or lead — the next loop pass reasons it into the right place in the queue" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button title="Send to the inbox — the next loop pass plans it into the queue">Add</button></form>
+    <form class="row-form" method="POST" action="/inbox">\${csrf}<input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" title="Describe a feature, fix or lead — the next loop pass reasons it into the right place in the queue" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button title="Send to the inbox — the next loop pass plans it into the queue">Add</button></form>
     <section id="inboxsec"></section>
     <section id="phase"></section>
     <section id="tasksec"></section>
@@ -407,13 +512,14 @@ function projSkeleton(id){
 const ACT_TIP={bump:"Bump to the front of the queue (priority 1)",hold:"Put on hold — moves to awaiting, loop skips it",
   requeue:"Requeue — put it back in the queue to be retried",close:"Close as superseded — replaced by other tasks, stop showing it"};
 function actForm(pid,id,a,l,c){const tip=ACT_TIP[a]||a;
-  return \`<form class="inl" method="POST" action="/task"><input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${tip}" aria-label="\${tip}">\${l}</button></form>\`;}
+  return \`<form class="inl" method="POST" action="/task">\${csrf}<input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${tip}" aria-label="\${tip}">\${l}</button></form>\`;}
 function projApply(id,r){
   if(r.error){location.href="/";return;}
   const p=r.project,s=r.state,sc=p.scope||{},by=(st)=>s.tasks.filter(t=>t.status===st);
   document.getElementById("clk").textContent=clock();
   document.getElementById("pname").textContent=p.name;
   document.getElementById("pmeta").innerHTML=\`\${esc(p.domain)} · \${esc(p.path)||"no path"} \${OFF(p.domain)?(sc.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>'):''}\${sc.halt?' <span class="badge b-halt">halt</span>':''}\`;
+  set("loop",loopBar(s.run,id));
   // brief + tech stack — what this project actually is, at a glance
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
@@ -428,7 +534,7 @@ function projApply(id,r){
     attnHtml='<div class="attn"><b>&#9888; NEEDS YOU — '+attn.length+' task(s)</b>';
     for(const t of attn){
       attnHtml+='<div class="attn-row"><div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <span class="id">TASK #'+t.id+'</span> <strong>'+esc(t.title)+'</strong></div><div class="q">'+esc(t.notes||"(open the task)")+'</div>'+
-        '<form class="ans" method="POST" action="/answer"><input type="hidden" name="project" value="'+esc(id)+'"><input type="hidden" name="id" value="'+t.id+'"><input type="text" name="text" placeholder="Answer — task resumes at top" autocomplete="off" required><button>Answer &amp; unblock</button></form>'+
+        answerBlock(id,t)+
         actForm(id,t.id,"close","&#10005; close (superseded)")+'</div>';
     }
     attnHtml+='</div>';
@@ -439,7 +545,7 @@ function projApply(id,r){
     resume:"Resume — lift the halt and let active work continue",
     arm:"Arm — authorize active testing against the in-scope targets",
     disarm:"Disarm — revoke authorization; active tasks will be refused"};
-  const scForm=(a,l,c)=>\`<form class="inl" method="POST" action="/scope"><input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${SCOPE_TIP[a]||a}" aria-label="\${SCOPE_TIP[a]||a}">\${l}</button></form>\`;
+  const scForm=(a,l,c)=>\`<form class="inl" method="POST" action="/scope">\${csrf}<input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${SCOPE_TIP[a]||a}" aria-label="\${SCOPE_TIP[a]||a}">\${l}</button></form>\`;
   set("scope",OFF(p.domain)?\`<div class="scope"><b>SCOPE //</b> \${sc.authorized?'authorized':'NOT authorized'}\${sc.halt?' · <span style="color:var(--red)">HALT</span>':''}<br>TARGETS: \${esc((sc.targets||[]).join(", "))||"(none)"}<br>REF: \${esc(sc.ref)||"(none)"}\${sc.expiry?' · EXPIRES '+esc(sc.expiry):''}<div class="acts">\${sc.halt?scForm("resume","▶ resume","go"):scForm("halt","■ halt","danger")} \${sc.authorized?scForm("disarm","disarm"):scForm("arm","arm","go")}</div></div>\`:"");
   // chips
   const done=by("merged").length,total=s.tasks.filter(t=>t.status!=="superseded").length,pct=total?Math.round(done/total*100):0;
@@ -467,14 +573,15 @@ function projApply(id,r){
     const cd=all.filter(t=>t.status==="merged").length;
     const nPh=Object.keys(phases).length;
     const catRunning=all.some(t=>RUNNING.has(t.status));
+    const catPct=all.length?Math.round(cd/all.length*100):0;
     phHtml+='<div class="cat'+(catRunning?' running':'')+'"><div class="cat-h"><span class="cat-n">'+esc(cat)+'</span>'+
-      '<span class="cat-c mono">'+nPh+' phase'+(nPh>1?'s':'')+' · '+cd+'/'+all.length+' done · '+Math.round(cd/all.length*100)+'%</span></div>';
+      '<span class="cat-c mono">'+nPh+' phase'+(nPh>1?'s':'')+' · '+cd+'/'+all.length+' done · '+catPct+'%</span></div>';
     for(const name of Object.keys(phases)){
       const list=phases[name], d=list.filter(t=>t.status==="merged").length;
       const phRunning=list.some(t=>RUNNING.has(t.status));
       phHtml+='<div class="ph'+(phRunning?' running':'')+'">'+
         '<div class="ph-h"><span class="ph-n">'+esc(name)+'</span><span class="ph-c mono">'+d+'/'+list.length+'</span>'+
-        '<div class="pbar"><i style="width:'+Math.round(d/list.length*100)+'%"></i></div></div>';
+        '<div class="pbar"><i style="width:'+(list.length?Math.round(d/list.length*100):0)+'%"></i></div></div>';
       const sorted=list.sort((a,b)=>(a.priority??3)-(b.priority??3)||a.id-b.id);
       const open=sorted.filter(t=>t.status!=="merged"), doneList=sorted.filter(t=>t.status==="merged");
       const line=(t)=>{const run=RUNNING.has(t.status);
@@ -501,7 +608,6 @@ function projApply(id,r){
   // superseded = replaced by smaller/other tasks; hidden unless explicitly shown
   if(!taskFilter.showSuperseded && taskFilter.status!=="superseded")ts=ts.filter(t=>t.status!=="superseded");
   if(taskFilter.status)ts=ts.filter(t=>t.status===taskFilter.status);
-  if(taskFilter.phase)ts=ts.filter(t=>(t.phaseName||("Phase "+t.phase))===taskFilter.phase);
   if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" P"+t.phase).toLowerCase().includes(q));}
   const trows=ts.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
     <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
@@ -515,7 +621,6 @@ function projApply(id,r){
   set("tasksec",'<h2>tasks<span class="n mono">'+ts.length+' shown / '+total+'</span></h2>'+
     '<div class="toolbar"><input id="tq" placeholder="filter tasks…" title="Filter by task title, note or phase" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
     '<select id="ts" title="Show only tasks in this status" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
-    (taskFilter.phase?'<button class="mini go" title="Clear the phase filter" onclick="clearPhase()">phase: '+esc(taskFilter.phase)+' &#10005;</button>':'')+
     (supN?'<button class="mini" title="Superseded = tasks replaced by other/smaller tasks. Their work still exists elsewhere; hidden by default to keep the queue clean." onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
     '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>');
   // findings
@@ -531,7 +636,7 @@ function projApply(id,r){
   // Full text (so you can re-read what you sent) + delete if you change your mind.
   set("inboxsec",nb.length?'<h2>inbox — waiting to be planned by the next loop pass<span class="n mono">'+nb.length+'</span></h2>'+
     nb.map(i=>'<div class="ibx"><div class="ibx-h"><span class="ibx-t mono">submitted '+esc(i.createdAt.slice(0,16).replace("T"," "))+'</span>'+
-      '<form class="inl confirm-del" method="POST" action="/inbox-del">'+
+      '<form class="inl confirm-del" method="POST" action="/inbox-del">'+csrf+
       '<input type="hidden" name="project" value="'+esc(id)+'"><input type="hidden" name="id" value="'+i.id+'">'+
       '<button class="mini danger" title="Delete this submission before the loop plans it">delete</button></form></div>'+
       '<div class="ibx-b">'+esc(i.text)+'</div></div>').join(""):"");
@@ -539,22 +644,17 @@ function projApply(id,r){
   // keep skill picker selection in sync (only when not focused)
 }
 function reapplyTasks(){ if(LAST&&LAST.project)projApply(qp("project"),LAST); }
-// click a phase → list exactly that phase's tasks in the table below
-function filterPhase(name){
-  taskFilter.phase = taskFilter.phase===name ? "" : name;
-  reapplyTasks();
-  const el=document.getElementById("tasksec"); if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
-}
-function clearPhase(){ taskFilter.phase=""; reapplyTasks(); }
-// delegated: clicking a phase card filters the task table to that phase
-document.addEventListener("click",function(e){
-  const c=e.target.closest&&e.target.closest(".pp[data-phase]");
-  if(c)filterPhase(c.dataset.phase);
-});
-// delegated: confirm before deleting an unplanned inbox submission
+// delegated: confirm before deleting an unplanned inbox submission; and never
+// submit an empty answer (the option buttons carry their own value, the free-text
+// box does not — an empty submit would silently no-op on the server).
 document.addEventListener("submit",function(e){
   const f=e.target.closest&&e.target.closest("form.confirm-del");
-  if(f&&!confirm("Delete this submission? It has not been planned into tasks yet."))e.preventDefault();
+  if(f&&!confirm("Delete this submission? It has not been planned into tasks yet."))return e.preventDefault();
+  const a=e.target.closest&&e.target.closest("form.ansform");
+  if(a&&!(e.submitter&&e.submitter.name==="text")){
+    const box=a.querySelector('input[name="text"]');
+    if(box&&!box.value.trim()){ e.preventDefault(); box.focus(); }
+  }
 });
 // copy the brief + stack as plain text, ready to paste anywhere
 function copyBrief(btn){
