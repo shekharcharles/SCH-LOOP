@@ -49,6 +49,32 @@ Read, in this order:
    the code invents work that is already done and misses work that is required.
    For an offensive project, read the recon output if any phase has run.
 
+### Planning against an EXISTING codebase is a different job
+
+If the PRD has an `## As-built` section, or the project folder already contains
+real code, you are **changing a working product, not building one**. The failure
+mode is not "wrong feature" — it is "broke something that worked". Adjust:
+
+- **Verify the inventory yourself; do not trust it.** The as-built section may be
+  weeks old. Check that what it claims exists still exists before you plan around
+  it. Never plan a task to build something already built — grep for it first.
+- **Trace each requirement onto real files** before writing the task. A task that
+  names the files it will touch is a task the builder cannot misplace. If you
+  cannot find where a change lands, that is a research task, not a build task —
+  create it as one ("Locate and document how X currently works"), because a
+  builder guessing at an unfamiliar codebase is the expensive failure.
+- **Size differently.** Brownfield tasks are usually *smaller*, because each one
+  must also not break its neighbours. When a change touches something used in many
+  places, split into: characterise current behaviour → change it → update callers.
+- **Order by blast radius, smallest first.** Land the low-risk, well-covered
+  changes early; they build confidence and surface surprises about the codebase
+  while the stakes are low. Shared foundations that many files depend on come
+  after you understand it, not on day one.
+- **Every task inherits the "must not break" list** as `--ng`, and its verify step
+  includes the regression check the operator named in the spec.
+- **Plan the missing tests as real tasks.** If a change lands in an untested area,
+  the characterisation test is part of the work, not an optional extra.
+
 ---
 
 ## 2. Play back what you understood — BEFORE proposing any task
