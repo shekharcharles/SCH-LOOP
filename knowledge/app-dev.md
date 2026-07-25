@@ -207,3 +207,24 @@ Generalizable techniques distilled from completed tasks. Never target-specific.
   for the new rule. If it is there, the browser is stale, not the CSS. Force a
   refetch (`fetch(href, {cache:'reload'})` then reassign `link.href` with a
   dummy query) and re-read computed styles.
+
+## Validating work a previous pass left unvalidated (seen:1)
+- "Committed but unvalidated" does not mean broken. Check what is actually live
+  before rewriting: a later unrelated rebuild may already have shipped the code,
+  so the handoff note ("not rebuilt/deployed") can be stale. Verify the deployed
+  artifact contains the symbol before assuming a deploy step is outstanding.
+- Read the AC clause by clause. An AC that says "...and the UI indicates X" is
+  not satisfied by silently doing X. That clause was the only real gap in an
+  otherwise-correct feature.
+- **Say when live proof is impossible.** Seed data can make an AC physically
+  untestable end-to-end (a 10s resume threshold against 4-9s seed clips). Record
+  that as a limitation with the reason and the condition for re-checking, rather
+  than claiming a browser demo that cannot exist.
+
+## Committing with `git add -A` in a shared tree (seen:1)
+- `git add -A` sweeps in files the operator created between passes. A reviewer
+  caught an unrelated doc file bundled into a feature commit this way. Prefer
+  staging the files the task touched, or diff the staged set before committing.
+- If the operator has uncommitted edits to a file that IS committed on the
+  branch, `git checkout <other-branch>` aborts. Stash just that path, do the
+  branch work, pop it back — never commit their in-progress edit for them.

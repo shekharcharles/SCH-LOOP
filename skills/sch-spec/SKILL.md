@@ -129,13 +129,15 @@ ship the same observable behavior?* No round cap. Write `<path>/PRD.md`:
 ## How to verify (product level)
 ```
 
-**Write `CONSTITUTION.md`** in the project path (ALWAYS — every project gets one).
-Copy `docs/CONSTITUTION.template.md` and fill each `<…>` from the interview + a
-read of the real codebase (stack, the design-system single-source file + theme
-mechanism, test runners, and the project-specific binding constraints). Keep it
-short. `sch-run` feeds it into every task's fresh-context subagent, so it inherits
-the rules without re-deriving them — this is what keeps passes on-task and stops
-blind renames.
+**Ensure a project `CLAUDE.md`** (auto-read by Claude every reply, so every
+fresh-context subagent inherits it). **If one already exists, APPEND** the missing
+SCH-loop sections (ground-truth rules, Karpathy's 4, secret-scan, and an empty
+`## Lessons (auto-added)` section) — do NOT overwrite the repo's existing rules.
+If none exists, copy `docs/CLAUDE.template.md` and fill each `<…>` from the
+interview + a read of the real codebase. Keep it short. Make sure `CLAUDE.md` is
+git-ignored (secret-scan also blocks committing it). This file is what keeps
+passes on-task, stops blind renames, and — via the Lessons section — makes the
+loop compound instead of repeating mistakes.
 
 Register + plan:
 
