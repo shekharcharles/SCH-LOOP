@@ -123,6 +123,25 @@ A task in `changes` → fix only the reviewer's must-fix findings, re-validate,
 send back to review. Cap **2 fix rounds** per task; on the third set it `stuck`
 and end the pass for a human.
 
+## 3d. Parallel wave (optional — throughput for independent tasks)
+
+When several **ready** tasks are independent — deps met, and they touch
+**different files** (no overlap) — dispatch them as a **wave** of fresh-context
+subagents in parallel instead of one at a time (superpowers
+`dispatching-parallel-agents` + `using-git-worktrees`):
+
+- Cap the wave at **3** concurrent subagents (avoid thrash + merge chaos).
+- Each subagent works in its **own git worktree/branch** so they never touch each
+  other's tree. Same one-task-only, ground-first brief as step 5.
+- **Merge sequentially, not in parallel:** for each returned branch, in turn —
+  secret-scan → review (fresh) → rebase on default → resolve any conflict →
+  merge. Never merge two branches simultaneously.
+- Only wave tasks that genuinely don't overlap (e.g. two different pages). If in
+  doubt about file overlap, run them sequentially. UI tasks sharing the token CSS
+  are NOT independent — sequence those.
+
+If not waving, proceed one task per pass (step 4).
+
 ## 4. Pick + claim
 
 ```bash
