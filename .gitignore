@@ -44,3 +44,8 @@ node_modules/
 Thumbs.db
 .sessions.json
 .notify-url
+
+# runtime artifacts of the atomic-write path (.bak is a copy of a gitignored file)
+*.bak
+*.tmp
+*.corrupt-*
