@@ -107,7 +107,24 @@ try {
   const db = open(project);
   let syms = 0, done = 0;
   for (const f of files) { const c = indexFile(db, repoRoot, f); if (c) { syms += c; done++; } }
-  if (!flag("file")) console.log(JSON.stringify({ project, filesIndexed: done, symbols: syms }));
+
+  // Prune what no longer exists. A deleted file left in the graph is worse than a
+  // missing one: it answers confidently and sends the next task to a path that
+  // is gone. Only on a full sweep — a single-file index cannot know what else
+  // was removed.
+  let pruned = 0;
+  if (has("all")) {
+    const live = new Set(files.map((f) => relative(repoRoot, f).replace(/\\/g, "/")));
+    const stale = db.prepare("SELECT id, path FROM node WHERE path IS NOT NULL AND path != ''").all()
+      .filter((n) => !live.has(n.path) && !existsSync(join(repoRoot, n.path)));
+    for (const n of stale) {
+      db.prepare("DELETE FROM node WHERE id=?").run(n.id);
+      db.prepare("DELETE FROM node_fts WHERE id=?").run(n.id);
+      db.prepare("DELETE FROM edge WHERE src=? OR dst=?").run(n.id, n.id);
+      pruned++;
+    }
+  }
+  if (!flag("file")) console.log(JSON.stringify({ project, filesIndexed: done, symbols: syms, pruned }));
 } catch (e) {
   // A hook must never break the edit that triggered it.
   if (!flag("file")) console.error("graph-index: " + e.message);
