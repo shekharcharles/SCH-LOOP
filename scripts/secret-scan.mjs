@@ -89,7 +89,11 @@ if (!ALL && !findings.length) {
     const sum = (rows) => rows.reduce((n, l) => { const [a, d] = l.split(/\s+/); return n + (Number(a) || 0) + (Number(d) || 0); }, 0);
     const rawN = sum(raw), ignN = sum(ign);
     // a real change survives ignoring whitespace; a line-ending rewrite does not
-    if (rawN > 200 && ignN * 6 < rawN) {
+    // The ratio is the signal, not the size. A first threshold of 200 lines
+    // missed a real flip that showed as 135 raw against 17 ignored — the change
+    // was small, the corruption was total. Judge by how much survives ignoring
+    // whitespace, with a low floor so a genuinely tiny diff cannot trip it.
+    if (rawN >= 40 && ignN * 4 < rawN) {
       console.error(`secret-scan: BLOCKED — line endings were rewritten.\n` +
         `  staged diff is ${rawN} lines, but only ${ignN} once whitespace is ignored.\n` +
         `  An edit flipped CRLF/LF and buried the real change. Convert back, e.g.\n` +
