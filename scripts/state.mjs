@@ -509,6 +509,25 @@ const commands = {
     const s = loadState(id);
     const l = s.lock, ttl = l?.ttlMs ?? 45 * 60000;
     const mine = !!flags.holder && l?.holder === flags.holder;
+
+    // ORPHAN RECOVERY. `building` and `review` only make sense while a pass holds
+    // the lock. If the session was closed, crashed, or the operator stopped it
+    // mid-task, the task keeps that status forever — and task-next only ever
+    // returns `queued`, so it becomes invisible and is silently never built.
+    // No live lock means nobody is working on it: put it back in the queue.
+    const lockLive = l && Date.now() - new Date(l.ts).getTime() < ttl;
+    if (!lockLive) {
+      let rescued = 0;
+      for (const t of s.tasks) {
+        if (t.status !== "building" && t.status !== "review") continue;
+        t.status = "queued";
+        t.notes = `requeued: a pass was interrupted while this was ${t.status === "review" ? "in review" : "building"}` +
+          (t.notes ? ` — previously: ${t.notes}` : "");
+        t.updatedAt = now();
+        rescued++;
+      }
+      if (rescued) { event(s, `orphan recovery: ${rescued} interrupted task(s) requeued`); saveState(id, s); }
+    }
     let verdict;
     if (!mine && l && Date.now() - new Date(l.ts).getTime() < ttl) verdict = "BUSY";  // another pass running → exit
     else {
