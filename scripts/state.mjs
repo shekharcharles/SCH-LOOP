@@ -685,7 +685,15 @@ const commands = {
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
     // a status note (the "what it's doing" / the blocked question) sticks to the
     // task so the dashboard can surface it, not just log it as an event.
-    if (flags.note !== undefined) t.notes = flags.note;
+    // The planner's brief is ground truth and must survive status chatter.
+    // `--note` was a destructive assignment, so claiming a task with
+    // `--note claimed` deleted "FILES: frontend/src/.../ProfilePagesHeader.js |
+    // VERIFY: ..." — the exact information the builder was about to need, thrown
+    // away one line before it was needed. Keep the first note as the brief.
+    if (flags.note !== undefined) {
+      if (t.notes && !t.brief && !/^(claimed|building)\b/i.test(t.notes)) t.brief = t.notes;
+      t.notes = flags.note;
+    }
     // Time each task so the loop interval and lock TTL are set from measurement,
     // not from a guess. Clock starts when work actually begins (building) — not
     // at creation, which would just measure how long it sat in the queue.
@@ -708,7 +716,20 @@ const commands = {
       try {
         const g = await import("./graph.mjs");
         const db = g.open(id);
-        const hits = g.search(db, [t.title, ...(t.ac ?? [])].join(" ").slice(0, 300), { limit: 6 });
+
+        // READ WHAT THE PLANNER ALREADY WROTE before guessing. sch-plan is told
+        // to name target files, and it does — "FILES: frontend/src/.../
+        // ProfilePagesHeader.js" sat in the notes while a search for the task
+        // TITLE returned two unrelated test files. Explicit beats inferred every
+        // time; search is only for tasks that never named anything.
+        const said = [...[t.brief ?? "", t.notes ?? "", ...(t.ac ?? [])].join(" ")
+          .matchAll(/\b([\w.-]+\/[\w./-]+\.\w{1,5})\b/g)].map((m) => m[1]);
+        const named = [...new Set(said)];
+
+        const hits = named.length
+          ? named.flatMap((p) => g.search(db, p, { limit: 2 })).slice(0, 6)
+          : g.search(db, [t.title, ...(t.ac ?? [])].join(" ").slice(0, 300), { limit: 6 });
+        if (named.length) t.files = [...new Set([...(t.files ?? []), ...named])];
         g.logQuery(db, { source: "engine", tool: "claim-context", q: t.title.slice(0, 60), hits: hits.length, ms: 0 });
         db.close();
         if (hits.length) {
