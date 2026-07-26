@@ -348,12 +348,52 @@ single call, including all 7 callers of the choke point.
 Not indexed? Say so once to the operator (`codegraph init` in the repo) and use
 targeted greps meanwhile. Indexing is their call, not yours.
 
-Then **write what you found back into the task** so it is never rediscovered:
+Then **write what you found back into the task** so it is never rediscovered —
+and so the engine can see which tasks share ground:
 
 ```bash
 node scripts/state.mjs task-set --project <id> <taskId> \
-  --note "files: files/models/media.py (user_allowed_to_upload = the single choke point) | files/admin.py | tests/api/test_upload_quota.py"
+  --files "files/methods.py|files/admin.py|tests/api/test_upload_quota.py" \
+  --note "files/methods.py: user_allowed_to_upload is the single choke point"
 ```
+
+### CLUB CO-LOCATED TASKS INTO ONE SUBAGENT (the big token lever)
+
+Two tasks on the same files pay for the same ground truth twice — the same reads,
+the same call graph, the same test setup. That shared discovery is the largest
+single cost in a pass. Once the lead task's files are recorded, ask:
+
+```bash
+node scripts/state.mjs task-batch --project <id> --with <taskId>
+```
+
+It returns ready tasks whose files overlap. If it returns any, brief **ONE**
+subagent with the whole group:
+
+- **Ground truth is established once**, up front, for all of them.
+- Then the tasks are done **one at a time, in order** — each with its own `AC-N`,
+  its own verify step, and **its own commit**. They do not become one task; a
+  merged mega-task is exactly the drift that made earlier loops wander.
+- If any task in the group turns out to be wrong or blocked, it stops there and
+  reports — the earlier commits stand.
+- **Cap 3.** Never batch an offensive `active` task, and never batch a task that
+  depends on another in the same group.
+
+**This is the mirror image of the parallel wave (§3d).** Disjoint files → several
+agents at once. Overlapping files → one agent, sequentially. Same question asked
+twice, opposite answers, and between them they cover every case.
+
+### RECORD WHAT IT COST (every completed task, no exceptions)
+
+The subagent's return line reports its tool uses and tokens. Record them:
+
+```bash
+node scripts/state.mjs task-set --project <id> <taskId> --tokens 126200 --tool-uses 84
+```
+
+Without this, `state.mjs timing` cannot say whether the loop is getting cheaper,
+and every efficiency change is a matter of opinion. With it, `timing` reports the
+first half of the run against the most recent half and gives you the real number.
 
 Budget this at ~2-4 searches. You are locating, not solving.
 

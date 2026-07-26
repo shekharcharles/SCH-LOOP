@@ -217,3 +217,35 @@ test("addTask: a DECISION task cannot be created unblocked", () => {
   assert.equal(addTask(s, { title: "Retry me", status: "stuck" }).status, "stuck");
   assert.equal(addTask(s, { title: "Bad status falls back", status: "nonsense" }).status, "queued");
 });
+
+// --- co-location batching: same files → one subagent, shared ground truth ----
+test("task-batch: groups ready tasks that share files, respects deps and caps", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-batch-"));
+  const P = "b";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "b", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+
+  S("task-add", "--project", P, "--title", "lead",      "--files", "a.py|b.py");
+  S("task-add", "--project", P, "--title", "shares b",  "--files", "b.py|c.py");
+  S("task-add", "--project", P, "--title", "elsewhere", "--files", "z.py");
+  S("task-add", "--project", P, "--title", "depends on lead", "--files", "a.py", "--deps", "1");
+  S("task-add", "--project", P, "--title", "also shares a", "--files", "a.py");
+
+  const r = JSON.parse(S("task-batch", "--project", P, "--with", "1"));
+  const ids = r.batch.map((b) => b.id);
+  assert.ok(ids.includes(2), "a task sharing b.py must be batched");
+  assert.ok(ids.includes(5), "a task sharing a.py must be batched");
+  assert.ok(!ids.includes(3), "a task on unrelated files must NOT be batched");
+  assert.ok(!ids.includes(4), "a task that depends on the lead must NOT run beside it");
+  assert.ok(r.batch.length <= 2, "cap 3 means at most 2 alongside the lead");
+
+  // a lead with no recorded files cannot be batched — it must say so, not guess
+  S("task-add", "--project", P, "--title", "no files recorded");
+  const none = JSON.parse(S("task-batch", "--project", P, "--with", "6"));
+  assert.equal(none.batch.length, 0);
+  assert.match(none.why, /locate-first/);
+  rmSync(home, { recursive: true, force: true });
+});
