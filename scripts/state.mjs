@@ -668,6 +668,19 @@ const commands = {
     const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
     if (flags.tokens !== undefined && num(flags.tokens) !== null) t.tokens = (t.tokens ?? 0) + num(flags.tokens);
     if (flags["tool-uses"] !== undefined && num(flags["tool-uses"]) !== null) t.toolUses = (t.toolUses ?? 0) + num(flags["tool-uses"]);
+    // PER-SUBAGENT BREAKDOWN. One number per task hides where the money goes: a
+    // task recorded at 95k looked like a cheap build, when in earlier passes the
+    // builder and the reviewer together cost 126-205k and only the builder was
+    // ever recorded. Each agent reports its own line, so "which agent is
+    // expensive" becomes answerable instead of inferred.
+    //   --agent builder --tokens 99016 --tool-uses 41
+    //   --agent reviewer --tokens 64900 --tool-uses 17
+    if (flags.agent && num(flags.tokens) !== null) {
+      t.costs = [...(t.costs ?? []), {
+        agent: flags.agent, tokens: num(flags.tokens),
+        toolUses: num(flags["tool-uses"]) ?? 0, at: now(),
+      }];
+    }
     // record which installed skills this task dispatched to (visible on the dashboard)
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
     // a status note (the "what it's doing" / the blocked question) sticks to the
@@ -836,10 +849,21 @@ const commands = {
     } else if (costed.length) {
       trend = `${costed.length} costed task(s), avg ${(costed.reduce((n, t) => n + t.tokens, 0) / costed.length / 1000).toFixed(0)}k — need 4+ for a trend`;
     }
+    // where the tokens actually go, by agent role
+    const byAgent = {};
+    for (const t of s.tasks) for (const c of t.costs ?? []) {
+      const a = (byAgent[c.agent] ??= { runs: 0, tokens: 0, toolUses: 0 });
+      a.runs++; a.tokens += c.tokens; a.toolUses += c.toolUses;
+    }
+    const agents = Object.entries(byAgent)
+      .sort((x, y) => y[1].tokens - x[1].tokens)
+      .map(([a, v]) => `${a}: ${v.runs} run(s), avg ${(v.tokens / v.runs / 1000).toFixed(0)}k, ${Math.round(v.toolUses / v.runs)} tool uses`);
+
     out({
       measured: d.length,
       medianMin: at(0.5), p95Min: p95, maxMin: Math.round(d[d.length - 1] / 60000),
       tokenTrend: trend,
+      byAgent: agents.length ? agents : "no per-agent costs yet — pass --agent <role> with --tokens",
       // TTL must cover the slow tail, or a still-running pass looks stale and a
       // second pass takes the lock on top of it. Interval is a separate question:
       // it is how fast you want NEW work picked up, not how long a task takes.

@@ -438,11 +438,24 @@ twice, opposite answers, and between them they cover every case.
 
 ### RECORD WHAT IT COST (every completed task, no exceptions)
 
-The subagent's return line reports its tool uses and tokens. Record them:
+**Record EVERY subagent separately, the moment it returns** — its return line
+reports both numbers. One total per task hides where the money goes; a task that
+looked like a 95k build was really a 95k builder plus a 65k reviewer, and only
+the builder was ever recorded.
 
 ```bash
-node scripts/state.mjs task-set --project <id> <taskId> --tokens 126200 --tool-uses 84
+node scripts/state.mjs task-set --project <id> <taskId> --agent builder  --tokens 99016 --tool-uses 41
+node scripts/state.mjs task-set --project <id> <taskId> --agent reviewer --tokens 64900 --tool-uses 17
 ```
+
+Use the role as the agent name (`builder`, `reviewer`, `planner`, `wave-1` …).
+`state.mjs timing` then reports cost per role, so "which part of a pass is
+expensive" is answerable from data instead of guessed at.
+
+**A merge is refused without a cost.** If you genuinely built inline with no
+subagent, say so — `--tokens unknown` — but prefer a subagent: building inline
+spends the orchestrator's own context, which is the thing every other rule here
+exists to protect.
 
 Without this, `state.mjs timing` cannot say whether the loop is getting cheaper,
 and every efficiency change is a matter of opinion. With it, `timing` reports the
