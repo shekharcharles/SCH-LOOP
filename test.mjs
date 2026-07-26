@@ -337,3 +337,32 @@ test("pass-gate: requeues tasks stranded by an interrupted pass", () => {
   assert.match(JSON.parse(S("task-next", "--project", P)).title, /interrupted work/);
   rmSync(home, { recursive: true, force: true });
 });
+
+// --- graph context attaches on claim, without the loop cooperating ----------
+// The graph was wired, the MCP tools connected, the skill said to query first —
+// and across a whole build the loop made zero calls. Instructions get skipped,
+// so the engine does this itself at the moment of claim.
+test("task-set: claiming a task attaches graph context and fills files", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-ctx-"));
+  const P = "c";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "c", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  const env = { ...process.env, SCH_HOME: home, NODE_NO_WARNINGS: "1" };
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a], { encoding: "utf8", env }).trim();
+  const G = (...a) => execFileSync("node", [join(ROOT, "scripts", "graph.mjs"), ...a], { encoding: "utf8", env }).trim();
+  const read = () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8")).tasks[0];
+
+  G("record", "--project", P, "--kind", "symbol", "--name", "user_allowed_to_upload",
+    "--path", "files/methods.py", "--line", "412", "--summary", "single choke point for both upload paths");
+  S("task-add", "--project", P, "--title", "Enforce upload quota per user", "--ac", "AC-1: over-quota rejected");
+
+  assert.deepEqual(read().files, [], "nothing attached before the task is claimed");
+  S("task-set", "--project", P, "1", "--status", "building", "--note", "claimed");
+
+  const t = read();
+  assert.deepEqual(t.files, ["files/methods.py"], "the file it will touch is recorded — this is what clubbing matches on");
+  assert.match(t.graphContext.join(" "), /user_allowed_to_upload — files\/methods\.py:412/,
+    "the builder is handed the location instead of rediscovering it");
+  rmSync(home, { recursive: true, force: true });
+});

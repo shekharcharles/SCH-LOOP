@@ -124,7 +124,17 @@ function withFileLock(path, fn) {
       const until = Date.now() + 25; while (Date.now() < until);
     }
   }
-  try { return fn(); } finally { try { rmSync(lock, { recursive: true, force: true }); } catch {} }
+  // A command may be async (task-set consults the graph on claim). Releasing in a
+  // plain `finally` would free the lock the instant fn() returned its PROMISE —
+  // i.e. before the read-modify-write finished — silently undoing the mutual
+  // exclusion this whole function exists to provide. Hold until it settles.
+  const release = () => { try { rmSync(lock, { recursive: true, force: true }); } catch {} };
+  let result;
+  try { result = fn(); }
+  catch (e) { release(); throw e; }
+  if (result && typeof result.then === "function") return result.finally(release);
+  release();
+  return result;
 }
 
 export const loadRegistry = () => readJson(REGISTRY_PATH, REGISTRY_EMPTY);
@@ -629,7 +639,7 @@ const commands = {
     const s = loadState(pid(flags));
     out(s.tasks.find((t) => t.id === Number(pos[0])) ?? "not found");
   },
-  "task-set"({ flags, pos }) {
+  async "task-set"({ flags, pos }) {
     const id = pid(flags); const s = loadState(id);
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
@@ -665,6 +675,32 @@ const commands = {
     if (flags.status === "building" && !t.startedAt) t.startedAt = now();
     if (t.startedAt && (flags.status === "merged" || flags.status === "stuck")) {
       t.durationMs = Date.now() - new Date(t.startedAt).getTime();
+    }
+
+    // ATTACH GRAPH CONTEXT ON CLAIM — do not rely on the loop remembering to ask.
+    //
+    // The graph was wired up, the MCP tools were connected, the skill said to
+    // query it first — and across a whole build the loop never made a single
+    // call. Instructions get skipped; this is the third time that pattern has
+    // cost real tokens (DECISION tasks unblocked, files unrecorded, now this).
+    //
+    // So the engine does it at the moment of claim: look the task up, write the
+    // files into the task, and put the locations where the builder cannot miss
+    // them. Fills `files` as a side effect, which is what clubbing needs too.
+    if (flags.status === "building" && !(t.graphContext)) {
+      try {
+        const g = await import("./graph.mjs");
+        const db = g.open(id);
+        const hits = g.search(db, [t.title, ...(t.ac ?? [])].join(" ").slice(0, 300), { limit: 6 });
+        g.logQuery(db, { source: "engine", tool: "claim-context", q: t.title.slice(0, 60), hits: hits.length, ms: 0 });
+        db.close();
+        if (hits.length) {
+          t.files = [...new Set([...(t.files ?? []), ...hits.map((h) => h.path).filter(Boolean)])];
+          t.graphContext = hits.map((h) =>
+            `${h.kind} ${h.name}${h.path ? ` — ${h.path}${h.line ? ":" + h.line : ""}` : ""}`);
+          event(s, `graph context attached to #${t.id} (${hits.length} hits)`);
+        }
+      } catch { /* no graph yet — the task simply starts without it */ }
     }
     t.updatedAt = now();
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
