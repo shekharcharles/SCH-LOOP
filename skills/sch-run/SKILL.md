@@ -330,8 +330,43 @@ dispatching**, in the orchestrator, cheaply:
 rtk grep -rn "user_allowed_to_upload\|def upload" --include=*.py files/
 ```
 
-**If the project has a `.codegraph/` index, `codegraph_explore` is the FIRST
-call — not a fallback.** One call returns the relevant symbols' verbatim source,
+**ASK THE GRAPH FIRST — before any grep, any read, any index.**
+
+SCH Loop has its own knowledge graph (`sch_graph_*` MCP tools, self-contained, no
+external service). It holds what previous passes already worked out: choke
+points, endpoints, roles, the JS function that does the crypto, findings,
+decisions, lessons — each with a one-line summary and its call paths.
+
+```
+sch_graph_explore  project=<id>  query="<what you are looking for>"
+```
+
+A hit returns the location, what it is, and **everything that calls it** — the
+blast-radius check a rename needs — in one round-trip. No hit means nobody has
+recorded it yet; locate it the normal way below, then **record it** so the next
+task never repeats the work:
+
+```
+sch_graph_record  project=<id>
+  nodes=[{kind:"symbol", name:"user_allowed_to_upload", path:"files/methods.py",
+          line:412, summary:"single choke point for BOTH upload paths"}]
+  edges=[{from:"IsAuthorizedToAdd", to:"user_allowed_to_upload", kind:"calls"}]
+```
+
+**Record on every task, not just when it feels notable.** A discovery that is not
+recorded is paid for again, by the next fresh subagent, at full price. This is
+the mechanism that makes the loop get cheaper over time instead of costing the
+same forever.
+
+**Offensive work records as it goes, from the first request.** Recon output is
+graph material: each host, endpoint, parameter and role is a node; the response
+that revealed it is the summary; a validated finding links to the endpoint it was
+found on and the evidence that proves it. Then a question three days later —
+"this response body is encrypted, what produces it" — is one graph call instead
+of re-reading a bundle.
+
+**Then, if the project also has a `.codegraph/` index, `codegraph_explore` is the
+next call — not a fallback.** One call returns the relevant symbols' verbatim source,
 every caller of each one, and a warning where no tests cover them. Measured on
 this project: the same question that cost ~35 greps and reads returned in a
 single call, including all 7 callers of the choke point.

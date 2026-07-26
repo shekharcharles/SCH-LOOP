@@ -128,6 +128,10 @@ scripts/dashboard-ctl.mjs Ref-counted auto start/stop of the dashboard, driven b
                           SessionStart/SessionEnd hooks (up on first session, down on the last).
 scripts/sync-skills.mjs   Installs skills/ into ~/.claude/skills (where Claude Code loads them).
                           `--check` reports drift; validate fails if the installed copy is stale.
+scripts/graph.mjs         Self-contained knowledge graph (node:sqlite, FTS5, no dependencies).
+                          Symbols, endpoints, findings, decisions + the edges between them.
+scripts/graph-mcp.mjs     MCP server over that graph (hand-written JSON-RPC, no SDK) so
+                          Claude Code / Codex / OpenCode all query it the same way.
 scripts/doctor.mjs        Checks what the repo DECLARES is actually WIRED on this machine:
                           hooks registered, skills installed, no second engine copy, projects
                           still exist. `--fix` installs what's missing (`npm run doctor`).
