@@ -811,8 +811,14 @@ const commands = {
       if (!depsMet(s, t)) return false;                             // deps unmet
       if ((t.deps ?? []).map(Number).includes(id)) return false;    // depends on the lead: must not run beside it
       if (t.active || lead.active) return false;                    // never batch offensive active work
-      const filesOverlap = (t.files ?? []).some((f) => mine.has(norm(f)));
-      return sameSlice(t) || filesOverlap;
+      // Shared FILES are the point — that is the ground truth being paid for
+      // twice. Phase alone is too loose: "UI-6b forum topic" and "UI-11b manage
+      // tables" sit in the same phase and share nothing, and clubbing them would
+      // hand one subagent two unrelated jobs. Phase only decides it when neither
+      // task has known files, where it is the best signal available.
+      const theirs = (t.files ?? []).map(norm);
+      if (theirs.length) return theirs.some((f) => mine.has(f));
+      return sameSlice(t) && mine.size === 0;
     }).sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.id - b.id).slice(0, cap - 1);
     out({
       lead: id, leadPhase: lead.phaseName ? `${lead.category} › ${lead.phaseName}` : null,
