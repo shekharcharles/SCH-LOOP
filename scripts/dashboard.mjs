@@ -10,7 +10,9 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { statSync } from "node:fs";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
+import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats } from "./graph.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
 // different directory than the one being written to
@@ -37,13 +39,57 @@ function rollup() {
     return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false, status, total, done, pending: c("queued"), building: c("building"), review: c("review"), blocked: c("blocked"), stuck: c("stuck"), findings: (s.findings || []).length, inboxNew: s.inbox.filter((i) => i.status === "new").length, pct: total ? Math.round(done / total * 100) : 0, run: s.run || null, blockers };
   });
 }
+// ---- knowledge graph, cached by file mtime -------------------------------
+// The graph is thousands of nodes and every SSE push would otherwise re-open and
+// re-query it. Recompute only when the database has actually changed.
+const gCache = new Map();
+function graphView(project) {
+  const p = join(PROJECTS_DIR, project, "graph.db");
+  let mtime = 0;
+  try { mtime = statSync(p).mtimeMs; } catch { return null; }   // no graph yet
+  const hit = gCache.get(project);
+  if (hit && hit.mtime === mtime) return hit.view;
+  try {
+    const db = openGraph(project);
+    const s = graphStats(db);
+    // newest facts first — this is the "it is learning" feed
+    const recent = db.prepare(`SELECT id,kind,name,path,line,summary,updatedAt FROM node
+                               ORDER BY updatedAt DESC LIMIT 14`).all();
+    // The map shows a CONNECTED core, not everything — 3,000 dots is a hairball.
+    // Seed with the most-connected nodes, then pull in the neighbours they are
+    // connected TO: picking by degree alone selects hubs whose neighbours all
+    // fall outside the set, leaving a map of dots with almost no lines.
+    const seeds = db.prepare(`
+      SELECT n.id,n.kind,n.name,n.path,
+             (SELECT COUNT(*) FROM edge e WHERE e.src=n.id OR e.dst=n.id) AS deg
+      FROM node n WHERE deg > 0 ORDER BY deg DESC, n.name LIMIT 24`).all();
+    const ids = new Set(seeds.map((n) => n.id));
+    const edges = db.prepare(`SELECT src,dst,kind FROM edge
+                              WHERE src IN (SELECT value FROM json_each(?))
+                                 OR dst IN (SELECT value FROM json_each(?))`)
+      .all(JSON.stringify([...ids]), JSON.stringify([...ids]))
+      .slice(0, 160);
+    const extra = [...new Set(edges.flatMap((e) => [e.src, e.dst]))].filter((i) => !ids.has(i)).slice(0, 60);
+    const core = seeds.concat(extra.length
+      ? db.prepare(`SELECT id,kind,name,path,1 AS deg FROM node
+                    WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(extra))
+      : []);
+    const keep = new Set(core.map((n) => n.id));
+    const mapEdges = edges.filter((e) => keep.has(e.src) && keep.has(e.dst));
+    db.close();
+    const view = { stats: s, recent, map: { nodes: core, edges: mapEdges } };
+    gCache.set(project, { mtime, view });
+    return view;
+  } catch { return null; }
+}
+
 const snapshot = (project) => {
   if (!project) return { projects: rollup() };
   if (!getProject(project)) return { error: "gone" };
   const state = loadState(project);
   // recomputed from the live queue every push — the right interval changes as the
   // queue drains or the loop ends up waiting on the operator
-  return { project: getProject(project), state, advice: suggestInterval(state) };
+  return { project: getProject(project), state, advice: suggestInterval(state), graph: graphView(project) };
 };
 
 // ---- SSE ----
@@ -127,6 +173,17 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === "/api/projects") return json(res, rollup());
   if (url.pathname === "/api/state") { const s = snapshot(url.searchParams.get("project")); return json(res, s); }
+  // live search over what the loop knows — the same query the agents make
+  if (url.pathname === "/api/graph") {
+    const project = url.searchParams.get("project"), q = url.searchParams.get("q") || "";
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try {
+      const db = openGraph(project);
+      const rows = q.trim() ? graphExplore(db, q, { depth: 1, limit: 8 }) : [];
+      db.close();
+      return json(res, rows);
+    } catch (e) { return json(res, { error: e.message }); }
+  }
   if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE.replace("__CSRF__", CSRF)); return; }
   res.writeHead(404); res.end("not found");
 });
@@ -376,6 +433,39 @@ const PAGE = `<!doctype html>
     .now .nt{min-width:100%;white-space:normal;order:9}
     .pgw{width:88px}
   }
+  /* ---- knowledge graph ---- */
+  .gwrap{border:1px solid var(--line);background:var(--panel)}
+  .gkinds{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+  .gk{background:var(--panel);padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+      color:var(--dim);flex:1;min-width:78px;border-top:2px solid var(--c)}
+  .gk b{display:block;font-size:15px;color:var(--c);line-height:1.1;margin-bottom:1px}
+  .gmain{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  @media(max-width:900px){.gmain{grid-template-columns:1fr}}
+  .gleft{padding:11px 12px;min-width:0;border-right:1px solid var(--line)}
+  @media(max-width:900px){.gleft{border-right:0;border-bottom:1px solid var(--line)}}
+  .gsearch{width:100%;font-family:inherit;font-size:13px;padding:9px 11px;background:var(--bg);
+           color:var(--fg);border:1px solid var(--line);margin-bottom:9px}
+  .gsearch:focus{outline:none;border-color:var(--green)}
+  .gres{max-height:190px;overflow-y:auto;margin-bottom:9px}
+  .ghit{border-left:2px solid var(--c);padding:6px 9px;margin-bottom:4px;background:#111;font-size:12px}
+  .ghit b{color:var(--fg)}
+  .gcal{color:var(--green);font-size:10.5px;margin-top:3px}
+  .gnone{color:var(--dim);font-size:11px;padding:6px 2px}
+  .glearn{max-height:260px;overflow-y:auto}
+  .gr{border-left:2px solid var(--c);padding:5px 9px;margin-bottom:3px;background:#0f0f0f;font-size:11.5px;
+      display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;align-items:baseline}
+  .gr-k{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--c);white-space:nowrap}
+  .gr-n{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gr-p{grid-column:2;color:var(--dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gr-s{grid-column:2;color:var(--dim);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* a fact that appeared since the last push — this is the "it is learning" tell */
+  @keyframes glearned{0%{background:rgba(74,246,38,.22)}100%{background:#0f0f0f}}
+  .gr.fresh{animation:glearned 2.4s ease-out}
+  .gright{position:relative;min-width:0;padding:8px}
+  #gcanvas{width:100%;display:block;cursor:grab;touch-action:none}
+  #gcanvas:active{cursor:grabbing}
+  .ghint{position:absolute;left:12px;bottom:8px;font-size:10px;color:var(--dim);pointer-events:none}
+  @media(prefers-reduced-motion:reduce){.gr.fresh{animation:none}}
   .moretasks{width:100%;margin-top:6px;font-family:inherit;padding:10px;background:var(--panel2);
              color:var(--fg);border:1px solid var(--line);font-size:11px;letter-spacing:.08em;
              text-transform:uppercase;cursor:pointer}
@@ -432,6 +522,14 @@ function nowBar(run,st){
       '<span class="nt">'+esc(t.title)+'</span>'+
       (mins!==null?'<span class="nx mono">'+mins+'m</span>':'')+bar+'</div>';
   }
+  // Not every kind of work is a task. Planning, reviewing and indexing all took
+  // minutes while this line said "no task building" — which read as stalled.
+  if(run&&run.activity){
+    const mins=Math.round((Date.now()-new Date(run.activity.since).getTime())/60000);
+    return '<div class="now working"><span class="nb"></span><b>WORKING</b>'+
+      '<span class="nt">'+esc(run.activity.what)+'</span>'+
+      '<span class="nx mono">'+mins+'m</span>'+bar+'</div>';
+  }
   // nothing building — say when the next pass is due so idle never looks dead
   let due="";
   if(run&&run.lastPass&&run.intervalMin){
@@ -444,6 +542,148 @@ function nowBar(run,st){
     '<span class="nt">no task building'+(ready?' · '+ready+' ready':'')+'</span>'+
     (due?'<span class="nx">'+due+'</span>':'')+bar+'</div>';
 }
+// ---- knowledge graph ------------------------------------------------------
+// What the loop has learned, and what it is learning right now. The colours are
+// by KIND, because "is this code or is this something recon found" is the first
+// thing you want to know at a glance.
+const GK={symbol:"#4af626",file:"#58a6ff",module:"#58a6ff",endpoint:"#e3b341",param:"#e3b341",
+  role:"#e3b341",host:"#e3b341",finding:"#ff2a2a",evidence:"#ff2a2a",decision:"#c77dff",
+  lesson:"#ff8f3f",note:"#7d7d7d"};
+// Search results must survive a live update. Every SSE push re-renders this
+// section, which wiped whatever you had just looked up — so keep the rendered
+// results in a variable and put them back.
+let GSEEN=new Set(), GQ="", GRES="";
+function graphSec(g){
+  if(!g) return '<h2>knowledge graph<span class="n mono">empty</span></h2>'+
+    '<div class="empty">nothing recorded yet — it fills as the loop works, and a file is indexed the moment it is edited</div>';
+  const chips=g.stats.byKind.map(k=>'<span class="gk" style="--c:'+(GK[k.kind]||"#7d7d7d")+'">'+
+    '<b class="mono">'+k.n+'</b> '+esc(k.kind)+'</span>').join("");
+  // "just learned" — anything whose id we had not seen on a previous push
+  const rows=g.recent.map(n=>{
+    const isNew=!GSEEN.has(n.id);
+    return '<div class="gr'+(isNew?' fresh':'')+'" style="--c:'+(GK[n.kind]||"#7d7d7d")+'">'+
+      '<span class="gr-k">'+esc(n.kind)+'</span>'+
+      '<span class="gr-n">'+esc(n.name)+'</span>'+
+      '<span class="gr-p mono">'+esc(n.path||"")+(n.line?":"+n.line:"")+'</span>'+
+      (n.summary?'<span class="gr-s">'+esc(n.summary)+'</span>':'')+'</div>';
+  }).join("");
+  g.recent.forEach(n=>GSEEN.add(n.id));
+  return '<h2>knowledge graph — what the loop knows'+
+    '<span class="n mono">'+g.stats.nodes+' facts · '+g.stats.edges+' links</span></h2>'+
+    '<div class="gwrap">'+
+      '<div class="gkinds">'+chips+'</div>'+
+      '<div class="gmain">'+
+        '<div class="gleft">'+
+          '<input id="gq" class="gsearch" placeholder="ask the graph… (same query the agents make)" '+
+            'value="'+esc(GQ)+'" oninput="GQ=this.value;graphAsk()">'+
+          '<div id="gres" class="gres">'+GRES+'</div>'+
+          '<div class="glearn">'+rows+'</div>'+
+        '</div>'+
+        '<div class="gright"><canvas id="gcanvas"></canvas>'+
+          '<div class="ghint">drag to move · click a node to look it up</div></div>'+
+      '</div>'+
+    '</div>';
+}
+// live search — hits the same store the MCP tools do
+let gTimer;
+function graphAsk(){
+  clearTimeout(gTimer);
+  gTimer=setTimeout(()=>{
+    const el=document.getElementById("gres"); if(!el)return;
+    if(!GQ.trim()){el.innerHTML=GRES="";return;}
+    fetch("/api/graph?project="+encodeURIComponent(qp("project"))+"&q="+encodeURIComponent(GQ))
+      .then(r=>r.json()).then(rows=>{
+        if(!Array.isArray(rows)||!rows.length){el.innerHTML=GRES='<div class="gnone">no match — nothing recorded about that yet</div>';return;}
+        el.innerHTML=GRES=rows.map(r=>'<div class="ghit" style="--c:'+(GK[r.kind]||"#7d7d7d")+'">'+
+          '<span class="gr-k">'+esc(r.kind)+'</span> <b>'+esc(r.name)+'</b> '+
+          '<span class="gr-p mono">'+esc(r.path||"")+(r.line?":"+r.line:"")+'</span>'+
+          (r.summary?'<div class="gr-s">'+esc(r.summary)+'</div>':'')+
+          (r.callers&&r.callers.length?'<div class="gcal">called by '+r.callers.slice(0,6).map(c=>esc(c.name)).join(", ")+'</div>':'')+
+          '</div>').join("");
+      }).catch(()=>{});
+  },220);
+}
+// A small force layout on canvas. No library: springs on edges, repulsion
+// between nodes, damped — enough to make the shape readable, cheap enough to run
+// on a phone.
+let GSIM=null;
+function drawGraph(map){
+  const cv=document.getElementById("gcanvas"); if(!cv||!map||!map.nodes.length)return;
+  const dpr=window.devicePixelRatio||1;
+  const w=cv.clientWidth||520, h=Math.max(300,Math.min(460,cv.clientWidth*0.72));
+  cv.width=w*dpr; cv.height=h*dpr; cv.style.height=h+"px";
+  const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const key=map.nodes.map(n=>n.id).join("|");
+  if(!GSIM||GSIM.key!==key){
+    const P=map.nodes.map((n,i)=>({...n,
+      x:w/2+Math.cos(i/map.nodes.length*6.283)*Math.min(w,h)*0.34+(Math.random()-.5)*20,
+      y:h/2+Math.sin(i/map.nodes.length*6.283)*Math.min(w,h)*0.34+(Math.random()-.5)*20,vx:0,vy:0}));
+    const idx=new Map(P.map((p,i)=>[p.id,i]));
+    GSIM={key,P,idx,E:map.edges.map(e=>({s:idx.get(e.src),t:idx.get(e.dst),k:e.kind})).filter(e=>e.s!=null&&e.t!=null),ticks:0};
+  }
+  const {P,E}=GSIM;
+  for(let step=0;step<2;step++){
+    for(let i=0;i<P.length;i++){
+      for(let j=i+1;j<P.length;j++){
+        let dx=P[j].x-P[i].x,dy=P[j].y-P[i].y,d2=dx*dx+dy*dy||1;
+        if(d2<40000){const f=900/d2,d=Math.sqrt(d2);const fx=dx/d*f,fy=dy/d*f;
+          P[i].vx-=fx;P[i].vy-=fy;P[j].vx+=fx;P[j].vy+=fy;}
+      }
+    }
+    for(const e of E){const a=P[e.s],b=P[e.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;const f=(d-70)*0.012;
+      const fx=dx/d*f,fy=dy/d*f;a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;}
+    for(const p of P){
+      p.vx+=(w/2-p.x)*0.0016; p.vy+=(h/2-p.y)*0.0016;   // gentle centring
+      p.vx*=0.82; p.vy*=0.82; p.x+=p.vx; p.y+=p.vy;
+      p.x=Math.max(14,Math.min(w-14,p.x)); p.y=Math.max(14,Math.min(h-14,p.y));
+    }
+  }
+  ctx.clearRect(0,0,w,h);
+  ctx.lineWidth=1;
+  for(const e of E){const a=P[e.s],b=P[e.t];
+    ctx.strokeStyle="rgba(120,140,160,.22)";ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+  ctx.font="10px ui-monospace,Consolas,monospace";
+  for(const p of P){
+    const c=GK[p.kind]||"#7d7d7d";const r=Math.min(9,3+Math.sqrt(p.deg||1)*1.5);
+    ctx.fillStyle=c;ctx.beginPath();ctx.arc(p.x,p.y,r,0,6.2832);ctx.fill();
+    if(p.deg>=3){
+      const label=String(p.name).slice(0,16);
+      const tw=ctx.measureText(label).width;
+      // draw the label on whichever side keeps it inside the canvas, or it gets
+      // clipped at the edge and reads as truncated data
+      const lx=(p.x+r+3+tw>w-4)?p.x-r-3-tw:p.x+r+3;
+      ctx.fillStyle="rgba(234,234,234,.72)";
+      ctx.fillText(label,Math.max(2,lx),Math.min(h-3,Math.max(9,p.y+3)));}
+  }
+  GSIM.ticks++;
+  if(GSIM.ticks<220)requestAnimationFrame(()=>drawGraph(map));
+}
+// drag to move, click to look up
+document.addEventListener("pointerdown",function(e){
+  const cv=e.target.closest&&e.target.closest("#gcanvas"); if(!cv||!GSIM)return;
+  const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+  let best=null,bd=1e9;
+  for(const p of GSIM.P){const d=(p.x-x)**2+(p.y-y)**2; if(d<bd){bd=d;best=p;}}
+  if(bd>400)return;
+  GSIM.drag=best; cv.setPointerCapture(e.pointerId);
+  GSIM.moved=false;
+});
+document.addEventListener("pointermove",function(e){
+  if(!GSIM||!GSIM.drag)return;
+  const cv=document.getElementById("gcanvas"); if(!cv)return;
+  const r=cv.getBoundingClientRect();
+  GSIM.drag.x=e.clientX-r.left; GSIM.drag.y=e.clientY-r.top;
+  GSIM.drag.vx=GSIM.drag.vy=0; GSIM.moved=true; GSIM.ticks=0;
+  if(LAST&&LAST.graph)drawGraph(LAST.graph.map);
+});
+document.addEventListener("pointerup",function(){
+  if(!GSIM||!GSIM.drag)return;
+  if(!GSIM.moved){const n=GSIM.drag;const box=document.getElementById("gq");
+    if(box){box.value=n.name;GQ=n.name;graphAsk();box.scrollIntoView({block:"center"});}}
+  GSIM.drag=null;
+});
+
 // The most recent thing the loop actually did. Without it a quiet moment reads as
 // a hung process — this is the line that proves work is still flowing.
 function lastBar(st){
@@ -640,6 +880,7 @@ function projSkeleton(id){
     <form class="row-form" method="POST" action="/inbox">\${csrf}<input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" title="Describe a feature, fix or lead — the next loop pass reasons it into the right place in the queue" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button title="Send to the inbox — the next loop pass plans it into the queue">Add</button></form>
     <section id="inboxsec"></section>
     <section id="phase"></section>
+    <section id="graphsec"></section>
     <section id="tasksec"></section>
     <section id="findsec"></section>
     <details class="box"><summary>activity log</summary><div class="boxin"><section id="actsec"></section></div></details>\`;
@@ -738,6 +979,9 @@ function projApply(id,r){
   set("phase",'<h2>work tree — every task, live'+(nowRunning.length?'<span class="livenow">● building: '+esc(nowRunning[0].title)+'</span>':'')+
     '<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
     (ph.length?'<div class="phase-strip">'+phHtml+'</div>':'<div class="empty">no phases planned yet — run /sch-plan</div>'));
+  // knowledge graph — what the loop has learned, live
+  set("graphsec",graphSec(r.graph));
+  if(r.graph&&r.graph.map&&r.graph.map.nodes.length)requestAnimationFrame(()=>drawGraph(r.graph.map));
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
   // A BLOCKED task is waiting on an ANSWER. Requeueing it without one just sends

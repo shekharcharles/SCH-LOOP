@@ -651,6 +651,23 @@ const commands = {
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);
   },
+  // What the loop is doing RIGHT NOW, including work that is not a task.
+  //
+  // A pass spent 12 minutes on a planning subagent while the dashboard showed
+  // "WAITING — no task building", because only tasks in `building` were visible.
+  // Planning, reviewing, indexing and answering are all real work and all
+  // invisible under that rule. The loop announces each phase here instead.
+  //
+  //   state.mjs activity --project <id> --doing "planning inbox #8 (PRD gap analysis)"
+  //   state.mjs activity --project <id> --clear
+  activity({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    s.run = s.run ?? {};
+    if (flags.clear === "true" || flags.clear === "") { delete s.run.activity; }
+    else if (flags.doing) s.run.activity = { what: flags.doing, since: now() };
+    saveState(id, s);
+    out(s.run.activity ?? "idle");
+  },
   "interval-advice"({ flags }) { out(suggestInterval(loadState(pid(flags)))); },
   // Which other READY tasks sit on the same files as this one?
   //

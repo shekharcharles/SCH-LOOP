@@ -44,10 +44,27 @@ Read, in this order:
 2. `packs/packs.json` for the project's `domain`, then `packs/<method>.md` — the
    methodology and its phases.
 3. `knowledge/<pack>.md` — lessons from previous projects of this kind.
-4. **The actual codebase**, for anything that already exists. Read the routes/
-   models/components that the work will touch. A plan written without looking at
-   the code invents work that is already done and misses work that is required.
-   For an offensive project, read the recon output if any phase has run.
+4. **The knowledge graph FIRST, then the codebase.** A plan written without
+   looking at the code invents work that is already done and misses work that is
+   required — but crawling the repo to find that out is the single most expensive
+   thing planning does. One observed planning pass spent **183k tokens and 12
+   minutes** on a gap analysis that the graph could have answered in a handful of
+   calls.
+
+   ```
+   sch_graph_search   project=<id>  query="<the capability the PRD asks for>"
+   sch_graph_explore  project=<id>  query="<the area it would land in>"
+   ```
+
+   The graph already holds every indexed symbol and file, plus the decisions and
+   lessons of previous passes. **A "does this already exist?" question is a graph
+   query, not a repo crawl.** Ask it once per PRD capability; only open files for
+   the ones the graph cannot answer, and record what you learn so the next plan
+   is cheaper still.
+
+   For an offensive project, the graph also holds recon output — hosts,
+   endpoints, parameters and roles already discovered. Query it before planning
+   another recon phase over ground that is already mapped.
 
 ### Planning against an EXISTING codebase is a different job
 

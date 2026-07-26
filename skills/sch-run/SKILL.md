@@ -148,6 +148,24 @@ the dashboard shows **LOOP NOT RUNNING**, which is correct — it isn't.
 Only after `WORK` + lock do the heavy steps below run. This keeps idle and
 overlapping passes to a handful of tokens instead of a full methodology load.
 
+## 0a. SAY WHAT YOU ARE DOING — before every phase that takes more than a moment
+
+The operator watches the dashboard, not this terminal. Only tasks in `building`
+used to be visible, so a pass that spent twelve minutes on a planning subagent
+displayed "WAITING — no task building" throughout, and looked stalled.
+
+**Announce every phase**, in plain words, before starting it:
+
+```bash
+node scripts/state.mjs activity --project <id> --doing "planning inbox #8 — PRD gap analysis"
+node scripts/state.mjs activity --project <id> --doing "building #67 — SPA transport wrapper"
+node scripts/state.mjs activity --project <id> --doing "reviewing #67 (diff, 240 lines)"
+node scripts/state.mjs activity --project <id> --clear true      # at the end of the pass
+```
+
+One line, one call, and the dashboard shows it live with a running timer. A pass
+that never announces anything is indistinguishable from a dead one.
+
 ## 0b. KEEP WORKING — do not sleep out the rest of the interval
 
 A finished task does **not** end the pass. The interval decides how often a
