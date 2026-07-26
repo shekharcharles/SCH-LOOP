@@ -662,8 +662,12 @@ const commands = {
     if (flags.files !== undefined) t.files = [...new Set([...(t.files ?? []), ...splitList(flags.files)])];
     // what the work actually cost. Without this "are tokens going down?" is
     // unanswerable, and every efficiency change is a guess.
-    if (flags.tokens !== undefined) t.tokens = (t.tokens ?? 0) + Number(flags.tokens);
-    if (flags["tool-uses"] !== undefined) t.toolUses = (t.toolUses ?? 0) + Number(flags["tool-uses"]);
+    // Guard the arithmetic: Number("unknown") is NaN, and a NaN written here would
+    // poison the cost data permanently while looking like a recorded value. A
+    // non-numeric --tokens is left for the merge gate below to interpret.
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+    if (flags.tokens !== undefined && num(flags.tokens) !== null) t.tokens = (t.tokens ?? 0) + num(flags.tokens);
+    if (flags["tool-uses"] !== undefined && num(flags["tool-uses"]) !== null) t.toolUses = (t.toolUses ?? 0) + num(flags["tool-uses"]);
     // record which installed skills this task dispatched to (visible on the dashboard)
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
     // a status note (the "what it's doing" / the blocked question) sticks to the
@@ -702,6 +706,22 @@ const commands = {
         }
       } catch { /* no graph yet — the task simply starts without it */ }
     }
+    // COST IS NOT OPTIONAL. Unlike graph context, the engine cannot supply this —
+    // only the loop sees what a subagent spent. Asking nicely produced 6 records
+    // out of 121 tasks, so "are tokens going down?" stayed unanswerable and every
+    // efficiency claim stayed an opinion. A merge without a cost is now refused.
+    // `--tokens unknown` is allowed and recorded as unmeasured, so honesty is
+    // always available and silence never is.
+    if (flags.status === "merged" && t.startedAt && t.tokens === undefined && flags.force !== "true") {
+      if (flags.tokens === undefined)
+        die(`REFUSED: task #${t.id} was built by a subagent, so record what it cost before merging.\n` +
+            `  node scripts/state.mjs task-set --project ${id} ${t.id} --status merged --tokens <n> --tool-uses <n>\n` +
+            `  (the agent reports both on return; pass --tokens unknown if it genuinely did not)`);
+      if (String(flags.tokens).toLowerCase() === "unknown") { t.tokens = 0; t.tokensUnmeasured = true; }
+    }
+    // a finished task is no longer what the loop is doing — stale activity is
+    // what made the dashboard say "building #96" for minutes after it merged
+    if (CLOSED.has(t.status) && s.run?.activity) delete s.run.activity;
     t.updatedAt = now();
     event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);

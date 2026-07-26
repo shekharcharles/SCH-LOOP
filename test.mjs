@@ -366,3 +366,41 @@ test("task-set: claiming a task attaches graph context and fills files", () => {
     "the builder is handed the location instead of rediscovering it");
   rmSync(home, { recursive: true, force: true });
 });
+
+// --- cost recording cannot be skipped ---------------------------------------
+// The engine cannot supply this — only the loop sees what a subagent spent — so
+// it is enforced at the merge instead. Asking nicely produced 6 records out of
+// 121 tasks, which left "are tokens going down?" permanently unanswerable.
+test("task-set: refuses to merge a built task with no cost recorded", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-cost-"));
+  const P = "k";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "k", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  const env = { ...process.env, SCH_HOME: home, NODE_NO_WARNINGS: "1" };
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a], { encoding: "utf8", env }).trim();
+  const read = (i = 0) => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8")).tasks[i];
+
+  S("task-add", "--project", P, "--title", "built by a subagent", "--ac", "x");
+  S("task-set", "--project", P, "1", "--status", "building", "--note", "claimed");
+  assert.throws(() => S("task-set", "--project", P, "1", "--status", "merged", "--note", "done"),
+    /record what it cost/, "a built task must not merge without its cost");
+  assert.equal(read().status, "building", "the refused merge must not have taken effect");
+
+  S("task-set", "--project", P, "1", "--status", "merged", "--note", "done", "--tokens", "84000", "--tool-uses", "31");
+  assert.equal(read().status, "merged");
+  assert.equal(read().tokens, 84000);
+
+  // honesty is always available; silence is not
+  S("task-add", "--project", P, "--title", "genuinely unmeasured", "--ac", "x");
+  S("task-set", "--project", P, "2", "--status", "building");
+  S("task-set", "--project", P, "2", "--status", "merged", "--tokens", "unknown");
+  assert.equal(read(1).status, "merged");
+  assert.equal(read(1).tokensUnmeasured, true);
+
+  // a task never built by a subagent is not gated — nothing spent it
+  S("task-add", "--project", P, "--title", "never built", "--ac", "x");
+  S("task-set", "--project", P, "3", "--status", "merged", "--note", "superseded upstream");
+  assert.equal(read(2).status, "merged");
+  rmSync(home, { recursive: true, force: true });
+});
