@@ -18,7 +18,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { open, upsertNode, addEdge } from "./graph.mjs";
+import { open, upsertNode, addEdge, nodeId } from "./graph.mjs";
 
 const ROOT = process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -26,7 +26,11 @@ const flag = (n) => { const i = args.indexOf("--" + n); return i !== -1 ? args[i
 const has = (n) => args.includes("--" + n);
 
 const LANG = { py: "python", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-  ts: "typescript", tsx: "typescript", go: "go", rs: "rust", java: "java", rb: "ruby", php: "php" };
+  ts: "typescript", tsx: "typescript", go: "go", rs: "rust", java: "java", rb: "ruby", php: "php",
+  // Templates and stylesheets ARE the codebase for UI work. Indexing only
+  // executable code meant a template task got handed views.py and models.py —
+  // confidently wrong, which is worse than an empty answer.
+  html: "template", htm: "template", css: "css", scss: "css" };
 
 // Declarations only. Anything cleverer with a regex is a lie a real parser will
 // correct in phase 2; better to record less and be right.
@@ -38,6 +42,16 @@ const DECL = [
   [/^\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)/gm, "class"],
   [/^\s*(?:export\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)/gm, "type"],
   [/^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/gm, "function"],
+];
+// A stylesheet's "symbols" are its class names, and a template's are the classes
+// it renders and the blocks it defines. That is what someone searching "forum
+// topic reply thread" is actually looking for.
+const CSS_DECL = [
+  [/^\s*\.([a-zA-Z_][\w-]{2,})[^{}]*\{/gm, "class"],
+];
+const TPL_DECL = [
+  [/\{%\s*block\s+([a-zA-Z_][\w-]*)/g, "block"],
+  [/class="([^"]{3,})"/g, "class-attr"],
 ];
 
 // Which registered project owns this path?
@@ -65,6 +79,27 @@ export function indexFile(db, repoRoot, abs) {
   const lineOf = (idx) => src.slice(0, idx).split("\n").length;
   let n = 0;
   const seen = new Set();
+
+  if (lang === "css" || lang === "template") {
+    const rules = lang === "css" ? CSS_DECL : TPL_DECL;
+    for (const [re, what] of rules) {
+      re.lastIndex = 0;
+      for (const m of src.matchAll(re)) {
+        // a class attribute holds several names; each is its own handle
+        for (const name of (what === "class-attr" ? m[1].split(/\s+/) : [m[1]])) {
+          if (!name || name.length < 3 || seen.has(name) || /[{}%]/.test(name)) continue;
+          seen.add(name);
+          upsertNode(db, { kind: "symbol", name, path: rel, lang, line: lineOf(m.index),
+            summary: `${what === "block" ? "template block" : lang === "css" ? "css class" : "used in"} ${rel}` });
+          addEdge(db, fileId, nodeId("symbol", name, rel), "contains");
+          n++;
+          if (n > 400) return n;               // a big stylesheet is not worth indexing whole
+        }
+      }
+    }
+    return n;
+  }
+
   for (const [re, what] of DECL) {
     re.lastIndex = 0;
     for (const m of src.matchAll(re)) {
