@@ -58,6 +58,15 @@
             "command": "npx --no-install prettier --write $CLAUDE_FILE_PATHS 2>/dev/null || true"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'node \"$HOME/.claude/SCH-loop/scripts/graph-index.mjs\" --file \"$CLAUDE_FILE_PATHS\" >/dev/null 2>&1 || true'"
+          }
+        ]
       }
     ],
     "SessionStart": [

@@ -132,6 +132,9 @@ scripts/graph.mjs         Self-contained knowledge graph (node:sqlite, FTS5, no 
                           Symbols, endpoints, findings, decisions + the edges between them.
 scripts/graph-mcp.mjs     MCP server over that graph (hand-written JSON-RPC, no SDK) so
                           Claude Code / Codex / OpenCode all query it the same way.
+scripts/graph-index.mjs   Keeps the graph current AUTOMATICALLY — a PostToolUse hook indexes
+                          every edited file; --all does a first full pass. No manual init, ever.
+scripts/graph-seed.mjs    Loads what past tasks/commits/decisions already learned into the graph.
 scripts/doctor.mjs        Checks what the repo DECLARES is actually WIRED on this machine:
                           hooks registered, skills installed, no second engine copy, projects
                           still exist. `--fix` installs what's missing (`npm run doctor`).
