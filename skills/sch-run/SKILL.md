@@ -333,6 +333,30 @@ Re-read it; if it changed under you, drop and re-pick.
 wander off-topic and burn tokens. **Spawn a fresh `Agent`** (model `sonnet`), clean
 context, one task. The loop session stays a lean orchestrator.
 
+### GIVE THE BUILDER THE FEWEST TOOLS THAT DO THE JOB (measured: ~60% cheaper)
+
+Five measured builds on the same project, same model, comparable tasks:
+
+```
+full tool access      84k · 88k · 120k · 125k        (16-50 tool uses)
+Read/Edit/Grep/Glob   35k                            (24 tool uses)
+```
+
+Cost barely tracks tool USES — going from 16 to 50 raised it 36%. It tracks the
+**tool SCHEMAS the agent carries**, which are re-sent on every turn. A builder
+with the whole MCP surface pays for Chrome, Playwright, ghidra, pentest tooling
+and everything else on every single turn, whether or not it touches them.
+
+- **Editing code?** Use a code-only agent (`Read`, `Edit`, `Write`, `Grep`,
+  `Glob`). It cannot run the build, the tests or git — **you** run those after it
+  returns, which costs a fraction of what its schemas would have.
+- **The task genuinely needs a browser or the container?** Then it needs those
+  tools, and you pay for them — but say so in the pass notes, because that is
+  the expensive path.
+- **Verify what it could not.** A restricted builder cannot check line endings or
+  run tests; do both yourself before committing. A real CRLF flip slipped through
+  exactly this way and was caught by the commit gate.
+
 ### 5a. LOCATE FIRST — never send a builder in blind (the biggest cost lever)
 
 A fresh subagent knows nothing about this codebase. Hand it `"enforce upload
