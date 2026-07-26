@@ -290,6 +290,23 @@ const PAGE = `<!doctype html>
   .loop .lx{color:var(--dim);text-transform:none;letter-spacing:0;font-size:11px}
   .loop .cmd{color:var(--fg);background:#1c1c1c;padding:1px 7px;border:1px solid var(--line);
              text-transform:none;letter-spacing:0;user-select:all}
+  /* WHAT IS HAPPENING NOW — the line that tells idle from dead at a glance */
+  .now{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:-10px 0 0;
+       padding:8px 12px;border:1px solid var(--line);border-top:0;background:#101010;font-size:11px}
+  .now b{text-transform:uppercase;letter-spacing:.1em;flex:none}
+  .now .nb{width:8px;height:8px;flex:none}
+  .now .nid{color:var(--dim);flex:none}
+  .now .nt{flex:1;min-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+  .now .nx{color:var(--dim);flex:none}
+  .now.working{border-color:rgba(74,246,38,.45);background:rgba(74,246,38,.06)}
+  .now.working b{color:var(--green)}
+  .now.working .nb{background:var(--green);animation:ring 1.5s ease-in-out infinite;border-radius:50%}
+  .now.working .nt{color:#fff}
+  .now.idle b{color:var(--dim)} .now.idle .nb{background:var(--dim)} .now.idle .nt{color:var(--dim)}
+  .pgw{width:110px;height:5px;background:#222;flex:none;border:1px solid var(--line)}
+  .pgw i{display:block;height:100%;background:var(--green)}
+  .pgn{color:var(--dim);flex:none;font-size:10px}
+  @media(prefers-reduced-motion:reduce){.now.working .nb{animation:none}}
   .advice{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;margin:-10px 0 10px;
           padding:6px 12px;border:1px solid var(--line);border-top:0;background:#111;font-size:11px}
   .advice b{color:var(--green);text-transform:uppercase;letter-spacing:.08em;flex:none}
@@ -364,7 +381,40 @@ function loopHealth(run){
   if(late)return{cls:"late",label:"LOOP LATE",detail:"last "+base,dead:false};
   return{cls:"ok",label:"LOOP RUNNING",detail:base,dead:false};
 }
-function loopBar(run,advice){
+// What is happening RIGHT NOW. Between passes the loop is alive but idle, which
+// previously rendered as "LOOP RUNNING" and nothing else — indistinguishable from
+// dead, and read as halted. Say which task is building, or say it is waiting and
+// when the next pass is due.
+function nowBar(run,st){
+  const RUN={building:"BUILDING",review:"IN REVIEW",changes:"FIXING"};
+  const t=(st.tasks||[]).find(x=>RUN[x.status]);
+  const total=(st.tasks||[]).filter(x=>x.status!=="superseded").length;
+  const done=(st.tasks||[]).filter(x=>x.status==="merged").length;
+  const pct=total?Math.round(done/total*100):0;
+  const bar='<span class="pgw"><i style="width:'+pct+'%"></i></span><span class="pgn mono">'+
+    done+'/'+total+' · '+pct+'%</span>';
+
+  if(t){
+    const since=t.startedAt||t.updatedAt;
+    const mins=since?Math.round((Date.now()-new Date(since).getTime())/60000):null;
+    return '<div class="now working"><span class="nb"></span>'+
+      '<b>'+RUN[t.status]+'</b><span class="nid mono">#'+t.id+'</span>'+
+      '<span class="nt">'+esc(t.title)+'</span>'+
+      (mins!==null?'<span class="nx mono">'+mins+'m</span>':'')+bar+'</div>';
+  }
+  // nothing building — say when the next pass is due so idle never looks dead
+  let due="";
+  if(run&&run.lastPass&&run.intervalMin){
+    const next=new Date(run.lastPass).getTime()+run.intervalMin*60000;
+    const mins=Math.round((next-Date.now())/60000);
+    due=mins>0?"next pass in ~"+mins+"m":"next pass due now";
+  }
+  const ready=(st.tasks||[]).filter(x=>x.status==="queued").length;
+  return '<div class="now idle"><span class="nb"></span><b>WAITING</b>'+
+    '<span class="nt">no task building'+(ready?' · '+ready+' ready':'')+'</span>'+
+    (due?'<span class="nx">'+due+'</span>':'')+bar+'</div>';
+}
+function loopBar(run,advice,st){
   const h=loopHealth(run);
   const m=advice?advice.minutes:30;
   // --project is auto-detected from the folder the terminal is in; showing it
@@ -372,7 +422,7 @@ function loopBar(run,advice){
   let s='<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
     '<span class="lx">'+esc(h.detail)+'</span>'+
     (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop '+m+'m /sch-run</span>':'')+
-    '</div>';
+    '</div>'+(st&&!h.dead?nowBar(run,st):'');
   // The right interval is not a fixed preference — it depends on what the queue
   // looks like right now, so say what it should be and why.
   if(advice){
@@ -566,7 +616,7 @@ function projApply(id,r){
   document.getElementById("clk").textContent=clock();
   document.getElementById("pname").textContent=p.name;
   document.getElementById("pmeta").innerHTML=\`\${esc(p.domain)} · \${esc(p.path)||"no path"} \${OFF(p.domain)?(sc.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>'):''}\${sc.halt?' <span class="badge b-halt">halt</span>':''}\`;
-  set("loop",loopBar(s.run,r.advice));
+  set("loop",loopBar(s.run,r.advice,s));
   // brief + tech stack — what this project actually is, at a glance
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
