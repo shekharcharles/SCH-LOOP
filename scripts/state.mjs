@@ -149,6 +149,10 @@ export function addTask(state, t) {
     ac: t.ac ?? [],           // dev: acceptance criteria; offensive: phase objectives
     ng: t.ng ?? [],
     deps: (t.deps ?? []).map(Number),
+    // Where this task's work actually lands. Written by the locate-first step so
+    // the discovery is paid once — and so the engine can tell which ready tasks
+    // sit on the SAME files and could share one subagent's ground truth.
+    files: t.files ?? [],
     // A question for the operator MUST be born blocked. Creating it queued and
     // blocking it in a second call is how three real questions ended up invisible:
     // the second call was simply never made, so they sat in the queue looking like
@@ -217,10 +221,14 @@ export function isDesignTask(t) {
   return DESIGN_RE.test(text);
 }
 
+// every dependency merged → this task can actually start
+export const depsMet = (state, t) =>
+  (t.deps ?? []).every((d) => { const dep = state.tasks.find((x) => x.id === Number(d)); return dep && DONE.has(dep.status); });
+
 export function nextReady(state) {
   return state.tasks
     .filter((t) => t.status === "queued")
-    .filter((t) => t.deps.every((d) => { const dep = state.tasks.find((x) => x.id === d); return dep && DONE.has(dep.status); }))
+    .filter((t) => depsMet(state, t))
     // priority first (1=highest), then phase order, then FIFO — so a hot task
     // submitted from the dashboard jumps ahead of a 150-item queue when it should.
     .sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.phase - b.phase || a.id - b.id)[0] ?? null;
@@ -591,7 +599,7 @@ const commands = {
 
   "task-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
-    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status });
+    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status, files: splitList(flags.files) });
     saveState(id, s); out(t.id.toString());
   },
   "task-list"({ flags }) {
@@ -620,6 +628,13 @@ const commands = {
     }
     if (flags.status === "merged" && flags.force === "true") event(s, `merge FORCED past skill gate: ${flags.note || "(no reason)"}`);
     for (const k of ["status", "branch", "notes", "phase", "target", "priority", "category", "phaseName"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
+    // the files this task touches — what locate-first found, so it is never
+    // rediscovered and co-located tasks can be batched
+    if (flags.files !== undefined) t.files = [...new Set([...(t.files ?? []), ...splitList(flags.files)])];
+    // what the work actually cost. Without this "are tokens going down?" is
+    // unanswerable, and every efficiency change is a guess.
+    if (flags.tokens !== undefined) t.tokens = (t.tokens ?? 0) + Number(flags.tokens);
+    if (flags["tool-uses"] !== undefined) t.toolUses = (t.toolUses ?? 0) + Number(flags["tool-uses"]);
     // record which installed skills this task dispatched to (visible on the dashboard)
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
     // a status note (the "what it's doing" / the blocked question) sticks to the
@@ -637,6 +652,40 @@ const commands = {
     saveState(id, s); out(t);
   },
   "interval-advice"({ flags }) { out(suggestInterval(loadState(pid(flags)))); },
+  // Which other READY tasks sit on the same files as this one?
+  //
+  // Two tasks on the same files pay for the same ground truth twice: the same
+  // reads, the same call-graph, the same test setup — often the largest single
+  // cost in a pass. Handing them to ONE subagent pays it once. They stay separate
+  // tasks with their own acceptance criteria and their own commit; only the
+  // discovery is shared.
+  //
+  // This is the mirror image of the parallel wave, which requires DISJOINT files
+  // so three agents never collide. Overlapping → one agent, sequentially.
+  // Disjoint → separate agents, in parallel.
+  "task-batch"({ flags, pos }) {
+    const s = loadState(pid(flags));
+    const id = Number(flags.with ?? pos[0]);
+    const lead = s.tasks.find((t) => t.id === id);
+    if (!lead) return out("no such task");
+    const norm = (f) => String(f).replace(/\\/g, "/").trim().toLowerCase();
+    const mine = new Set((lead.files ?? []).map(norm));
+    if (!mine.size) return out({ lead: id, batch: [], why: "lead task has no recorded files — run locate-first and record them with task-set --files" });
+    const cap = Number(flags.cap ?? 3);
+    const batch = s.tasks.filter((t) => {
+      if (t.id === id || t.status !== "queued") return false;
+      if (!depsMet(s, t)) return false;                             // deps unmet
+      if ((t.deps ?? []).map(Number).includes(id)) return false;    // depends on the lead: must not run beside it
+      if (t.active || lead.active) return false;                    // never batch offensive active work
+      return (t.files ?? []).some((f) => mine.has(norm(f)));
+    }).sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.id - b.id).slice(0, cap - 1);
+    out({
+      lead: id, leadFiles: [...mine],
+      batch: batch.map((t) => ({ id: t.id, title: t.title, shared: (t.files ?? []).filter((f) => mine.has(norm(f))) })),
+      note: batch.length ? "one subagent, one shared ground truth, each task keeps its own AC and its own commit"
+                         : "nothing co-located — run the lead task alone",
+    });
+  },
   // "How long do tasks actually take?" — the only honest basis for choosing the
   // loop interval and the lock TTL. Reports the measured distribution.
   timing({ flags }) {
@@ -645,9 +694,25 @@ const commands = {
     if (!d.length) return out({ measured: 0, note: "no completed task has been timed yet — run a few passes" });
     const at = (q) => Math.round(d[Math.min(d.length - 1, Math.floor(d.length * q))] / 60000);
     const p95 = at(0.95);
+    // Is it actually getting cheaper? Compare the oldest half against the newest
+    // half, in completion order — the only honest way to see whether an
+    // efficiency change worked rather than asserting that it did.
+    const costed = s.tasks.filter((t) => t.tokens > 0)
+      .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+    let trend = "no token data yet — record it with task-set --tokens/--tool-uses";
+    if (costed.length >= 4) {
+      const half = Math.floor(costed.length / 2);
+      const avg = (xs) => Math.round(xs.reduce((n, t) => n + t.tokens, 0) / xs.length);
+      const older = avg(costed.slice(0, half)), newer = avg(costed.slice(half));
+      const pct = Math.round((newer - older) / older * 100);
+      trend = `${costed.length} costed tasks · first half avg ${(older / 1000).toFixed(0)}k → recent half ${(newer / 1000).toFixed(0)}k (${pct >= 0 ? "+" : ""}${pct}%)`;
+    } else if (costed.length) {
+      trend = `${costed.length} costed task(s), avg ${(costed.reduce((n, t) => n + t.tokens, 0) / costed.length / 1000).toFixed(0)}k — need 4+ for a trend`;
+    }
     out({
       measured: d.length,
       medianMin: at(0.5), p95Min: p95, maxMin: Math.round(d[d.length - 1] / 60000),
+      tokenTrend: trend,
       // TTL must cover the slow tail, or a still-running pass looks stale and a
       // second pass takes the lock on top of it. Interval is a separate question:
       // it is how fast you want NEW work picked up, not how long a task takes.
