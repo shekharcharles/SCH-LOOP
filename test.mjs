@@ -249,3 +249,45 @@ test("task-batch: groups ready tasks that share files, respects deps and caps", 
   assert.match(none.why, /locate-first/);
   rmSync(home, { recursive: true, force: true });
 });
+
+// --- knowledge graph: the store the loop stops rediscovering things with -----
+test("graph: records facts, finds them by natural phrasing, returns callers", async () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-graph-"));
+  const g = await import("./scripts/graph.mjs");
+  process.env.SCH_HOME = home;                       // graph.mjs reads it at import
+  const db = g.open("p");
+
+  const dec = g.upsertNode(db, { kind: "symbol", name: "decryptPayload", path: "frontend/transportCrypto.js",
+    line: 42, summary: "AES-GCM decrypt of the response envelope" });
+  const key = g.upsertNode(db, { kind: "symbol", name: "getTransportKey", path: "transport_crypto/services.py" });
+  const mid = g.upsertNode(db, { kind: "symbol", name: "EncryptedTransportMiddleware", path: "transport_crypto/middleware.py",
+    summary: "decrypts request envelope, encrypts JSON response" });
+  const ep = g.upsertNode(db, { kind: "endpoint", name: "POST /api/v1/crypto/handshake", summary: "ECDH key agreement" });
+  g.addEdge(db, dec, key, "calls");
+  g.addEdge(db, mid, key, "calls");
+  g.addEdge(db, ep, mid, "handles");
+
+  // an identifier is several words: "payload" must find decryptPayload
+  assert.ok(g.search(db, "payload").some((r) => r.name === "decryptPayload"),
+    "camelCase must be split so a word inside an identifier is findable");
+  // stemming: the question is asked as "encrypted", the summary says "encrypts"
+  assert.ok(g.search(db, "encrypted").length, "porter stemming must match encrypts/encrypted");
+  // kind filter keeps attack surface separate from code when asked
+  assert.deepEqual(g.search(db, "handshake", { kind: "endpoint" }).map((r) => r.kind), ["endpoint"]);
+
+  // the blast radius — what grep answers slowest and a rename depends on
+  const { callers } = g.neighbours(db, key, 2);
+  const names = callers.map((c) => c.name);
+  assert.ok(names.includes("decryptPayload") && names.includes("EncryptedTransportMiddleware"),
+    "both callers of getTransportKey must be returned");
+  assert.ok(names.includes("POST /api/v1/crypto/handshake"),
+    "depth 2 must reach the endpoint that reaches the middleware");
+
+  // re-recording the same fact updates, never duplicates
+  g.upsertNode(db, { kind: "symbol", name: "decryptPayload", path: "frontend/transportCrypto.js", summary: "updated" });
+  assert.equal(g.search(db, "decryptPayload").filter((r) => r.name === "decryptPayload").length, 1);
+
+  assert.equal(g.stats(db).nodes, 4);
+  db.close();
+  rmSync(home, { recursive: true, force: true });
+});
