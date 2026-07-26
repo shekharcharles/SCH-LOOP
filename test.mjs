@@ -242,11 +242,21 @@ test("task-batch: groups ready tasks that share files, respects deps and caps", 
   assert.ok(!ids.includes(4), "a task that depends on the lead must NOT run beside it");
   assert.ok(r.batch.length <= 2, "cap 3 means at most 2 alongside the lead");
 
-  // a lead with no recorded files cannot be batched — it must say so, not guess
+  // a lead with neither files nor a phase has nothing to club on — it must say
+  // so rather than guessing a batch together
   S("task-add", "--project", P, "--title", "no files recorded");
   const none = JSON.parse(S("task-batch", "--project", P, "--with", "6"));
   assert.equal(none.batch.length, 0);
-  assert.match(none.why, /locate-first/);
+  assert.match(none.note, /nothing co-located/);
+
+  // the planner already groups related work: same phase + category is a stronger
+  // co-location signal than guessing files from a task title
+  S("task-add", "--project", P, "--title", "slice A one", "--category", "backend", "--phase-name", "Auth");
+  S("task-add", "--project", P, "--title", "slice A two", "--category", "backend", "--phase-name", "Auth");
+  S("task-add", "--project", P, "--title", "other slice", "--category", "frontend", "--phase-name", "Watch");
+  const byPhase = JSON.parse(S("task-batch", "--project", P, "--with", "7"));
+  assert.deepEqual(byPhase.batch.map((b) => b.id), [8], "same phase+category clubs; a different slice does not");
+  assert.equal(byPhase.batch[0].why, "same phase");
   rmSync(home, { recursive: true, force: true });
 });
 

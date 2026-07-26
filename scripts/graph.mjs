@@ -76,6 +76,13 @@ export function open(project) {
     CREATE VIRTUAL TABLE IF NOT EXISTS node_fts USING fts5(
       id UNINDEXED, name, terms, summary, path, tokenize='porter unicode61'
     );
+    -- Every question asked of the graph. This is the proof it is actually being
+    -- used: an agent claiming to consult it and an agent consulting it look
+    -- identical from the outside, and only one of them saves you tokens.
+    CREATE TABLE IF NOT EXISTS query_log(
+      ts TEXT, source TEXT, tool TEXT, q TEXT, hits INTEGER, ms INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS query_ts ON query_log(ts DESC);
   `);
   return db;
 }
@@ -175,6 +182,17 @@ export function explore(db, query, { depth = 2, limit = 6 } = {}) {
     return { ...h, edges, callers, uses };
   });
 }
+
+export function logQuery(db, { source, tool, q, hits, ms }) {
+  try {
+    db.prepare("INSERT INTO query_log(ts,source,tool,q,hits,ms) VALUES(?,?,?,?,?,?)")
+      .run(now(), source || "?", tool || "?", String(q || "").slice(0, 200), hits | 0, ms | 0);
+    // keep it a rolling window, not an ever-growing table
+    db.exec("DELETE FROM query_log WHERE rowid NOT IN (SELECT rowid FROM query_log ORDER BY ts DESC LIMIT 300)");
+  } catch { /* logging must never break a query */ }
+}
+export const recentQueries = (db, n = 12) =>
+  db.prepare("SELECT ts,source,tool,q,hits,ms FROM query_log ORDER BY ts DESC LIMIT ?").all(n);
 
 export function stats(db) {
   const byKind = db.prepare("SELECT kind, COUNT(*) n FROM node GROUP BY kind ORDER BY n DESC").all();
