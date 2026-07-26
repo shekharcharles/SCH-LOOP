@@ -303,6 +303,11 @@ const PAGE = `<!doctype html>
   .now.working .nb{background:var(--green);animation:ring 1.5s ease-in-out infinite;border-radius:50%}
   .now.working .nt{color:#fff}
   .now.idle b{color:var(--dim)} .now.idle .nb{background:var(--dim)} .now.idle .nt{color:var(--dim)}
+  .lastev{display:flex;align-items:baseline;gap:8px;padding:5px 12px;border:1px solid var(--line);
+          border-top:0;background:#0d0d0d;font-size:10.5px}
+  .lastev .lel{color:var(--dim);text-transform:uppercase;letter-spacing:.1em;flex:none}
+  .lastev .let{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);opacity:.85}
+  .lastev .lea{color:var(--dim);flex:none}
   .pgw{width:110px;height:5px;background:#222;flex:none;border:1px solid var(--line)}
   .pgw i{display:block;height:100%;background:var(--green)}
   .pgn{color:var(--dim);flex:none;font-size:10px}
@@ -344,12 +349,37 @@ const PAGE = `<!doctype html>
   .chip{background:var(--panel);padding:8px 11px;flex:1;min-width:82px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}.chip b{display:block;font-size:clamp(15px,2vw,18px);color:var(--fg);line-height:1;margin-bottom:2px}
   .chip.active b{color:var(--amber)}.chip.inprogress b,.chip.review b{color:var(--blue)}.chip.completed b{color:var(--green)}.chip.attention b,.chip.awaiting b,.chip.failed b{color:var(--red)}
   @media(max-width:640px){
+    /* The card layout used flex + space-between, so a long value was pushed off
+       the right edge instead of wrapping — every row rendered as a label with an
+       apparently empty value. Grid with a fixed label column and a wrapping value
+       fixes it; table-layout:fixed stops the table exceeding its container. */
+    .tbl-wrap{overflow-x:hidden}
+    table.t{table-layout:fixed;width:100%}
     table.t thead{position:absolute;left:-9999px}
     table.t tbody tr{display:block;border:1px solid var(--line);border-left-width:3px;margin-bottom:6px}
-    table.t td{display:flex;justify-content:space-between;gap:12px;border:0;border-bottom:1px solid var(--line);padding:6px 10px}
-    table.t td::before{content:attr(data-l);color:var(--dim);text-transform:uppercase;font-size:10px;letter-spacing:.06em}
-    table.t td[data-l=""]{justify-content:flex-end}table.t td[data-l=""]::before{content:""}
+    table.t td{display:grid;grid-template-columns:58px minmax(0,1fr);gap:4px 10px;align-items:start;
+               border:0;border-bottom:1px solid var(--line);padding:6px 10px;
+               white-space:normal;overflow-wrap:break-word}
+    table.t td::before{content:attr(data-l);color:var(--dim);text-transform:uppercase;font-size:10px;
+                       letter-spacing:.06em;padding-top:2px}
+    table.t td>.cellv{min-width:0;display:block}
+    table.t td[data-l=""]{grid-template-columns:1fr;justify-items:end}
+    table.t td[data-l=""]::before{content:""}
+    /* three columns carry little on a phone and tripled every card's height */
+    table.t td[data-l="Pri"],table.t td[data-l="Target"]{display:none}
+    table.t td[data-l="Activity"]{font-size:11px;color:var(--dim)}
+    table.t td[data-l="Activity"]{max-height:3.6em;overflow:hidden}
+    /* the work tree already truncates; on a phone let the title wrap instead */
+    .tk{align-items:flex-start}
+    .tk-t{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.35}
+    .now{font-size:11.5px}
+    .now .nt{min-width:100%;white-space:normal;order:9}
+    .pgw{width:88px}
   }
+  .moretasks{width:100%;margin-top:6px;font-family:inherit;padding:10px;background:var(--panel2);
+             color:var(--fg);border:1px solid var(--line);font-size:11px;letter-spacing:.08em;
+             text-transform:uppercase;cursor:pointer}
+  .moretasks:hover{border-color:var(--red)}
 </style></head>
 <body><div class="wrap" id="app">connecting…</div>
 <script>
@@ -360,7 +390,7 @@ const OFF=(d)=>OFFSET.has(d);
 const clock=()=>new Date().toISOString().slice(0,19).replace("T"," ")+" UTC";
 const STMAP={queued:["QUEUED","st-queued"],building:["ACTIVE","st-building"],review:["IN PROGRESS","st-review"],changes:["IN PROGRESS","st-changes"],merged:["COMPLETED","st-merged"],blocked:["AWAITING","st-blocked"],stuck:["FAILED","st-stuck"],superseded:["SUPERSEDED","st-superseded"]};
 const PSTAT={new:["NEW","st-new"],inprogress:["IN PROGRESS","st-inprogress"],active:["ACTIVE","st-active"],attention:["FAILED / AWAITING","st-attention"],completed:["COMPLETED","st-completed"],idle:["IDLE","st-idle"]};
-let taskFilter={q:"",status:"",showSuperseded:false};
+let taskFilter={q:"",status:"",showSuperseded:false,showAll:false};
 const CSRF="__CSRF__";
 const csrf='<input type="hidden" name="csrf" value="'+CSRF+'">';
 
@@ -414,6 +444,16 @@ function nowBar(run,st){
     '<span class="nt">no task building'+(ready?' · '+ready+' ready':'')+'</span>'+
     (due?'<span class="nx">'+due+'</span>':'')+bar+'</div>';
 }
+// The most recent thing the loop actually did. Without it a quiet moment reads as
+// a hung process — this is the line that proves work is still flowing.
+function lastBar(st){
+  const e=(st.events||[])[0];
+  if(!e)return"";
+  const mins=Math.round((Date.now()-new Date(e.ts).getTime())/60000);
+  const ago=mins<1?"just now":mins<60?mins+"m ago":Math.floor(mins/60)+"h ago";
+  return '<div class="lastev"><span class="lel">last</span>'+
+    '<span class="let">'+esc(e.msg)+'</span><span class="lea mono">'+ago+'</span></div>';
+}
 function loopBar(run,advice,st){
   const h=loopHealth(run);
   const m=advice?advice.minutes:30;
@@ -422,7 +462,7 @@ function loopBar(run,advice,st){
   let s='<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
     '<span class="lx">'+esc(h.detail)+'</span>'+
     (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop '+m+'m /sch-run</span>':'')+
-    '</div>'+(st&&!h.dead?nowBar(run,st):'');
+    '</div>'+(st&&!h.dead?nowBar(run,st)+lastBar(st):'');
   // The right interval is not a fixed preference — it depends on what the queue
   // looks like right now, so say what it should be and why.
   if(advice){
@@ -713,20 +753,25 @@ function projApply(id,r){
   if(taskFilter.status)ts=ts.filter(t=>t.status===taskFilter.status);
   // searching "inbox#6" lists exactly what that submission became
   if(taskFilter.q){const q=taskFilter.q.toLowerCase();ts=ts.filter(t=>(t.title+" "+(t.notes||"")+" "+(t.source||"")+" P"+t.phase).toLowerCase().includes(q));}
-  const trows=ts.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
-    <td data-l="Task"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${srcChip(t)}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</td>
-    <td data-l="Phase">\${t.category?'<span class="catchip">'+esc(t.category)+'</span> ':''}\${esc(t.phaseName||("P"+t.phase))}</td><td data-l="Pri">\${t.priority??3}</td>
+  // On a phone each row becomes a card, so the full queue is ~20 screens of
+  // scrolling. Show a screenful and let the operator ask for the rest.
+  const CAP=(typeof innerWidth!=="undefined"&&innerWidth<=640)?12:400;
+  const hidden=Math.max(0,ts.length-CAP);
+  const shown=taskFilter.showAll?ts:ts.slice(0,CAP);
+  const trows=shown.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
+    <td data-l="Task"><span class="cellv"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${srcChip(t)}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</span></td>
+    <td data-l="Phase"><span class="cellv">\${t.category?'<span class="catchip">'+esc(t.category)+'</span> ':''}\${esc(t.phaseName||("P"+t.phase))}</span></td><td data-l="Pri">\${t.priority??3}</td>
     <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
     <td data-l="Target">\${esc(t.target||"—")}</td>
     <td data-l="Activity">\${esc(t.notes||t.branch||"—")}</td>
     <td data-l="" class="ac">\${rowActs(t)}</td></tr>\`;}).join("")||'<tr><td colspan="8" class="empty">no tasks match</td></tr>';
   const statuses=["","queued","building","review","changes","blocked","stuck","merged","superseded"];
   const supN=s.tasks.filter(t=>t.status==="superseded").length;
-  set("tasksec",'<h2>tasks<span class="n mono">'+ts.length+' shown / '+total+'</span></h2>'+
+  set("tasksec",'<h2>tasks<span class="n mono">'+shown.length+' of '+ts.length+' shown</span></h2>'+
     '<div class="toolbar"><input id="tq" placeholder="filter tasks…" title="Filter by task title, note or phase" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
     '<select id="ts" title="Show only tasks in this status" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
     (supN?'<button class="mini" title="Superseded = tasks replaced by other/smaller tasks. Their work still exists elsewhere; hidden by default to keep the queue clean." onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
-    '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>');
+    '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>'+((hidden&&!taskFilter.showAll)?'<button class="moretasks" onclick="taskFilter.showAll=true;reapplyTasks()">show all '+ts.length+' tasks (+'+hidden+' more)</button>':(taskFilter.showAll&&ts.length>CAP)?'<button class="moretasks" onclick="taskFilter.showAll=false;reapplyTasks()">show fewer</button>':''));
   // findings
   const srank=(x)=>["critical","high","medium","low","info"].indexOf((x||"info").toLowerCase());
   const fsev=(x)=>({critical:"f-critical",high:"f-high",medium:"f-medium",low:"f-low"}[(x||"info").toLowerCase()]||"f-info");
