@@ -301,3 +301,39 @@ test("graph: records facts, finds them by natural phrasing, returns callers", as
   db.close();
   rmSync(home, { recursive: true, force: true });
 });
+
+// --- orphan recovery: an interrupted pass must not strand its task ----------
+// building/review only make sense while a pass holds the lock. If the session is
+// closed mid-task the status sticks, and task-next only returns `queued`, so the
+// task becomes invisible and is silently never built again.
+test("pass-gate: requeues tasks stranded by an interrupted pass", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-orphan-"));
+  const P = "o";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "o", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+  const read = () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8"));
+
+  S("task-add", "--project", P, "--title", "interrupted work", "--ac", "x");
+  S("lock-acquire", "--project", P, "--ttl", "45", "--holder", "sch-run");
+  S("task-set", "--project", P, "1", "--status", "building", "--note", "claimed");
+
+  // while the lock is live the task is left alone — a running pass owns it
+  S("pass-gate", "--project", P, "--holder", "sch-run");
+  assert.equal(read().tasks[0].status, "building", "a live pass must keep its claim");
+
+  // the session dies: lock released (or expires), task still says building
+  S("lock-release", "--project", P);
+  assert.equal(read().tasks[0].status, "building");
+  assert.equal(S("task-next", "--project", P), "none", "stranded task is invisible to the picker");
+
+  // next pass rescues it
+  S("pass-gate", "--project", P);
+  const t = read().tasks[0];
+  assert.equal(t.status, "queued", "an interrupted task must return to the queue");
+  assert.match(t.notes, /interrupted/);
+  assert.match(JSON.parse(S("task-next", "--project", P)).title, /interrupted work/);
+  rmSync(home, { recursive: true, force: true });
+});
