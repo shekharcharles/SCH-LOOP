@@ -722,9 +722,21 @@ const commands = {
         // ProfilePagesHeader.js" sat in the notes while a search for the task
         // TITLE returned two unrelated test files. Explicit beats inferred every
         // time; search is only for tasks that never named anything.
+        // A planner writes globs as readily as literal paths — "FILES:
+        // frontend/src/static/js/pages/Profile*.js" — so accept the star and
+        // resolve it against the files the graph actually knows. Without this the
+        // extraction silently failed and fell back to searching the title, which
+        // returned unrelated tests and then attached the wrong build ritual.
         const said = [...[t.brief ?? "", t.notes ?? "", ...(t.ac ?? [])].join(" ")
-          .matchAll(/\b([\w.-]+\/[\w./-]+\.\w{1,5})\b/g)].map((m) => m[1]);
-        const named = [...new Set(said)];
+          .matchAll(/\b([\w.-]+\/[\w./*-]+\.\w{1,5})\b/g)].map((m) => m[1]);
+        const named = [];
+        for (const p of new Set(said)) {
+          if (!p.includes("*")) { named.push(p); continue; }
+          const re = new RegExp("^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*") + "$");
+          const matched = db.prepare("SELECT path FROM node WHERE kind='file' AND path IS NOT NULL").all()
+            .map((r) => r.path).filter((f) => re.test(f));
+          named.push(...matched.slice(0, 8));
+        }
 
         const hits = named.length
           ? named.flatMap((p) => g.search(db, p, { limit: 2 })).slice(0, 6)
@@ -737,6 +749,18 @@ const commands = {
           t.graphContext = hits.map((h) =>
             `${h.kind} ${h.name}${h.path ? ` — ${h.path}${h.line ? ":" + h.line : ""}` : ""}`);
           event(s, `graph context attached to #${t.id} (${hits.length} hits)`);
+        }
+
+        // THE RITUAL. Measured on a live pass: a 25-line source edit cost 120k
+        // tokens and 50 tool uses, and the discovery was not the expensive part —
+        // working out that the SPA must be rebuilt, the bundle copied, the
+        // cache-buster bumped across 27 templates and gunicorn restarted was.
+        // The project knows those commands; the builder should never derive them.
+        const rituals = (getProject(id)?.rituals ?? [])
+          .filter((r) => (t.files ?? []).some((f) => { try { return new RegExp(r.when).test(f); } catch { return false; } }));
+        if (rituals.length) {
+          t.ritual = rituals.map((r) => (r.why ? `${r.do}    # ${r.why}` : r.do));
+          event(s, `ritual attached to #${t.id} (${rituals.length} step(s))`);
         }
       } catch { /* no graph yet — the task simply starts without it */ }
     }
@@ -778,6 +802,23 @@ const commands = {
     out(s.run.activity ?? "idle");
   },
   "interval-advice"({ flags }) { out(suggestInterval(loadState(pid(flags)))); },
+  // Per-project build rituals: the exact commands a change to certain files
+  // requires, so a builder never derives them again.
+  //
+  //   state.mjs ritual-add --project p --when "^frontend/src/" \
+  //     --do "cd frontend && npm run dist" --why "a source edit is a no-op without it"
+  //   state.mjs ritual-list --project p
+  "ritual-add"({ flags }) {
+    const r = loadRegistry(); const p = r.projects.find((x) => x.id === pid(flags));
+    if (!p) die("no such project");
+    p.rituals = [...(p.rituals ?? []), { when: flags.when, do: flags.do, why: flags.why ?? "" }];
+    saveRegistry(r); out(p.rituals);
+  },
+  "ritual-list"({ flags }) { out(getProject(pid(flags))?.rituals ?? []); },
+  "ritual-clear"({ flags }) {
+    const r = loadRegistry(); const p = r.projects.find((x) => x.id === pid(flags));
+    if (p) { p.rituals = []; saveRegistry(r); } out("cleared");
+  },
   // Which other READY tasks sit on the same files as this one?
   //
   // Two tasks on the same files pay for the same ground truth twice: the same

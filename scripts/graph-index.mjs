@@ -68,7 +68,12 @@ export function indexFile(db, repoRoot, abs) {
   let st; try { st = statSync(abs); } catch { return 0; }
   if (!st.isFile() || st.size > 400_000) return 0;               // skip bundles/blobs
   const rel = relative(repoRoot, abs).replace(/\\/g, "/");
-  if (/(^|\/)(node_modules|\.git|dist|build|static\/js|\.codegraph|venv|__pycache__)\//.test(rel)) return 0;
+  // Skip build output, not source. `static/js/` matched anywhere excluded
+  // frontend/src/static/js/** — the entire SPA source tree — so every React
+  // component was invisible to the graph while the built bundles it was meant to
+  // skip were correctly ignored. Anchor the built paths to the repo root.
+  if (/^(static\/js|static\/css\/[^/]*\.min\.|dist|build)\//.test(rel)) return 0;
+  if (/(^|\/)(node_modules|\.git|\.codegraph|venv|__pycache__|\.next|coverage)\//.test(rel)) return 0;
   const ext = rel.split(".").pop().toLowerCase();
   const lang = LANG[ext];
   if (!lang) return 0;
