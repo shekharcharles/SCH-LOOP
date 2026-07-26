@@ -680,25 +680,60 @@ const commands = {
   // This is the mirror image of the parallel wave, which requires DISJOINT files
   // so three agents never collide. Overlapping → one agent, sequentially.
   // Disjoint → separate agents, in parallel.
-  "task-batch"({ flags, pos }) {
-    const s = loadState(pid(flags));
+  async "task-batch"({ flags, pos }) {
+    const project = pid(flags);
+    const s = loadState(project);
     const id = Number(flags.with ?? pos[0]);
     const lead = s.tasks.find((t) => t.id === id);
     if (!lead) return out("no such task");
     const norm = (f) => String(f).replace(/\\/g, "/").trim().toLowerCase();
-    const mine = new Set((lead.files ?? []).map(norm));
-    if (!mine.size) return out({ lead: id, batch: [], why: "lead task has no recorded files — run locate-first and record them with task-set --files" });
+
+    // Where a task will land, without the loop having to remember to say so.
+    //
+    // Recording files was an instruction, and instructions get skipped: two of a
+    // hundred and seventeen tasks had them, so batching never fired. The graph
+    // already knows every file and symbol, so ask it what this task's own words
+    // point at. Inference is used only to GROUP tasks; the builder still grounds
+    // itself in the real code before editing anything.
+    let infer = async () => [];
+    try {
+      const g = await import("./graph.mjs");
+      const db = g.open(project);
+      infer = async (t) => {
+        if ((t.files ?? []).length) return t.files;
+        const q = [t.title, ...(t.ac ?? [])].join(" ").slice(0, 300);
+        return [...new Set(g.search(db, q, { limit: 8 }).map((h) => h.path).filter(Boolean))];
+      };
+    } catch { /* no graph yet — fall back to recorded files only */ }
+
+    const leadFiles = await infer(lead);
+    const mine = new Set(leadFiles.map(norm));
+
+    // The strongest co-location signal is already in the data and needs no
+    // guessing: the planner put these tasks in the same phase and category
+    // because they are the same slice of the product. File overlap is the
+    // confirmation, not the primary test — inferring files from a task title is
+    // fuzzy ("Showcase promotion workflow" matched auditlog/tests.py), and a
+    // wrong guess there would club unrelated work.
+    const sameSlice = (t) =>
+      lead.phaseName && t.phaseName === lead.phaseName && t.category === lead.category;
     const cap = Number(flags.cap ?? 3);
     const batch = s.tasks.filter((t) => {
       if (t.id === id || t.status !== "queued") return false;
       if (!depsMet(s, t)) return false;                             // deps unmet
       if ((t.deps ?? []).map(Number).includes(id)) return false;    // depends on the lead: must not run beside it
       if (t.active || lead.active) return false;                    // never batch offensive active work
-      return (t.files ?? []).some((f) => mine.has(norm(f)));
+      const filesOverlap = (t.files ?? []).some((f) => mine.has(norm(f)));
+      return sameSlice(t) || filesOverlap;
     }).sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.id - b.id).slice(0, cap - 1);
     out({
-      lead: id, leadFiles: [...mine],
-      batch: batch.map((t) => ({ id: t.id, title: t.title, shared: (t.files ?? []).filter((f) => mine.has(norm(f))) })),
+      lead: id, leadPhase: lead.phaseName ? `${lead.category} › ${lead.phaseName}` : null,
+      leadFiles: [...mine],
+      batch: batch.map((t) => ({
+        id: t.id, title: t.title,
+        why: sameSlice(t) ? "same phase" : "shares files",
+        shared: (t.files ?? []).filter((f) => mine.has(norm(f))),
+      })),
       note: batch.length ? "one subagent, one shared ground truth, each task keeps its own AC and its own commit"
                          : "nothing co-located — run the lead task alone",
     });
@@ -795,6 +830,9 @@ if (process.argv[1] && process.argv[1].endsWith("state.mjs")) {
   const [cmd, ...rest] = process.argv.slice(2);
   const parsed = parseFlags(rest);
   if (AUDITED.has(cmd)) auditLog({ kind: "command", cmd, flags: parsed.flags, pos: parsed.pos });
-  const run = () => (commands[cmd] ?? commands.help)(parsed);
+  // a command may be async (task-batch consults the graph); surface its failure
+  // rather than letting the promise reject unhandled and exit 0
+  const run = () => Promise.resolve((commands[cmd] ?? commands.help)(parsed))
+    .catch((e) => { console.error(e.message); process.exitCode = 1; });
   MUTATING.has(cmd) ? withFileLock(REGISTRY_PATH, run) : run();
 }

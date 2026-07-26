@@ -11,7 +11,7 @@
 // to stderr; a stray console.log corrupts the stream and the client silently
 // drops the server.
 
-import { open, search, explore, stats, upsertNode, addEdge, KINDS, EDGE_KINDS } from "./graph.mjs";
+import { open, search, explore, stats, upsertNode, addEdge, logQuery, KINDS, EDGE_KINDS } from "./graph.mjs";
 
 const PROTOCOL = "2024-11-05";
 const log = (...a) => console.error("[sch-graph]", ...a);
@@ -98,25 +98,27 @@ function call(name, args) {
   const project = args.project;
   if (!project) throw new Error("project is required");
   const db = open(project);
+  const t0 = Date.now();
+  const done = (text, hits) => { logQuery(db, { source: "mcp", tool: name, q: args.query || args.nodes?.length + " nodes", hits, ms: Date.now() - t0 }); return text; };
 
   if (name === "sch_graph_search") {
     const rows = search(db, args.query, { kind: args.kind, limit: args.limit ?? 12 });
-    if (!rows.length) return "No match. Nothing has been recorded about this yet — locate it the normal way, then record it with sch_graph_record so the next task does not repeat the work.";
-    return rows.map((r) =>
+    if (!rows.length) return done("No match. Nothing has been recorded about this yet — locate it the normal way, then record it with sch_graph_record so the next task does not repeat the work.", 0);
+    return done(rows.map((r) =>
       `${r.kind} ${r.name}${r.path ? `  ${r.path}${r.line ? ":" + r.line : ""}` : ""}` +
-      (r.summary ? `\n    ${r.summary}` : "")).join("\n");
+      (r.summary ? `\n    ${r.summary}` : "")).join("\n"), rows.length);
   }
 
   if (name === "sch_graph_explore") {
     const hits = explore(db, args.query, { depth: args.depth ?? 2 });
-    if (!hits.length) return "No match. Nothing recorded yet for that.";
-    return hits.map((h) => {
+    if (!hits.length) return done("No match. Nothing recorded yet for that.", 0);
+    return done(hits.map((h) => {
       const L = [`${h.kind} ${h.name}${h.path ? `  ${h.path}${h.line ? ":" + h.line : ""}` : ""}`];
       if (h.summary) L.push(`  ${h.summary}`);
       if (h.callers.length) L.push(`  callers (check before renaming): ${h.callers.map((c) => `${c.name}${c.path ? " @" + c.path : ""}`).join(", ")}`);
       if (h.uses.length) L.push(`  uses: ${h.uses.map((u) => u.name).join(", ")}`);
       return L.join("\n");
-    }).join("\n\n");
+    }).join("\n\n"), hits.length);
   }
 
   if (name === "sch_graph_record") {
@@ -128,14 +130,14 @@ function call(name, args) {
       if (!from || !to) { log(`edge skipped, unknown node: ${e.from} -> ${e.to}`); continue; }
       addEdge(db, from, to, e.kind); edged++;
     }
-    return `Recorded ${ids.size} node(s) and ${edged} edge(s) into ${project}.`;
+    return done(`Recorded ${ids.size} node(s) and ${edged} edge(s) into ${project}.`, ids.size);
   }
 
   if (name === "sch_graph_stats") {
     const s = stats(db);
-    return `${s.nodes} nodes, ${s.edges} edges\n` +
+    return done(`${s.nodes} nodes, ${s.edges} edges\n` +
       s.byKind.map((k) => `  ${k.kind}: ${k.n}`).join("\n") +
-      (s.byEdge.length ? "\n  --\n" + s.byEdge.map((k) => `  ${k.kind}: ${k.n}`).join("\n") : "");
+      (s.byEdge.length ? "\n  --\n" + s.byEdge.map((k) => `  ${k.kind}: ${k.n}`).join("\n") : ""), s.nodes);
   }
   throw new Error("unknown tool: " + name);
 }

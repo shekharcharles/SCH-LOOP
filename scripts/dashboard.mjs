@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
-import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats } from "./graph.mjs";
+import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats, logQuery } from "./graph.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
 // different directory than the one being written to
@@ -76,11 +76,16 @@ function graphView(project) {
       : []);
     const keep = new Set(core.map((n) => n.id));
     const mapEdges = edges.filter((e) => keep.has(e.src) && keep.has(e.dst));
+    const queries = db.prepare("SELECT ts,source,tool,q,hits,ms FROM query_log ORDER BY ts DESC LIMIT 12").all();
     db.close();
-    const view = { stats: s, recent, map: { nodes: core, edges: mapEdges } };
+    const view = { stats: s, recent, queries, map: { nodes: core, edges: mapEdges } };
     gCache.set(project, { mtime, view });
     return view;
-  } catch { return null; }
+  } catch (e) {
+    // a swallowed error here is indistinguishable from "no graph yet" — say it
+    console.error(`[graph] ${project}: ${e.message}`);
+    return null;
+  }
 }
 
 const snapshot = (project) => {
@@ -179,7 +184,9 @@ const server = createServer(async (req, res) => {
     if (!getProject(project)) return json(res, { error: "no such project" });
     try {
       const db = openGraph(project);
+      const t0 = Date.now();
       const rows = q.trim() ? graphExplore(db, q, { depth: 1, limit: 8 }) : [];
+      if (q.trim()) logQuery(db, { source: "dash", tool: "explore", q, hits: rows.length, ms: Date.now() - t0 });
       db.close();
       return json(res, rows);
     } catch (e) { return json(res, { error: e.message }); }
@@ -436,35 +443,59 @@ const PAGE = `<!doctype html>
   /* ---- knowledge graph ---- */
   .gwrap{border:1px solid var(--line);background:var(--panel)}
   .gkinds{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
-  .gk{background:var(--panel);padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
-      color:var(--dim);flex:1;min-width:78px;border-top:2px solid var(--c)}
+  .gk{font-family:inherit;text-align:left;background:var(--panel);padding:7px 11px;font-size:10px;
+      text-transform:uppercase;letter-spacing:.08em;color:var(--dim);flex:1;min-width:76px;
+      border:0;border-top:2px solid var(--c);cursor:pointer}
   .gk b{display:block;font-size:15px;color:var(--c);line-height:1.1;margin-bottom:1px}
-  .gmain{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  @media(max-width:900px){.gmain{grid-template-columns:1fr}}
-  .gleft{padding:11px 12px;min-width:0;border-right:1px solid var(--line)}
-  @media(max-width:900px){.gleft{border-right:0;border-bottom:1px solid var(--line)}}
-  .gsearch{width:100%;font-family:inherit;font-size:13px;padding:9px 11px;background:var(--bg);
-           color:var(--fg);border:1px solid var(--line);margin-bottom:9px}
+  .gk:hover{background:#171717} .gk.on{background:#191919;color:var(--fg)}
+  .gbar{display:flex;gap:8px;padding:10px 12px 8px}
+  .gsearch{flex:1;min-width:0;font-family:inherit;font-size:13px;padding:9px 11px;background:var(--bg);
+           color:var(--fg);border:1px solid var(--line)}
   .gsearch:focus{outline:none;border-color:var(--green)}
-  .gres{max-height:190px;overflow-y:auto;margin-bottom:9px}
+  .gres{max-height:170px;overflow-y:auto;margin:0 12px}
+  .gres:empty{display:none}
   .ghit{border-left:2px solid var(--c);padding:6px 9px;margin-bottom:4px;background:#111;font-size:12px}
   .ghit b{color:var(--fg)}
   .gcal{color:var(--green);font-size:10.5px;margin-top:3px}
+  .guse{color:var(--blue);font-size:10.5px;margin-top:2px}
   .gnone{color:var(--dim);font-size:11px;padding:6px 2px}
-  .glearn{max-height:260px;overflow-y:auto}
+  /* the map gets the room — it was squeezed into half the width with dead space beside it */
+  .gcanvas-wrap{position:relative;margin:10px 12px;border:1px solid var(--line);background:#0b0b0b}
+  #gcanvas{width:100%;display:block;cursor:grab;touch-action:none}
+  #gcanvas:active{cursor:grabbing}
+  .ghint{position:absolute;left:10px;bottom:6px;font-size:9.5px;color:var(--dim);pointer-events:none;
+         letter-spacing:.04em}
+  .gtip{position:absolute;display:none;pointer-events:none;background:#000;border:1px solid var(--green);
+        padding:5px 8px;font-size:11px;max-width:200px;z-index:3}
+  .gtip b{display:block;color:var(--fg)} .gtip span{color:var(--dim);font-size:10px}
+  .gdetail{position:absolute;display:none;right:8px;top:8px;width:min(300px,62%);background:#0d0d0d;
+           border:1px solid var(--green);padding:9px 11px;font-size:11.5px;z-index:4;max-height:78%;overflow-y:auto}
+  .gd-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .gd-h b{color:var(--green)}
+  .gd-x{background:none;border:0;color:var(--dim);cursor:pointer;font-size:12px;padding:0 2px}
+  .gd-m{color:var(--dim);font-size:10px;margin:2px 0 6px}
+  .gd-b p{margin:0 0 6px;color:var(--fg);opacity:.9}
+  .gd-l{color:var(--dim);font-size:10px;margin-top:5px}
+  /* two columns of evidence: what it learned, and that it is really being asked */
+  .gcols{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border-top:1px solid var(--line)}
+  @media(max-width:820px){.gcols{grid-template-columns:1fr}}
+  .gcol{background:var(--panel);padding:9px 12px;min-width:0}
+  .gcap{font-size:9.5px;text-transform:uppercase;letter-spacing:.11em;color:var(--dim);margin-bottom:6px}
+  .glearn,.gqlog{max-height:210px;overflow-y:auto}
   .gr{border-left:2px solid var(--c);padding:5px 9px;margin-bottom:3px;background:#0f0f0f;font-size:11.5px;
       display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;align-items:baseline}
   .gr-k{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--c);white-space:nowrap}
   .gr-n{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .gr-p{grid-column:2;color:var(--dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .gr-s{grid-column:2;color:var(--dim);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  /* a fact that appeared since the last push — this is the "it is learning" tell */
   @keyframes glearned{0%{background:rgba(74,246,38,.22)}100%{background:#0f0f0f}}
   .gr.fresh{animation:glearned 2.4s ease-out}
-  .gright{position:relative;min-width:0;padding:8px}
-  #gcanvas{width:100%;display:block;cursor:grab;touch-action:none}
-  #gcanvas:active{cursor:grabbing}
-  .ghint{position:absolute;left:12px;bottom:8px;font-size:10px;color:var(--dim);pointer-events:none}
+  .gql{display:flex;gap:8px;align-items:baseline;padding:4px 6px;border-bottom:1px solid #171717;font-size:11px}
+  .gql-t{color:var(--dim);font-size:10px;flex:none}
+  .gql-s{color:var(--green);font-size:9px;text-transform:uppercase;letter-spacing:.06em;flex:none}
+  .gql.miss .gql-s{color:var(--dim)}
+  .gql-q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);opacity:.85}
+  .gql-h{color:var(--dim);font-size:10px;flex:none}
   @media(prefers-reduced-motion:reduce){.gr.fresh{animation:none}}
   .moretasks{width:100%;margin-top:6px;font-family:inherit;padding:10px;background:var(--panel2);
              color:var(--fg);border:1px solid var(--line);font-size:11px;letter-spacing:.08em;
@@ -543,145 +574,293 @@ function nowBar(run,st){
     (due?'<span class="nx">'+due+'</span>':'')+bar+'</div>';
 }
 // ---- knowledge graph ------------------------------------------------------
-// What the loop has learned, and what it is learning right now. The colours are
-// by KIND, because "is this code or is this something recon found" is the first
-// thing you want to know at a glance.
-const GK={symbol:"#4af626",file:"#58a6ff",module:"#58a6ff",endpoint:"#e3b341",param:"#e3b341",
-  role:"#e3b341",host:"#e3b341",finding:"#ff2a2a",evidence:"#ff2a2a",decision:"#c77dff",
-  lesson:"#ff8f3f",note:"#7d7d7d"};
-// Search results must survive a live update. Every SSE push re-renders this
-// section, which wiped whatever you had just looked up — so keep the rendered
-// results in a variable and put them back.
-let GSEEN=new Set(), GQ="", GRES="";
+// The aim, borrowed from Understand-Anything and worth restating: a graph that
+// quietly TEACHES, not one that shows off how complex the codebase is. So:
+// colour carries meaning (architectural layer, or kind for non-code facts),
+// size carries importance, and everything else stays quiet until you point at it.
+const GKIND={endpoint:"#e3b341",param:"#e3b341",role:"#e3b341",host:"#e3b341",
+  finding:"#ff2a2a",evidence:"#ff5c4d",decision:"#c77dff",lesson:"#ff8f3f",note:"#8a8a8a"};
+// Code nodes are coloured by their top-level directory — the layer they live in.
+// Colouring 2,800 symbols all the same green says nothing; this says where.
+const LAYER=["#4af626","#58a6ff","#3fd0c9","#ffd166","#f78fb3","#a0e04a","#7aa2ff","#ff9f6e"];
+const layerOf=(p)=>((p||"").split("/")[0]||"·");
+let LAYERMAP=new Map();
+function colourOf(n){
+  if(GKIND[n.kind])return GKIND[n.kind];
+  const l=layerOf(n.path);
+  if(!LAYERMAP.has(l))LAYERMAP.set(l,LAYER[LAYERMAP.size%LAYER.length]);
+  return LAYERMAP.get(l);
+}
+let GSEEN=new Set(), GQ="", GRES="", GKINDFILTER="";
+
 function graphSec(g){
   if(!g) return '<h2>knowledge graph<span class="n mono">empty</span></h2>'+
     '<div class="empty">nothing recorded yet — it fills as the loop works, and a file is indexed the moment it is edited</div>';
-  const chips=g.stats.byKind.map(k=>'<span class="gk" style="--c:'+(GK[k.kind]||"#7d7d7d")+'">'+
-    '<b class="mono">'+k.n+'</b> '+esc(k.kind)+'</span>').join("");
-  // "just learned" — anything whose id we had not seen on a previous push
+  const chips=g.stats.byKind.map(k=>'<button class="gk'+(GKINDFILTER===k.kind?' on':'')+'" '+
+    'data-kind="'+esc(k.kind)+'" style="--c:'+(GKIND[k.kind]||"#4af626")+'" '+
+    'title="Show only '+esc(k.kind)+'">'+
+    '<b class="mono">'+k.n+'</b> '+esc(k.kind)+'</button>').join("");
   const rows=g.recent.map(n=>{
     const isNew=!GSEEN.has(n.id);
-    return '<div class="gr'+(isNew?' fresh':'')+'" style="--c:'+(GK[n.kind]||"#7d7d7d")+'">'+
+    return '<div class="gr'+(isNew?' fresh':'')+'" style="--c:'+colourOf(n)+'">'+
       '<span class="gr-k">'+esc(n.kind)+'</span>'+
       '<span class="gr-n">'+esc(n.name)+'</span>'+
       '<span class="gr-p mono">'+esc(n.path||"")+(n.line?":"+n.line:"")+'</span>'+
       (n.summary?'<span class="gr-s">'+esc(n.summary)+'</span>':'')+'</div>';
   }).join("");
   g.recent.forEach(n=>GSEEN.add(n.id));
+  // Proof it is actually being consulted. An agent that claims to use the graph
+  // and one that does look identical from outside — only one saves you tokens.
+  const qs=(g.queries||[]).map(q=>'<div class="gql'+(q.hits?'':' miss')+'">'+
+    '<span class="gql-t mono">'+esc(q.ts.slice(11,19))+'</span>'+
+    '<span class="gql-s">'+esc(q.source)+'</span>'+
+    '<span class="gql-q">'+esc(q.q)+'</span>'+
+    '<span class="gql-h mono">'+q.hits+' hit'+(q.hits===1?'':'s')+' · '+q.ms+'ms</span></div>').join("")
+    || '<div class="gnone">no queries yet — the loop asks the graph through the sch_graph_* tools</div>';
+
   return '<h2>knowledge graph — what the loop knows'+
     '<span class="n mono">'+g.stats.nodes+' facts · '+g.stats.edges+' links</span></h2>'+
     '<div class="gwrap">'+
       '<div class="gkinds">'+chips+'</div>'+
-      '<div class="gmain">'+
-        '<div class="gleft">'+
-          '<input id="gq" class="gsearch" placeholder="ask the graph… (same query the agents make)" '+
-            'value="'+esc(GQ)+'" oninput="GQ=this.value;graphAsk()">'+
-          '<div id="gres" class="gres">'+GRES+'</div>'+
-          '<div class="glearn">'+rows+'</div>'+
-        '</div>'+
-        '<div class="gright"><canvas id="gcanvas"></canvas>'+
-          '<div class="ghint">drag to move · click a node to look it up</div></div>'+
+      '<div class="gbar">'+
+        '<input id="gq" class="gsearch" placeholder="ask the graph…  (the same query the agents make)" '+
+          'value="'+esc(GQ)+'" oninput="GQ=this.value;graphAsk()">'+
+        '<button class="mini" title="Reset the map view" onclick="gReset()">reset view</button>'+
+      '</div>'+
+      '<div id="gres" class="gres">'+GRES+'</div>'+
+      '<div class="gcanvas-wrap">'+
+        '<canvas id="gcanvas"></canvas>'+
+        '<div id="gtip" class="gtip"></div>'+
+        '<div id="gdetail" class="gdetail"></div>'+
+        '<div class="ghint">scroll to zoom · drag to pan · drag a node to move it · click to inspect</div>'+
+      '</div>'+
+      '<div class="gcols">'+
+        '<div class="gcol"><div class="gcap">just learned</div><div class="glearn">'+rows+'</div></div>'+
+        '<div class="gcol"><div class="gcap">graph queries — proof it is being used</div><div class="gqlog">'+qs+'</div></div>'+
       '</div>'+
     '</div>';
 }
-// live search — hits the same store the MCP tools do
+
 let gTimer;
 function graphAsk(){
   clearTimeout(gTimer);
   gTimer=setTimeout(()=>{
     const el=document.getElementById("gres"); if(!el)return;
-    if(!GQ.trim()){el.innerHTML=GRES="";return;}
+    if(!GQ.trim()){el.innerHTML=GRES="";GHI=null;if(LAST&&LAST.graph)drawGraph(LAST.graph.map);return;}
     fetch("/api/graph?project="+encodeURIComponent(qp("project"))+"&q="+encodeURIComponent(GQ))
       .then(r=>r.json()).then(rows=>{
-        if(!Array.isArray(rows)||!rows.length){el.innerHTML=GRES='<div class="gnone">no match — nothing recorded about that yet</div>';return;}
-        el.innerHTML=GRES=rows.map(r=>'<div class="ghit" style="--c:'+(GK[r.kind]||"#7d7d7d")+'">'+
+        if(!Array.isArray(rows)||!rows.length){
+          el.innerHTML=GRES='<div class="gnone">no match — nothing recorded about that yet</div>';return;}
+        // light up the matches on the map too, so search and picture agree
+        GHI=new Set(rows.map(r=>r.id));
+        if(LAST&&LAST.graph)drawGraph(LAST.graph.map);
+        el.innerHTML=GRES=rows.map(r=>'<div class="ghit" style="--c:'+colourOf(r)+'">'+
           '<span class="gr-k">'+esc(r.kind)+'</span> <b>'+esc(r.name)+'</b> '+
           '<span class="gr-p mono">'+esc(r.path||"")+(r.line?":"+r.line:"")+'</span>'+
           (r.summary?'<div class="gr-s">'+esc(r.summary)+'</div>':'')+
-          (r.callers&&r.callers.length?'<div class="gcal">called by '+r.callers.slice(0,6).map(c=>esc(c.name)).join(", ")+'</div>':'')+
+          (r.callers&&r.callers.length?'<div class="gcal">← called by '+r.callers.slice(0,6).map(c=>esc(c.name)).join(", ")+'</div>':'')+
+          (r.uses&&r.uses.length?'<div class="guse">→ uses '+r.uses.slice(0,6).map(c=>esc(c.name)).join(", ")+'</div>':'')+
           '</div>').join("");
       }).catch(()=>{});
   },220);
 }
-// A small force layout on canvas. No library: springs on edges, repulsion
-// between nodes, damped — enough to make the shape readable, cheap enough to run
-// on a phone.
-let GSIM=null;
+
+// ---- the map ---------------------------------------------------------------
+// Canvas, no library: a small force layout with pan, zoom, hover-highlight and a
+// detail panel. Everything dims when you point at something, so one relationship
+// is legible at a time instead of all 60 at once.
+let GSIM=null, GVIEW={x:0,y:0,k:1}, GHOV=null, GSEL=null, GHI=null;
+function gReset(){ GVIEW={x:0,y:0,k:1}; GSEL=null; GSIM&&(GSIM.ticks=0); if(LAST&&LAST.graph)drawGraph(LAST.graph.map); }
+
 function drawGraph(map){
   const cv=document.getElementById("gcanvas"); if(!cv||!map||!map.nodes.length)return;
   const dpr=window.devicePixelRatio||1;
-  const w=cv.clientWidth||520, h=Math.max(300,Math.min(460,cv.clientWidth*0.72));
-  cv.width=w*dpr; cv.height=h*dpr; cv.style.height=h+"px";
+  const w=cv.clientWidth||600, h=Math.max(340,Math.min(520,Math.round(cv.clientWidth*0.55)));
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){
+    cv.width=w*dpr; cv.height=h*dpr; cv.style.height=h+"px";
+  }
   const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
+
   const key=map.nodes.map(n=>n.id).join("|");
   if(!GSIM||GSIM.key!==key){
     const P=map.nodes.map((n,i)=>({...n,
-      x:w/2+Math.cos(i/map.nodes.length*6.283)*Math.min(w,h)*0.34+(Math.random()-.5)*20,
-      y:h/2+Math.sin(i/map.nodes.length*6.283)*Math.min(w,h)*0.34+(Math.random()-.5)*20,vx:0,vy:0}));
+      x:w/2+Math.cos(i/map.nodes.length*6.283)*Math.min(w,h)*0.33,
+      y:h/2+Math.sin(i/map.nodes.length*6.283)*Math.min(w,h)*0.33,vx:0,vy:0}));
     const idx=new Map(P.map((p,i)=>[p.id,i]));
-    GSIM={key,P,idx,E:map.edges.map(e=>({s:idx.get(e.src),t:idx.get(e.dst),k:e.kind})).filter(e=>e.s!=null&&e.t!=null),ticks:0};
+    const E=map.edges.map(e=>({s:idx.get(e.src),t:idx.get(e.dst),k:e.kind})).filter(e=>e.s!=null&&e.t!=null);
+    const deg=new Map(); for(const e of E){deg.set(e.s,(deg.get(e.s)||0)+1);deg.set(e.t,(deg.get(e.t)||0)+1);}
+    P.forEach((p,i)=>p.d=deg.get(i)||0);
+    // who is adjacent to whom — used to dim everything else on hover
+    const adj=new Map(); for(const e of E){
+      if(!adj.has(e.s))adj.set(e.s,new Set()); if(!adj.has(e.t))adj.set(e.t,new Set());
+      adj.get(e.s).add(e.t); adj.get(e.t).add(e.s);}
+    GSIM={key,P,idx,E,adj,ticks:0};
   }
-  const {P,E}=GSIM;
-  for(let step=0;step<2;step++){
+  const {P,E,adj}=GSIM;
+
+  if(GSIM.ticks<200){
     for(let i=0;i<P.length;i++){
       for(let j=i+1;j<P.length;j++){
-        let dx=P[j].x-P[i].x,dy=P[j].y-P[i].y,d2=dx*dx+dy*dy||1;
-        if(d2<40000){const f=900/d2,d=Math.sqrt(d2);const fx=dx/d*f,fy=dy/d*f;
+        const dx=P[j].x-P[i].x,dy=P[j].y-P[i].y,d2=dx*dx+dy*dy||1;
+        if(d2<52900){const d=Math.sqrt(d2),f=1500/d2,fx=dx/d*f,fy=dy/d*f;
           P[i].vx-=fx;P[i].vy-=fy;P[j].vx+=fx;P[j].vy+=fy;}
       }
     }
     for(const e of E){const a=P[e.s],b=P[e.t];
-      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;const f=(d-70)*0.012;
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1,f=(d-84)*0.014;
       const fx=dx/d*f,fy=dy/d*f;a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;}
     for(const p of P){
-      p.vx+=(w/2-p.x)*0.0016; p.vy+=(h/2-p.y)*0.0016;   // gentle centring
-      p.vx*=0.82; p.vy*=0.82; p.x+=p.vx; p.y+=p.vy;
-      p.x=Math.max(14,Math.min(w-14,p.x)); p.y=Math.max(14,Math.min(h-14,p.y));
+      if(p===GSIM.drag)continue;
+      p.vx+=(w/2-p.x)*0.0014; p.vy+=(h/2-p.y)*0.0014;
+      p.vx*=0.84; p.vy*=0.84; p.x+=p.vx; p.y+=p.vy;
     }
+    GSIM.ticks++;
   }
+
+  const S=(v)=>v*GVIEW.k, TX=(x)=>S(x)+GVIEW.x, TY=(y)=>S(y)+GVIEW.y;
+  const focus=GSEL!=null?GSEL:GHOV;
+  const near=focus!=null?(adj.get(focus)||new Set()):null;
+  const lit=(i)=>focus==null?true:(i===focus||near.has(i));
+
   ctx.clearRect(0,0,w,h);
-  ctx.lineWidth=1;
-  for(const e of E){const a=P[e.s],b=P[e.t];
-    ctx.strokeStyle="rgba(120,140,160,.22)";ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
-  ctx.font="10px ui-monospace,Consolas,monospace";
-  for(const p of P){
-    const c=GK[p.kind]||"#7d7d7d";const r=Math.min(9,3+Math.sqrt(p.deg||1)*1.5);
-    ctx.fillStyle=c;ctx.beginPath();ctx.arc(p.x,p.y,r,0,6.2832);ctx.fill();
-    if(p.deg>=3){
-      const label=String(p.name).slice(0,16);
-      const tw=ctx.measureText(label).width;
-      // draw the label on whichever side keeps it inside the canvas, or it gets
-      // clipped at the edge and reads as truncated data
-      const lx=(p.x+r+3+tw>w-4)?p.x-r-3-tw:p.x+r+3;
-      ctx.fillStyle="rgba(234,234,234,.72)";
-      ctx.fillText(label,Math.max(2,lx),Math.min(h-3,Math.max(9,p.y+3)));}
+  // edges, curved, dimmed unless they touch the focused node
+  for(const e of E){
+    const a=P[e.s],b=P[e.t], on=focus==null||e.s===focus||e.t===focus;
+    ctx.strokeStyle=on?(focus==null?"rgba(130,150,170,.20)":"rgba(74,246,38,.55)"):"rgba(130,150,170,.05)";
+    ctx.lineWidth=on&&focus!=null?1.4:1;
+    const x1=TX(a.x),y1=TY(a.y),x2=TX(b.x),y2=TY(b.y);
+    const mx=(x1+x2)/2,my=(y1+y2)/2,nx=-(y2-y1)*0.12,ny=(x2-x1)*0.12;
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo(mx+nx,my+ny,x2,y2);ctx.stroke();
   }
-  GSIM.ticks++;
-  if(GSIM.ticks<220)requestAnimationFrame(()=>drawGraph(map));
+  // nodes
+  ctx.font="10px ui-monospace,Consolas,monospace";
+  P.forEach((p,i)=>{
+    const r=Math.max(3,Math.min(13,3+Math.sqrt(p.d||1)*1.9))*Math.min(1.6,GVIEW.k);
+    const x=TX(p.x),y=TY(p.y);
+    if(x<-40||x>w+40||y<-40||y>h+40)return;
+    const on=lit(i), hi=GHI&&GHI.has(p.id);
+    ctx.globalAlpha=on?1:0.18;
+    ctx.fillStyle=colourOf(p);
+    ctx.beginPath();ctx.arc(x,y,r,0,6.2832);ctx.fill();
+    if(hi){ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,r+3,0,6.2832);ctx.stroke();}
+    if(i===GSEL){ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,r+5,0,6.2832);ctx.stroke();}
+    // label only where it can be read: big nodes, the focus, or a search hit
+    if((p.d>=4&&GVIEW.k>=0.85)||i===focus||hi){
+      const label=String(p.name).slice(0,20);
+      const tw=ctx.measureText(label).width;
+      const lx=(x+r+4+tw>w-4)?x-r-4-tw:x+r+4;
+      ctx.fillStyle=on?"rgba(240,240,240,.9)":"rgba(240,240,240,.25)";
+      ctx.fillText(label,Math.max(2,lx),Math.min(h-3,Math.max(9,y+3)));
+    }
+    ctx.globalAlpha=1;
+  });
+  // Legend along the TOP — at the bottom it collided with the hint line and the
+  // two rendered as one unreadable strip. Colour means nothing without it.
+  const layers=[...LAYERMAP.entries()].slice(0,7);
+  ctx.font="9px ui-monospace,Consolas,monospace";
+  let lx=10;
+  for(const [name,col] of layers){
+    const tw=ctx.measureText(name).width;
+    if(lx+tw+22>w-8)break;                       // never wrap into the map
+    ctx.fillStyle=col;ctx.beginPath();ctx.arc(lx+4,11,3.5,0,6.2832);ctx.fill();
+    ctx.fillStyle="rgba(200,200,200,.62)";ctx.fillText(name,lx+11,14);
+    lx+=22+tw;
+  }
+  if(GSIM.ticks<200)requestAnimationFrame(()=>drawGraph(map));
 }
-// drag to move, click to look up
+
+// hit-testing in graph space
+function gAt(cv,ev){
+  const r=cv.getBoundingClientRect(),mx=ev.clientX-r.left,my=ev.clientY-r.top;
+  let best=null,bd=1e9;
+  GSIM.P.forEach((p,i)=>{const x=p.x*GVIEW.k+GVIEW.x,y=p.y*GVIEW.k+GVIEW.y;
+    const d=(x-mx)**2+(y-my)**2; if(d<bd){bd=d;best=i;}});
+  return bd<420?best:null;
+}
 document.addEventListener("pointerdown",function(e){
   const cv=e.target.closest&&e.target.closest("#gcanvas"); if(!cv||!GSIM)return;
-  const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
-  let best=null,bd=1e9;
-  for(const p of GSIM.P){const d=(p.x-x)**2+(p.y-y)**2; if(d<bd){bd=d;best=p;}}
-  if(bd>400)return;
-  GSIM.drag=best; cv.setPointerCapture(e.pointerId);
-  GSIM.moved=false;
+  const i=gAt(cv,e);
+  GSIM.pan={x:e.clientX,y:e.clientY,vx:GVIEW.x,vy:GVIEW.y};
+  GSIM.dragIdx=i; GSIM.drag=i!=null?GSIM.P[i]:null; GSIM.moved=false;
+  cv.setPointerCapture(e.pointerId);
 });
 document.addEventListener("pointermove",function(e){
-  if(!GSIM||!GSIM.drag)return;
-  const cv=document.getElementById("gcanvas"); if(!cv)return;
-  const r=cv.getBoundingClientRect();
-  GSIM.drag.x=e.clientX-r.left; GSIM.drag.y=e.clientY-r.top;
-  GSIM.drag.vx=GSIM.drag.vy=0; GSIM.moved=true; GSIM.ticks=0;
-  if(LAST&&LAST.graph)drawGraph(LAST.graph.map);
+  const cv=document.getElementById("gcanvas"); if(!cv||!GSIM)return;
+  if(GSIM.pan){
+    GSIM.moved=true;
+    if(GSIM.drag){
+      const r=cv.getBoundingClientRect();
+      GSIM.drag.x=(e.clientX-r.left-GVIEW.x)/GVIEW.k;
+      GSIM.drag.y=(e.clientY-r.top-GVIEW.y)/GVIEW.k;
+      GSIM.drag.vx=GSIM.drag.vy=0;
+    }else{
+      GVIEW.x=GSIM.pan.vx+(e.clientX-GSIM.pan.x);
+      GVIEW.y=GSIM.pan.vy+(e.clientY-GSIM.pan.y);
+    }
+    if(LAST&&LAST.graph)drawGraph(LAST.graph.map);
+    return;
+  }
+  if(!e.target.closest||!e.target.closest("#gcanvas")){if(GHOV!=null){GHOV=null;gTip(null);} return;}
+  const i=gAt(cv,e);
+  if(i!==GHOV){GHOV=i;gTip(i!=null?GSIM.P[i]:null,e);if(LAST&&LAST.graph)drawGraph(LAST.graph.map);}
 });
-document.addEventListener("pointerup",function(){
-  if(!GSIM||!GSIM.drag)return;
-  if(!GSIM.moved){const n=GSIM.drag;const box=document.getElementById("gq");
-    if(box){box.value=n.name;GQ=n.name;graphAsk();box.scrollIntoView({block:"center"});}}
-  GSIM.drag=null;
+document.addEventListener("pointerup",function(e){
+  if(!GSIM||!GSIM.pan)return;
+  const wasClick=!GSIM.moved&&GSIM.dragIdx!=null;
+  GSIM.pan=null;GSIM.drag=null;
+  if(wasClick){GSEL=GSIM.dragIdx;gDetail(GSIM.P[GSEL]);if(LAST&&LAST.graph)drawGraph(LAST.graph.map);}
+});
+document.addEventListener("wheel",function(e){
+  const cv=e.target.closest&&e.target.closest("#gcanvas"); if(!cv||!GSIM)return;
+  e.preventDefault();
+  const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+  const k=Math.max(0.35,Math.min(3.5,GVIEW.k*(e.deltaY<0?1.12:0.89)));
+  GVIEW.x=mx-(mx-GVIEW.x)*(k/GVIEW.k); GVIEW.y=my-(my-GVIEW.y)*(k/GVIEW.k); GVIEW.k=k;
+  if(LAST&&LAST.graph)drawGraph(LAST.graph.map);
+},{passive:false});
+
+function gTip(p,ev){
+  const t=document.getElementById("gtip"); if(!t)return;
+  if(!p){t.style.display="none";return;}
+  t.style.display="block";
+  t.innerHTML='<b>'+esc(p.name)+'</b><span>'+esc(p.kind)+(p.path?' · '+esc(p.path):'')+'</span>';
+  const wrap=t.parentElement.getBoundingClientRect();
+  t.style.left=Math.min(wrap.width-190,Math.max(4,p.x*GVIEW.k+GVIEW.x+12))+"px";
+  t.style.top=Math.max(4,p.y*GVIEW.k+GVIEW.y-10)+"px";
+}
+// clicking a node asks the graph about it — the same call an agent makes
+function gDetail(p){
+  const d=document.getElementById("gdetail"); if(!d)return;
+  d.style.display="block";
+  // no inline onclick with quotes — this whole script lives inside a template
+  // literal, and nested quoting has broken the page three separate times
+  d.innerHTML='<div class="gd-h"><b>'+esc(p.name)+'</b>'+
+    '<button class="gd-x" title="Close">&#10005;</button></div>'+
+    '<div class="gd-m">'+esc(p.kind)+(p.path?' · '+esc(p.path):'')+'</div>'+
+    '<div class="gd-b">looking it up…</div>';
+  fetch("/api/graph?project="+encodeURIComponent(qp("project"))+"&q="+encodeURIComponent(p.name))
+    .then(r=>r.json()).then(rows=>{
+      const hit=(rows||[]).find(r=>r.id===p.id)||(rows||[])[0];
+      const b=d.querySelector(".gd-b"); if(!b)return;
+      if(!hit){b.textContent="nothing more recorded";return;}
+      b.innerHTML=(hit.summary?'<p>'+esc(hit.summary)+'</p>':'')+
+        (hit.callers&&hit.callers.length?'<div class="gcal">← called by '+hit.callers.slice(0,8).map(c=>esc(c.name)).join(", ")+'</div>':'')+
+        (hit.uses&&hit.uses.length?'<div class="guse">→ uses '+hit.uses.slice(0,8).map(c=>esc(c.name)).join(", ")+'</div>':'')+
+        (hit.line?'<div class="gd-l mono">'+esc(hit.path)+':'+hit.line+'</div>':'');
+    }).catch(()=>{});
+}
+document.addEventListener("click",function(e){
+  const x=e.target.closest&&e.target.closest(".gd-x");
+  if(x){GSEL=null;const d=document.getElementById("gdetail");if(d)d.style.display="none";
+    if(LAST&&LAST.graph)drawGraph(LAST.graph.map);return;}
+});
+// filter the map + feed by kind
+document.addEventListener("click",function(e){
+  const b=e.target.closest&&e.target.closest(".gk[data-kind]"); if(!b)return;
+  GKINDFILTER=GKINDFILTER===b.dataset.kind?"":b.dataset.kind;
+  GQ=GKINDFILTER?GKINDFILTER:""; const box=document.getElementById("gq");
+  if(box)box.value=GQ;
+  graphAsk();
 });
 
 // The most recent thing the loop actually did. Without it a quiet moment reads as
