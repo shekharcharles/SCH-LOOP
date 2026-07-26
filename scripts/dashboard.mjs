@@ -43,6 +43,34 @@ function rollup() {
 // The graph is thousands of nodes and every SSE push would otherwise re-open and
 // re-query it. Recompute only when the database has actually changed.
 const gCache = new Map();
+// Build a readable slice of the graph: seed with the most-connected nodes, then
+// pull in the neighbours they connect TO. Picking purely by degree selects hubs
+// whose neighbours all fall outside the set, leaving dots with no lines.
+function coreMap(db, seedCount) {
+  // The map shows a CONNECTED core, not everything — 3,000 dots is a hairball.
+  // Seed with the most-connected nodes, then pull in the neighbours they are
+  // connected TO: picking by degree alone selects hubs whose neighbours all
+  // fall outside the set, leaving a map of dots with almost no lines.
+  const seeds = db.prepare(`
+    SELECT n.id,n.kind,n.name,n.path,
+           (SELECT COUNT(*) FROM edge e WHERE e.src=n.id OR e.dst=n.id) AS deg
+    FROM node n WHERE deg > 0 ORDER BY deg DESC, n.name LIMIT ?`).all(seedCount);
+  const ids = new Set(seeds.map((n) => n.id));
+  const edges = db.prepare(`SELECT src,dst,kind FROM edge
+                            WHERE src IN (SELECT value FROM json_each(?))
+                               OR dst IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify([...ids]), JSON.stringify([...ids]))
+    .slice(0, seedCount * 7);
+  const extra = [...new Set(edges.flatMap((e) => [e.src, e.dst]))].filter((i) => !ids.has(i)).slice(0, seedCount * 3);
+  const core = seeds.concat(extra.length
+    ? db.prepare(`SELECT id,kind,name,path,1 AS deg FROM node
+                  WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(extra))
+    : []);
+  const keep = new Set(core.map((n) => n.id));
+  const mapEdges = edges.filter((e) => keep.has(e.src) && keep.has(e.dst));
+  return { nodes: core, edges: mapEdges };
+}
+
 function graphView(project) {
   const p = join(PROJECTS_DIR, project, "graph.db");
   let mtime = 0;
@@ -55,27 +83,7 @@ function graphView(project) {
     // newest facts first — this is the "it is learning" feed
     const recent = db.prepare(`SELECT id,kind,name,path,line,summary,updatedAt FROM node
                                ORDER BY updatedAt DESC LIMIT 14`).all();
-    // The map shows a CONNECTED core, not everything — 3,000 dots is a hairball.
-    // Seed with the most-connected nodes, then pull in the neighbours they are
-    // connected TO: picking by degree alone selects hubs whose neighbours all
-    // fall outside the set, leaving a map of dots with almost no lines.
-    const seeds = db.prepare(`
-      SELECT n.id,n.kind,n.name,n.path,
-             (SELECT COUNT(*) FROM edge e WHERE e.src=n.id OR e.dst=n.id) AS deg
-      FROM node n WHERE deg > 0 ORDER BY deg DESC, n.name LIMIT 24`).all();
-    const ids = new Set(seeds.map((n) => n.id));
-    const edges = db.prepare(`SELECT src,dst,kind FROM edge
-                              WHERE src IN (SELECT value FROM json_each(?))
-                                 OR dst IN (SELECT value FROM json_each(?))`)
-      .all(JSON.stringify([...ids]), JSON.stringify([...ids]))
-      .slice(0, 160);
-    const extra = [...new Set(edges.flatMap((e) => [e.src, e.dst]))].filter((i) => !ids.has(i)).slice(0, 60);
-    const core = seeds.concat(extra.length
-      ? db.prepare(`SELECT id,kind,name,path,1 AS deg FROM node
-                    WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(extra))
-      : []);
-    const keep = new Set(core.map((n) => n.id));
-    const mapEdges = edges.filter((e) => keep.has(e.src) && keep.has(e.dst));
+    const { nodes: core, edges: mapEdges } = coreMap(db, 24);
     const queries = db.prepare("SELECT ts,source,tool,q,hits,ms FROM query_log ORDER BY ts DESC LIMIT 12").all();
     db.close();
     const view = { stats: s, recent, queries, map: { nodes: core, edges: mapEdges } };
@@ -179,6 +187,15 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/api/projects") return json(res, rollup());
   if (url.pathname === "/api/state") { const s = snapshot(url.searchParams.get("project")); return json(res, s); }
   // live search over what the loop knows — the same query the agents make
+  // A denser map on demand. The default is a readable core, not the whole graph —
+  // but the operator must be able to see more when they want to.
+  if (url.pathname === "/api/graph-map") {
+    const project = url.searchParams.get("project");
+    const limit = Math.max(24, Math.min(600, Number(url.searchParams.get("limit") || 24)));
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { const db = openGraph(project); const m = coreMap(db, limit); db.close(); return json(res, m); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
   if (url.pathname === "/api/graph") {
     const project = url.searchParams.get("project"), q = url.searchParams.get("q") || "";
     if (!getProject(project)) return json(res, { error: "no such project" });
@@ -626,6 +643,16 @@ function graphSec(g){
         '<input id="gq" class="gsearch" placeholder="ask the graph…  (the same query the agents make)" '+
           'value="'+esc(GQ)+'" oninput="GQ=this.value;graphAsk()">'+
         '<button class="mini" title="Reset the map view" onclick="gReset()">reset view</button>'+
+      '</div>'+
+      // The header counts the whole graph; the map draws a readable slice of it.
+      // Without saying so, the two numbers look like a contradiction and the whole
+      // panel stops being believable.
+      '<div class="gmapnote">showing <b id="gmapn">'+(g.map.nodes.length)+'</b> of '+
+        g.stats.nodes+' facts — the most connected core. '+
+        'Everything else is reachable by search.'+
+        '<span class="gdens">density '+
+          [24,60,150].map(n=>'<button class="gdb'+(GDENSITY===n?' on':'')+'" data-dens="'+n+'">'+n+'</button>').join("")+
+        '</span>'+
       '</div>'+
       '<div id="gres" class="gres">'+GRES+'</div>'+
       '<div class="gcanvas-wrap">'+
