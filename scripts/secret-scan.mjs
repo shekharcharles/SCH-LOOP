@@ -77,6 +77,29 @@ if (ALL) {
   }
 }
 
+// LINE-ENDING GUARD. An edit can silently rewrite a file to CRLF, turning a
+// 39-line change into a 1,087-line diff that buries the real change and makes
+// review impossible. A builder ran the right check — `git diff --ignore-all-space`
+// collapsing the diff — and concluded there was no corruption, when that collapse
+// is precisely the proof of it. So the commit gate checks instead of the agent.
+if (!ALL && !findings.length) {
+  try {
+    const raw = git("diff", "--cached", "--numstat").trim().split("\n").filter(Boolean);
+    const ign = git("diff", "--cached", "--ignore-all-space", "--numstat").trim().split("\n").filter(Boolean);
+    const sum = (rows) => rows.reduce((n, l) => { const [a, d] = l.split(/\s+/); return n + (Number(a) || 0) + (Number(d) || 0); }, 0);
+    const rawN = sum(raw), ignN = sum(ign);
+    // a real change survives ignoring whitespace; a line-ending rewrite does not
+    if (rawN > 200 && ignN * 6 < rawN) {
+      console.error(`secret-scan: BLOCKED — line endings were rewritten.\n` +
+        `  staged diff is ${rawN} lines, but only ${ignN} once whitespace is ignored.\n` +
+        `  An edit flipped CRLF/LF and buried the real change. Convert back, e.g.\n` +
+        `    perl -pi -e 's/\\r\\n/\\n/g' <the files you edited>\n` +
+        `  then re-stage. (Check with: git diff --cached --ignore-all-space --stat)`);
+      process.exit(1);
+    }
+  } catch { /* not a git repo, or no staged diff — nothing to check */ }
+}
+
 if (!findings.length) { console.log("secret-scan: CLEAN — safe to commit"); process.exit(0); }
 console.error("secret-scan: BLOCKED — " + findings.length + " issue(s). Do NOT commit:");
 for (const f of findings) console.error(`  ✗ ${f.file} — ${f.why}${f.sample ? "  [" + f.sample + "]" : ""}`);
