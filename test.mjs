@@ -404,3 +404,34 @@ test("task-set: refuses to merge a built task with no cost recorded", () => {
   assert.equal(read(2).status, "merged");
   rmSync(home, { recursive: true, force: true });
 });
+
+// --- a spend cap the loop cannot talk past ----------------------------------
+// 122 tasks in a day consumed roughly half a weekly allowance. The loop has no
+// idea what it spends and will happily exhaust the plan by Tuesday, so the gate
+// checks the budget before anything else and refuses to start a pass past it.
+test("pass-gate: refuses to start a pass once the daily budget is spent", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-bud-"));
+  const P = "b";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "b", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  const env = { ...process.env, SCH_HOME: home, NODE_NO_WARNINGS: "1" };
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a], { encoding: "utf8", env }).trim();
+
+  S("budget", "--project", P, "--daily", "200000");
+  S("task-add", "--project", P, "--title", "a", "--ac", "x");
+  S("task-set", "--project", P, "1", "--status", "building");
+  assert.equal(S("pass-gate", "--project", P), "WORK", "under budget the pass proceeds");
+
+  S("task-set", "--project", P, "1", "--status", "merged", "--agent", "builder", "--tokens", "210000", "--tool-uses", "20");
+  S("task-add", "--project", P, "--title", "b", "--ac", "x");
+  assert.match(S("pass-gate", "--project", P), /^BUDGET/, "over budget the pass must not start");
+
+  // raising the cap resumes work — the operator stays in control
+  S("budget", "--project", P, "--daily", "500000");
+  assert.equal(S("pass-gate", "--project", P), "WORK");
+  // and no cap means no gate, for anyone who does not want one
+  S("budget", "--project", P, "--daily", "0");
+  assert.equal(S("pass-gate", "--project", P), "WORK");
+  rmSync(home, { recursive: true, force: true });
+});

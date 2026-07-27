@@ -287,6 +287,28 @@ export function suggestInterval(state) {
   return { minutes: 15, why: `only ${ready + changes} ready — a pass will finish early, so waking sooner does real work` };
 }
 
+// What this project has spent today, against its cap. Counts every recorded
+// subagent run, which is the part the loop controls; the orchestrator's own
+// context is on top of this, so treat the number as a floor, never a total.
+export function budgetStatus(id) {
+  const cap = getProject(id)?.dailyTokenBudget ?? 0;
+  const s = loadState(id);
+  const day = new Date().toISOString().slice(0, 10);
+  let spent = 0;
+  for (const t of s.tasks ?? [])
+    for (const c of t.costs ?? []) if ((c.at ?? "").slice(0, 10) === day) spent += c.tokens || 0;
+  // tasks costed before per-agent breakdown existed still count for today
+  for (const t of s.tasks ?? [])
+    if (!(t.costs ?? []).length && t.tokens > 0 && (t.updatedAt ?? "").slice(0, 10) === day) spent += t.tokens;
+  return {
+    day, spent, cap,
+    pct: cap ? Math.round(spent / cap * 100) : null,
+    over: cap > 0 && spent >= cap,
+    note: cap ? `${(spent / 1e6).toFixed(2)}M of ${(cap / 1e6).toFixed(2)}M recorded subagent tokens today`
+              : "no cap set — state.mjs budget --project <id> --daily <tokens>",
+  };
+}
+
 export function inScope(project, target) {
   const sc = project?.scope ?? SCOPE_EMPTY;
   if (!sc.authorized || sc.halt || expired(sc.expiry)) return false;
@@ -539,6 +561,14 @@ const commands = {
       if (rescued) { event(s, `orphan recovery: ${rescued} interrupted task(s) requeued`); saveState(id, s); }
     }
     let verdict;
+    // Spend cap first: past it, there is nothing worth loading a pack for.
+    const b = budgetStatus(id);
+    if (b.over) {
+      s.run = { ...(s.run ?? {}), lastPass: now(), verdict: "BUDGET", intervalMin: Number(flags.interval ?? s.run?.intervalMin ?? 0) || 0 };
+      saveState(id, s);
+      return out(`BUDGET — ${b.note}. Stop the pass. Raise it with ` +
+        `\`state.mjs budget --project ${id} --daily <tokens>\` or wait for tomorrow.`);
+    }
     if (!mine && l && Date.now() - new Date(l.ts).getTime() < ttl) verdict = "BUSY";  // another pass running → exit
     else {
       const changes = s.tasks.some((t) => t.status === "changes");
@@ -800,6 +830,25 @@ const commands = {
     else if (flags.doing) s.run.activity = { what: flags.doing, since: now() };
     saveState(id, s);
     out(s.run.activity ?? "idle");
+  },
+  // A spend cap the loop cannot talk its way past.
+  //
+  // 122 tasks in one day consumed roughly half a weekly Max allowance. The loop
+  // has no idea what it is spending — it will happily keep going until the plan
+  // is exhausted on a Tuesday. This gives it a number and stops it at that
+  // number, which is the difference between a budget and a hope.
+  //
+  //   state.mjs budget --project p --daily 1500000     # tokens/day, 0 = off
+  //   state.mjs budget --project p                     # today's spend vs the cap
+  budget({ flags }) {
+    const id = pid(flags);
+    if (flags.daily !== undefined) {
+      const r = loadRegistry(); const p = r.projects.find((x) => x.id === id);
+      if (!p) die("no such project");
+      p.dailyTokenBudget = Number(flags.daily) || 0;
+      saveRegistry(r);
+    }
+    out(budgetStatus(id));
   },
   "interval-advice"({ flags }) { out(suggestInterval(loadState(pid(flags)))); },
   // Per-project build rituals: the exact commands a change to certain files
