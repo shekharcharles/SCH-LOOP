@@ -228,3 +228,38 @@ Generalizable techniques distilled from completed tasks. Never target-specific.
 - If the operator has uncommitted edits to a file that IS committed on the
   branch, `git checkout <other-branch>` aborts. Stash just that path, do the
   branch work, pop it back — never commit their in-progress edit for them.
+
+## A framework normalises stored paths - match what the DB holds, not what settings say
+
+A settings-derived path string and the value actually stored can differ. Django
+`FileField` normalises the generated name before saving, so a settings constant
+like `MEDIA_UPLOAD_DIR + "/subtitles/"` (double slash) is single-slashed in the
+row. A lookup that rebuilds the settings form silently matches nothing - and if
+that lookup gates access, the visible symptom is "denied for everyone", which
+reads like a permissions bug rather than a string bug.
+
+Check the stored value against a real fixture row before writing the query. The
+same storage layer also suffixes on collision (`captions_CfOrXgP.vtt`), so a
+test must read the path back off the instance and never hand-write it.
+
+## A blanket deny that protects one thing usually catches its neighbours
+
+A rule like "deny everything under `original/`" is written for the source upload,
+but every sibling artefact stored under that prefix - captions, sidecars,
+chapter files - inherits the deny. The fix is not an exemption: give the
+neighbour the SAME entitlement check the protected resource has, resolved
+through its parent object. A caption reveals a private video's dialogue, so it
+deserves the playback gate, not a hole.
+
+- A cross-cutting "record/observe everything" requirement belongs in the ONE choke point every call already
+  passes through (a middleware slot), not in each call site — it is then structural, and "the agent cannot
+  skip it" needs no test to stay true.
+- Gate such an observer on a predicate the codebase already trusts (here: `tool.target_hosts(arguments)`,
+  the scope guard's own "does this touch the network" test) rather than a hardcoded name list — the list
+  is stale the moment a new tool lands.
+- Sanitising (masking/bounding) must happen INSIDE the sink's `append`, not at the call site: at rest, no
+  caller can bypass it by constructing the record another way.
+- Adding a slot to a canonical order tuple usually breaks the "full cage" completeness test — that test is
+  the feature working, not a regression; add the new slot to its fixture.
+- Do not accept a review finding without checking the premise against source: a reviewer claimed a field
+  was unobtainable from tool arguments when it was a first-class parameter in the tool's JSON schema.
