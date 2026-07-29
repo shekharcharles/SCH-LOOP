@@ -600,6 +600,14 @@ Ambiguous objective, conflict with an `NG`/RoE, or a decision only a human can m
   you captured and never read is the most expensive call in the pass: you paid
   for it and learned nothing. Name what is on the screen and reason about it
   (see "Observe → reason → act" in the pentest pack) before deciding what next.
+
+  **The call cap does NOT apply to offensive browser work** (journey mapping,
+  authenticated testing, anything driving a real target). There, correctness
+  outranks call count: wait for each screen to be genuinely ready, confirm every
+  action landed before taking the next, and never rush a login — a raced step can
+  lock a client's test account or manufacture a false result, which costs far
+  more than the calls it saved. Calm and composed, one confirmed step at a time.
+  See "Pace" in `packs/web-pentest.md`.
 - `run-the-tool` (tool-dev): invoke the CLI/lib, assert output/exit code.
 - `poc-evidence` (pentest): reproduce each finding — raw request/response +
   screenshot / decrypted Burp request; ground truth, not a guess. **Write the PoC
