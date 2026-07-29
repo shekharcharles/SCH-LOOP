@@ -216,6 +216,27 @@ export function addFinding(state, f) {
   return finding;
 }
 
+// A `validated` finding is a CLAIM ABOUT THE CLIENT'S SYSTEM. It goes in the
+// CERT-In report, so it needs a PoC someone else can re-run — not a pointer at
+// the phase write-up. An engagement reached 20 validated findings whose entire
+// evidence was a shared class report ("reports/config/headers.md" on four of
+// them), one of them untitled, and not one raw request/response or screenshot.
+// The pack always demanded a PoC; nothing ever checked, so nothing produced one.
+export function pocGate(project, state, f) {
+  if ((f.status ?? "") !== "validated") return;         // only the reportable claims
+  const home = getProject(project)?.path;
+  const title = (f.title ?? "").trim();
+  if (!title || title === "(untitled)") die("FINDING BLOCKED — a validated finding needs a --title. It is going in the client report.");
+  const ev = (f.evidence ?? "").trim();
+  if (!ev) die(`FINDING BLOCKED — "${title}" is validated with no --evidence. Write the PoC first (raw request + response, or a screenshot) under reports/evidence/, then log the finding pointing at that file.`);
+  if (home && !existsSync(join(home, ev)) && !existsSync(ev))
+    die(`FINDING BLOCKED — "${title}": evidence "${ev}" does not exist under ${home}. Write the PoC file before logging the finding; a path to a file that is not there is not evidence.`);
+  // A phase write-up covering eight findings is a summary, not a PoC. Warn once
+  // it is reused rather than refusing — some findings genuinely share a capture.
+  const shared = (state.findings ?? []).filter((x) => x.status === "validated" && x.evidence === ev && x.id !== f.id).length;
+  if (shared) process.stderr.write(`[poc] warning: "${ev}" is already the evidence for ${shared} other validated finding(s) — give this one its own request/response or screenshot.\n`);
+}
+
 // A finding lived only in state.json, so the knowledge graph — the thing a fresh
 // context actually asks — never learned what the engagement had already proven.
 // Mirror it: the finding, the target it was found on, the evidence that proves
@@ -656,6 +677,7 @@ const commands = {
   // ---- findings (per project) ----
   async "finding-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
+    pocGate(id, s, flags);
     const f = addFinding(s, { phase: flags.phase, target: flags.target, title: flags.title, category: flags.category, severity: flags.severity, cvss: flags.cvss, status: flags.status, evidence: flags.evidence, notes: flags.notes, parents: splitList(flags.parents) });
     saveState(id, s);
     await recordFinding(id, s, f);
@@ -677,6 +699,7 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     const f = (s.findings ?? []).find((x) => x.id === Number(pos[0]));
     if (!f) return out("not found");
+    pocGate(id, s, { ...f, ...flags });
     for (const k of ["status", "severity", "cvss", "evidence", "notes", "category"]) if (flags[k] !== undefined) f[k] = flags[k];
     saveState(id, s);
     await recordFinding(id, s, f);   // candidate → validated must reach the graph too
@@ -713,6 +736,22 @@ const commands = {
       }
     }
     if (flags.status === "merged" && flags.force === "true") event(s, `merge FORCED past skill gate: ${flags.note || "(no reason)"}`);
+    // A BLOCKER IS A DEPENDENCY, NOT A NEW QUESTION.
+    // Twelve tasks were once each set `blocked` carrying a copy of "waiting on
+    // task 55", so the dashboard asked the operator the same thing twelve times
+    // and answering one moved nothing. If the reason names another task, depend
+    // on it instead: the task stays queued, asks nobody, and becomes ready the
+    // moment the real blocker merges.
+    if (flags.status === "blocked") {
+      const why = `${flags.notes ?? ""} ${flags.note ?? ""}`;
+      const on = [...why.matchAll(/\b(?:task|#)\s*#?(\d+)/gi)].map((m) => Number(m[1]))
+        .filter((n) => n !== t.id && s.tasks.some((x) => x.id === n && !DONE.has(x.status) && x.status !== "superseded"));
+      if (on.length) {
+        t.deps = [...new Set([...(t.deps ?? []), ...on])];
+        flags.status = "queued";
+        event(s, `task #${t.id} depends on #${on.join(",#")} instead of asking again`);
+      }
+    }
     for (const k of ["status", "branch", "notes", "phase", "target", "priority", "category", "phaseName"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
     // the files this task touches — what locate-first found, so it is never
     // rediscovered and co-located tasks can be batched

@@ -302,6 +302,38 @@ test("graph: records facts, finds them by natural phrasing, returns callers", as
   rmSync(home, { recursive: true, force: true });
 });
 
+// Ten tasks each blocked with a copy of "waiting on the login task" asked the
+// operator the same question ten times, and each answer moved only its own task.
+test("task-set: a blocker naming another task becomes a dependency, not a question", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-dep-"));
+  const P = "d";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "d", domain: "web-pentest", path: home, scope: { authorized: true } }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+  const read = () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8"));
+
+  S("task-add", "--project", P, "--title", "BLOCKED: login is failing", "--ac", "x");   // #1, the real blocker
+  S("task-add", "--project", P, "--title", "APP-MAP: Cards", "--ac", "x");              // #2, needs a session
+
+  S("task-set", "--project", P, "2", "--status", "blocked", "--notes", "blocked on task 1: needs a logged-in session");
+  let t2 = read().tasks.find((t) => t.id === 2);
+  assert.equal(t2.status, "queued", "a task waiting on another task must not ask the operator");
+  assert.deepEqual(t2.deps, [1], "it must depend on the blocker instead");
+  assert.equal(read().tasks.filter((t) => t.status === "blocked").length, 0);
+
+  // not ready while the blocker is open, ready the moment it merges
+  assert.equal(JSON.parse(S("task-next", "--project", P)).id, 1);
+  S("task-set", "--project", P, "1", "--status", "merged", "--note", "fixed", "--tokens", "100");
+  assert.equal(JSON.parse(S("task-next", "--project", P)).id, 2);
+
+  // a genuine operator question still blocks — it names no task
+  S("task-set", "--project", P, "2", "--status", "blocked", "--notes", "Which account should I use?");
+  assert.equal(read().tasks.find((t) => t.id === 2).status, "blocked");
+  rmSync(home, { recursive: true, force: true });
+});
+
 // A finding that only reaches state.json is invisible to every fresh context —
 // the graph is what the next pass actually asks.
 test("finding-add: the finding, its target and its evidence reach the graph", async () => {
@@ -312,6 +344,12 @@ test("finding-add: the finding, its target and its evidence reach the graph", as
     { id: P, name: "f", domain: "web-pentest", path: home, scope: { authorized: true } }], authorizations: [] }));
   const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
     { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+
+  // a validated finding is refused until the PoC it points at actually exists
+  assert.throws(() => S("finding-add", "--project", P, "--title", "IDOR on statement download",
+    "--status", "validated", "--evidence", "reports/poc/idor.md"), /evidence .* does not exist/);
+  mkdirSync(join(home, "reports", "poc"), { recursive: true });
+  writeFileSync(join(home, "reports", "poc", "idor.md"), "GET /api/statements/9911\nHTTP/1.1 200 — other customer's statement");
 
   S("finding-add", "--project", P, "--title", "IDOR on statement download", "--severity", "high",
     "--status", "validated", "--target", "api.example.test", "--evidence", "reports/poc/idor.md");

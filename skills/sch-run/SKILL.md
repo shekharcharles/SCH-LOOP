@@ -288,6 +288,20 @@ task; a rule in `CLAUDE.md` fixes every future task. This is what stops the loop
 re-making the same regression. (Also mirror durable/generalizable lessons to
 `knowledge/<pack>.md` via `sch-learn`.)
 
+**WRITE THAT FILE WITH THE `Write`/`Edit` TOOL — never through a shell heredoc.**
+A pass wrote the hard-won working login recipe into `CLAUDE.md` with
+`cat > CLAUDE.md <<EOF` (unquoted delimiter). The shell ran every backtick as a
+command substitution, so **every inline `code` span and the entire ```js block
+were replaced by nothing** — silently. The file still looked plausible: prose
+intact, the actual snippet gone, sentences ending "…Angular ignores a plain ."
+The next pass then failed to log in exactly as before.
+- Markdown is full of backticks. `Write` has no shell in the path; use it.
+- If a heredoc is genuinely unavoidable, the delimiter **must** be quoted
+  (`<<'EOF'`), which disables substitution.
+- After writing any guidance file, **read back the section you just wrote** and
+  confirm the code survived. A recipe that lost its code is worse than no
+  recipe: it reads as if the problem were already solved.
+
 ## 3d. Parallel wave (optional — throughput for independent tasks)
 
 When several **ready** tasks are independent — deps met, and they touch
@@ -583,7 +597,10 @@ Ambiguous objective, conflict with an `NG`/RoE, or a decision only a human can m
   after every edit. A failed check → fix, then one re-check, not a loop of snapshots.
 - `run-the-tool` (tool-dev): invoke the CLI/lib, assert output/exit code.
 - `poc-evidence` (pentest): reproduce each finding — raw request/response +
-  screenshot / decrypted Burp request; ground truth, not a guess.
+  screenshot / decrypted Burp request; ground truth, not a guess. **Write the PoC
+  file before logging the finding**: `finding-add --status validated` refuses an
+  evidence path that is not on disk, and one shared phase report is not a PoC for
+  eight findings. One file per finding, under `reports/evidence/`.
 - `objective-proof` (red team): beacon callback / access token / screenshot.
 
 **Review — right-size it. A review must never cost more than the build.**
@@ -672,6 +689,37 @@ Completion happens inside the loop, per task. The human gates are the contract
   - exposed secret/key → API/cloud access → data
   A proven chain outranks its individual parts — reviewers rate it higher. Stay
   within RoE (no destructive actions); the depth cap prevents infinite spawning.
+- **Blocked ONLY when a human is the only way forward.** `blocked` means "a
+  person must answer this". It does not mean "something else has to happen
+  first". Before you block, ask **who unblocks this?**
+  - *Another task* → it is a **dependency**, not a question:
+    `task-set <id> --status blocked --note "blocked on task 55: needs a session"`
+    — the engine sees the task number, records `deps:[55]` and leaves it
+    **queued**. It asks nobody and wakes up the moment #55 merges.
+  - *A retry later* → leave it `queued` with a note. A queue is not a waiting room.
+  - *The operator, and nobody else* → block, and only on the ONE task that owns
+    the question.
+
+  **Never fan the same question across sibling tasks.** Ten tasks each blocked
+  with a copy of "SIT login is down" produced ten identical dashboard questions;
+  the operator answered every one, five times over, and nothing moved because
+  each answer only requeued its own task. One blocker task, everything else
+  depends on it.
+
+- **A blocker you diagnosed is a hypothesis until you verify it in the real
+  flow.** An earlier pass invented a health check — a bare `POST` to a Keycloak
+  key-publish endpoint — got a 500, declared "the SIT environment is down", and
+  blocked ten tasks. The endpoint returns 500 for *any* request lacking session
+  context; inside a real browser login it returns 200. The environment was fine
+  and the credentials were valid the whole time.
+  - **Never invent a health check and treat its failure as ground truth.** A
+    probe you made up, run outside the flow it belongs to, tests your probe.
+  - Before declaring an outage or an environment fault, **reproduce it on the
+    real path** (drive the actual login/journey) and say which response signature
+    it matched.
+  - If the operator says "I did this manually and it works", that is ground
+    truth and your diagnosis is wrong. Fix your automation, do not re-ask.
+
 - **Blocked:** a real product/authorization decision → `task-set --status blocked
   --note "<question>"`, then **push a notification** so the operator sees it even
   away from the dashboard:
