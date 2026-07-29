@@ -302,6 +302,33 @@ test("graph: records facts, finds them by natural phrasing, returns callers", as
   rmSync(home, { recursive: true, force: true });
 });
 
+// A finding that only reaches state.json is invisible to every fresh context —
+// the graph is what the next pass actually asks.
+test("finding-add: the finding, its target and its evidence reach the graph", async () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-find-"));
+  const P = "f";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "f", domain: "web-pentest", path: home, scope: { authorized: true } }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+
+  S("finding-add", "--project", P, "--title", "IDOR on statement download", "--severity", "high",
+    "--status", "validated", "--target", "api.example.test", "--evidence", "reports/poc/idor.md");
+
+  process.env.SCH_HOME = home;
+  const g = await import("./scripts/graph.mjs");
+  const db = g.open(P);
+  const hits = g.search(db, "IDOR statement", { kind: "finding" });
+  assert.equal(hits.length, 1, "the finding must be searchable in the graph");
+  const { uses } = g.neighbours(db, hits[0].id, 1);
+  const names = uses.map((n) => n.name);
+  assert.ok(names.includes("api.example.test"), "the finding must link to the target it was found on");
+  assert.ok(names.includes("reports/poc/idor.md"), "the finding must link to the evidence that proves it");
+  db.close();
+  rmSync(home, { recursive: true, force: true });
+});
+
 // --- orphan recovery: an interrupted pass must not strand its task ----------
 // building/review only make sense while a pass holds the lock. If the session is
 // closed mid-task the status sticks, and task-next only returns `queued`, so the

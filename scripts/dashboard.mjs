@@ -301,14 +301,18 @@ const PAGE = `<!doctype html>
   .catchip{font-size:9px;text-transform:uppercase;letter-spacing:.06em;padding:1px 5px;border:1px solid var(--line);color:var(--dim)}
   .brief-empty{border-left-color:var(--line);color:var(--dim);font-size:12px}
   .brief-empty code{font-size:11px;color:var(--fg);background:#171717;padding:1px 5px}
-  /* LIVE WORK TREE: category › phase › tasks. Everything visible at once. */
-  .phase-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px;align-items:start}
-  .cat{border:1px solid var(--line);background:var(--panel)}
-  .cat-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:8px 11px;
-         background:#151515;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+  /* LIVE WORK TREE: category › phase › tasks. Everything visible at once.
+     The columns are PHASES, not categories: an engagement with one category
+     (every pentest) was rendering as a single 340px column with the rest of a
+     1600px screen left blank, and 9 phases stacked into one endless scroll. */
+  .phase-strip{display:flex;flex-direction:column;gap:10px}
+  .cat{border:1px solid var(--line);background:var(--panel);
+       display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));align-items:start}
+  .cat-h{grid-column:1/-1;display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:8px 11px;
+         background:#151515;font-size:11px;text-transform:uppercase;letter-spacing:.1em}
   .cat-n{color:var(--fg);font-weight:700}.cat-c{color:var(--dim);font-size:10px}
-  .ph{border-top:1px solid var(--line)}
-  .ph:first-of-type{border-top:0}
+  /* each phase is a cell: separated by its own rules, not by the stack order */
+  .ph{border-top:1px solid var(--line);border-left:1px solid var(--line);min-width:0}
   .ph-h{display:flex;align-items:center;gap:8px;padding:6px 11px;background:#121212}
   .ph-n{flex:1;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg);
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -344,10 +348,22 @@ const PAGE = `<!doctype html>
   .tk.running .tk-d{background:var(--green)}
   .ph.running .ph-n{color:var(--green)}
   .cat.running{border-color:rgba(74,246,38,.55)}
-  .ibx{border:1px solid var(--line);border-left:2px solid var(--amber);background:var(--panel);margin-bottom:6px}
+  /* a planned submission is history, not a live item — it goes quiet (grey rail)
+     but never leaves the page, so you can always re-read what you asked for */
+  .ibx{border:1px solid var(--line);border-left:2px solid var(--line);background:var(--panel);margin-bottom:6px}
+  .ibx.pending{border-left-color:var(--amber)}
+  .ibx-st{font-size:9px;text-transform:uppercase;letter-spacing:.07em;padding:2px 6px;flex:none;border:1px solid}
+  .ibx-st.is-sub{color:var(--amber);border-color:var(--amber)}
+  .ibx-st.is-add{color:var(--green);border-color:#1f3d18}
+  .ibx-n{font-size:10px;color:var(--dim);flex:none}
+  .ibx-tk{border-top:1px solid #1a1a1a}
+  .ibx-tr{display:flex;align-items:center;gap:8px;padding:4px 11px;font-size:11.5px;border-top:1px solid #151515}
+  .ibx-tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);opacity:.9}
+  .ibx-none{padding:7px 11px;font-size:11px;color:var(--dim);font-style:italic;border-top:1px solid #1a1a1a}
   .ibx-h{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#141414;cursor:pointer;list-style:none}
   .ibx-h::-webkit-details-marker{display:none}
-  .ibx-h::before{content:"▸";color:var(--amber);flex:none}
+  .ibx-h::before{content:"▸";color:var(--dim);flex:none}
+  .ibx.pending>.ibx-h::before{color:var(--amber)}
   .ibx[open]>.ibx-h{border-bottom:1px solid var(--line)}
   .ibx[open]>.ibx-h::before{content:"▾"}
   .ibx-h:hover{background:#191919}
@@ -476,6 +492,13 @@ const PAGE = `<!doctype html>
   .gcal{color:var(--green);font-size:10.5px;margin-top:3px}
   .guse{color:var(--blue);font-size:10.5px;margin-top:2px}
   .gnone{color:var(--dim);font-size:11px;padding:6px 2px}
+  .gmapnote{color:var(--dim);font-size:11px;padding:2px 12px 6px;display:flex;flex-wrap:wrap;gap:8px;
+            align-items:center}
+  .gmapnote b{color:var(--fg)}
+  .gdens{display:flex;gap:4px;align-items:center;margin-left:auto}
+  .gdb{font-family:inherit;font-size:10.5px;padding:3px 8px;background:var(--bg);color:var(--dim);
+       border:1px solid var(--line);cursor:pointer}
+  .gdb:hover{color:var(--fg)} .gdb.on{border-color:var(--green);color:var(--green)}
   /* the map gets the room — it was squeezed into half the width with dead space beside it */
   .gcanvas-wrap{position:relative;margin:10px 12px;border:1px solid var(--line);background:#0b0b0b}
   #gcanvas{width:100%;display:block;cursor:grab;touch-action:none}
@@ -609,6 +632,9 @@ function colourOf(n){
   return LAYERMAP.get(l);
 }
 let GSEEN=new Set(), GQ="", GRES="", GKINDFILTER="";
+// how many seed nodes the map draws — the density buttons under the map set it.
+// GMAP holds the denser map so a live SSE push does not snap it back to 24.
+let GDENSITY=24, GMAP=null;
 
 function graphSec(g){
   if(!g) return '<h2>knowledge graph<span class="n mono">empty</span></h2>'+
@@ -888,6 +914,20 @@ document.addEventListener("click",function(e){
   GQ=GKINDFILTER?GKINDFILTER:""; const box=document.getElementById("gq");
   if(box)box.value=GQ;
   graphAsk();
+});
+// density: redraw the map with a bigger connected core
+document.addEventListener("click",function(e){
+  const b=e.target.closest&&e.target.closest(".gdb[data-dens]"); if(!b)return;
+  GDENSITY=Number(b.dataset.dens);
+  b.parentNode.querySelectorAll(".gdb").forEach(x=>x.classList.toggle("on",x===b));
+  fetch("/api/graph-map?project="+encodeURIComponent(qp("project"))+"&limit="+GDENSITY)
+    .then(r=>r.json()).then(m=>{
+      if(!m||!m.nodes)return;
+      GMAP=GDENSITY===24?null:m;                      // survive the next SSE push
+      if(LAST&&LAST.graph)LAST.graph.map=m;
+      const n=document.getElementById("gmapn"); if(n)n.textContent=m.nodes.length;
+      GSIM=null; drawGraph(m);                        // fresh layout for the new node set
+    }).catch(()=>{});
 });
 
 // The most recent thing the loop actually did. Without it a quiet moment reads as
@@ -1185,9 +1225,17 @@ function projApply(id,r){
   set("phase",'<h2>work tree — every task, live'+(nowRunning.length?'<span class="livenow">● building: '+esc(nowRunning[0].title)+'</span>':'')+
     '<span class="n mono">'+pct+'% done · '+done+'/'+total+' tasks</span></h2>'+
     (ph.length?'<div class="phase-strip">'+phHtml+'</div>':'<div class="empty">no phases planned yet — run /sch-plan</div>'));
-  // knowledge graph — what the loop has learned, live
-  set("graphsec",graphSec(r.graph));
-  if(r.graph&&r.graph.map&&r.graph.map.nodes.length)requestAnimationFrame(()=>drawGraph(r.graph.map));
+  // knowledge graph — what the loop has learned, live.
+  // Guarded: a bug in the graph panel used to abort projApply and leave every
+  // section BELOW it (tasks, findings, inbox, activity) permanently blank.
+  if(GMAP&&r.graph)r.graph.map=GMAP;   // keep a chosen density across pushes
+  try{
+    set("graphsec",graphSec(r.graph));
+    if(r.graph&&r.graph.map&&r.graph.map.nodes.length)requestAnimationFrame(()=>drawGraph(r.graph.map));
+  }catch(err){
+    console.error("graph panel failed",err);
+    set("graphsec",'<h2>knowledge graph</h2><div class="empty">graph panel failed: '+esc(err.message)+'</div>');
+  }
   // tasks
   const stL=(x)=>STMAP[x]||[x.toUpperCase(),""];
   // A BLOCKED task is waiting on an ANSWER. Requeueing it without one just sends
@@ -1231,20 +1279,37 @@ function projApply(id,r){
   set("findsec",!OFF(p.domain)?"":'<h2>findings<span class="n mono">'+vf.length+'V / '+cn+'C</span></h2>'+(vf.length?vf.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="pctn">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>'));
   // inbox + activity
   const nb=s.inbox.filter(i=>i.status==="new");
+  // Every submission stays on the page — SUBMITTED until a pass plans it, then
+  // ADDED with the tasks it became. A receipt that vanished the moment the loop
+  // read it left no way to tell "not picked up yet" from "picked up and planned".
+  const ibxTasks=(n)=>s.tasks.filter(t=>t.source==="inbox#"+n);
   // Inbox: what you submitted, waiting for the next loop pass to plan it.
   // Full text (so you can re-read what you sent) + delete if you change your mind.
   // Inbox: what you submitted, waiting for the next pass to plan it. Collapsed —
   // a submission is a receipt, not a working surface; the queue is what matters.
   // INBOX #n is the trace id: tasks planned from it are tagged with the same id.
-  set("inboxsec",nb.length?'<h2>inbox — waiting to be planned by the next loop pass<span class="n mono">'+nb.length+'</span></h2>'+
-    nb.map(i=>'<details class="ibx"><summary class="ibx-h"><span class="ibx-id">INBOX #'+i.id+'</span>'+
-      '<span class="ibx-t mono">submitted '+esc(i.createdAt.slice(0,16).replace("T"," "))+'</span>'+
-      '<span class="ibx-pv">'+esc(i.text.replace(/\\s+/g," ").slice(0,70))+(i.text.length>70?'…':'')+'</span></summary>'+
+  set("inboxsec",!s.inbox.length?"":'<h2>your submissions'+
+    '<span class="n mono">'+nb.length+' submitted · '+(s.inbox.length-nb.length)+' added</span></h2>'+
+    s.inbox.map(i=>{
+      const pending=i.status==="new", made=ibxTasks(i.id);
+      const openN=made.filter(t=>t.status!=="merged"&&t.status!=="superseded").length;
+      return '<details class="ibx'+(pending?' pending':'')+'"><summary class="ibx-h">'+
+      '<span class="ibx-st '+(pending?'is-sub':'is-add')+'">'+(pending?'submitted':'added')+'</span>'+
+      '<span class="ibx-id">INBOX #'+i.id+'</span>'+
+      '<span class="ibx-t mono">'+esc(i.createdAt.slice(0,16).replace("T"," "))+'</span>'+
+      '<span class="ibx-pv">'+esc(i.text.replace(/\\s+/g," ").slice(0,70))+(i.text.length>70?'…':'')+'</span>'+
+      (made.length?'<span class="ibx-n mono">'+made.length+' task'+(made.length>1?'s':'')+
+        (openN?' · '+openN+' open':' · all done')+'</span>':'')+'</summary>'+
       '<div class="ibx-b">'+esc(i.text)+'</div>'+
-      '<div class="ibx-f"><form class="inl confirm-del" method="POST" action="/inbox-del">'+csrf+
-      '<input type="hidden" name="project" value="'+esc(id)+'"><input type="hidden" name="id" value="'+i.id+'">'+
-      '<button class="mini danger" title="Delete this submission before the loop plans it">delete</button></form></div>'+
-      '</details>').join(""):"");
+      (made.length?'<div class="ibx-tk">'+made.map(t=>{const[lab,cl]=stL(t.status);
+        return '<div class="ibx-tr"><span class="id mono">#'+t.id+'</span><span class="ibx-tt">'+esc(t.title)+
+          '</span><span class="st '+cl+'">'+lab+'</span></div>';}).join("")+'</div>'
+       :pending?'<div class="ibx-none">not planned yet — the next loop pass reasons it into the queue</div>'
+       :'<div class="ibx-none">read by the loop; no separate task was needed</div>')+
+      (pending?'<div class="ibx-f"><form class="inl confirm-del" method="POST" action="/inbox-del">'+csrf+
+        '<input type="hidden" name="project" value="'+esc(id)+'"><input type="hidden" name="id" value="'+i.id+'">'+
+        '<button class="mini danger" title="Delete this submission before the loop plans it">delete</button></form></div>':'')+
+      '</details>';}).join(""));
   set("actsec",'<h2>activity<span class="n mono">'+s.events.length+'</span></h2>'+(s.events.slice(0,25).map(e=>\`<div class="ev"><b class="mono">\${e.ts.slice(5,16).replace("T"," ")}</b> — \${esc(e.msg)}</div>\`).join("")||'<div class="empty">no activity</div>'));
 }
 function reapplyTasks(){ if(LAST&&LAST.project)projApply(qp("project"),LAST); }
@@ -1281,7 +1346,9 @@ function connect(){
   if(pj)projSkeleton(pj); else homeSkeleton();
   const url="/events"+(pj?"?project="+encodeURIComponent(pj):"");
   es=new EventSource(url);
-  es.onmessage=(m)=>{try{const d=JSON.parse(m.data);LAST=d;apply(d);mark(true);}catch{}};
+  // never swallow silently: an empty catch here hid a render crash that blanked
+  // half the page while the connection still looked "live"
+  es.onmessage=(m)=>{try{const d=JSON.parse(m.data);LAST=d;apply(d);mark(true);}catch(e){console.error("render failed",e);}};
   es.onerror=()=>{mark(false);};
 }
 function apply(d){ if(d.projects)homeApply(d.projects); else projApply(curProject,d); }

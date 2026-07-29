@@ -216,6 +216,29 @@ export function addFinding(state, f) {
   return finding;
 }
 
+// A finding lived only in state.json, so the knowledge graph — the thing a fresh
+// context actually asks — never learned what the engagement had already proven.
+// Mirror it: the finding, the target it was found on, the evidence that proves
+// it, and the findings it chained from. Best-effort; never fails the log.
+export async function recordFinding(project, state, f) {
+  try {
+    const g = await import("./graph.mjs");
+    const db = g.open(project);
+    const fid = g.upsertNode(db, {
+      kind: "finding", name: `#${f.id} ${f.title}`, path: f.target || "",
+      summary: [f.severity && f.severity.toUpperCase(), f.status, f.category, f.notes].filter(Boolean).join(" · "),
+      meta: { findingId: f.id, severity: f.severity, status: f.status, cvss: f.cvss, phase: f.phase },
+    });
+    if (f.target) g.addEdge(db, fid, g.upsertNode(db, { kind: "host", name: f.target }), "relates");
+    if (f.evidence) g.addEdge(db, fid, g.upsertNode(db, { kind: "evidence", name: f.evidence, path: f.evidence }), "evidences");
+    for (const p of f.parents || []) {
+      const parent = (state.findings || []).find((x) => x.id === p);
+      if (parent) g.addEdge(db, g.nodeId("finding", `#${parent.id} ${parent.title}`, parent.target || ""), fid, "relates");
+    }
+    db.close();
+  } catch (e) { process.stderr.write(`[graph] finding #${f.id} not recorded: ${e.message}\n`); }
+}
+
 // Max chain depth reached in this project — the loop stops spawning chain-hunts
 // past CHAIN_MAX (default 3) to avoid infinite self-spawning.
 export const CHAIN_MAX = 3;
@@ -631,10 +654,12 @@ const commands = {
   },
 
   // ---- findings (per project) ----
-  "finding-add"({ flags }) {
+  async "finding-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
     const f = addFinding(s, { phase: flags.phase, target: flags.target, title: flags.title, category: flags.category, severity: flags.severity, cvss: flags.cvss, status: flags.status, evidence: flags.evidence, notes: flags.notes, parents: splitList(flags.parents) });
-    saveState(id, s); out(f.id.toString());
+    saveState(id, s);
+    await recordFinding(id, s, f);
+    out(f.id.toString());
   },
   // Chain lineage: show each validated finding and what it chained from/into.
   "chains"({ flags }) {
@@ -648,12 +673,14 @@ const commands = {
     if (flags.status) fs = fs.filter((f) => f.status === flags.status);
     out(fs);
   },
-  "finding-set"({ flags, pos }) {
+  async "finding-set"({ flags, pos }) {
     const id = pid(flags); const s = loadState(id);
     const f = (s.findings ?? []).find((x) => x.id === Number(pos[0]));
     if (!f) return out("not found");
     for (const k of ["status", "severity", "cvss", "evidence", "notes", "category"]) if (flags[k] !== undefined) f[k] = flags[k];
-    saveState(id, s); out(f);
+    saveState(id, s);
+    await recordFinding(id, s, f);   // candidate → validated must reach the graph too
+    out(f);
   },
 
   "task-add"({ flags }) {
