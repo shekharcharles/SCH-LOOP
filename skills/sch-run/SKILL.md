@@ -743,6 +743,40 @@ Completion happens inside the loop, per task. The human gates are the contract
   - If the operator says "I did this manually and it works", that is ground
     truth and your diagnosis is wrong. Fix your automation, do not re-ask.
 
+- **DEFAULT TO DECIDING, NOT ASKING.** The operator handed over a scope, the
+  credentials and the contract, and expected the work to happen. A question they
+  must answer before anything moves is a stopped engagement. A question they can
+  **overrule later** is a running one.
+
+  Before you block, ask: *do I have a defensible default?* If yes — and it is
+  reversible, in scope, and not destructive — **take it and keep going**:
+  ```bash
+  node <SCH_HOME>/scripts/state.mjs task-set --project <id> <taskId> \
+    --status blocked --assume "<the call you are making, in one line>" \
+    --brief "<the full question, options, and why you chose this one>"
+  ```
+  `--assume` does not block. It records the decision, leaves the task **queued**,
+  and shows the operator "proceeding: X — tap to change" on the dashboard. If
+  they disagree, their answer requeues the task at priority 1 and you redo that
+  part. That is a far cheaper trade than an idle engagement.
+
+  Most "questions" are this. Which of three test approaches — pick one, say why.
+  A naming or format choice — pick the conventional one. Whether to test a class
+  the pack already lists — test it. Depth of coverage on an edge case — decide,
+  and record it as a coverage cell either way.
+
+  **Only a genuine block stops the work:** something irreversible or destructive,
+  something outside the authorized scope (a third party's system, a host not on
+  the scope list), something only the operator physically possesses (a test
+  account, a credential, a file from the client), or a contract change that
+  contradicts `SCOPE.md`/`PRD.md`. Everything else is yours to call.
+
+  And if the answer is "wait for something external" — an outage, a fix, a slow
+  environment — that is **not** a question at all. Leave the task queued with a
+  note, **work the rest of the queue**, and retry it later. Never convert an
+  incident report into a dashboard question: there is nothing to answer, and it
+  buries the questions that do need a person.
+
 - **Blocked:** a real product/authorization decision → `task-set --status blocked
   --note "<question>"`, then **push a notification** so the operator sees it even
   away from the dashboard:
@@ -750,8 +784,16 @@ Completion happens inside the loop, per task. The human gates are the contract
   (no webhook set = harmless no-op). End pass. It returns when the operator answers
   from the dashboard.
 
-  **Write the question in plain language a non-developer can answer.** The person
-  reading it on their phone may not be a developer, and will not know your jargon.
+  **Write the question in plain language a non-developer can answer, and put ALL
+  of it in `--brief`.** That is the field the dashboard renders. `--notes` is a
+  one-line summary for the task table, so a note that says "see the task notes
+  for the full question" points the operator at the very text they are reading —
+  three real questions shipped in exactly that state and were unanswerable. The
+  engine now refuses a block whose question is under 80 characters, contains no
+  question mark, or refers the reader to somewhere else.
+
+  **What is on the screen is the whole question.** The operator has the
+  dashboard and nothing else — no repo, no logs, no context from your pass.
   Every blocked question MUST have:
   1. **What you need to decide**, in everyday words — no unexplained jargon
      (write "who can do what in the app", not "role axis / RBAC taxonomy").

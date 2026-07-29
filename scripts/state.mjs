@@ -224,6 +224,23 @@ export function addFinding(state, f) {
   return finding;
 }
 
+// A QUESTION THE OPERATOR CANNOT UNDERSTAND OR ANSWER IS NOT A QUESTION.
+// Three real ones from a live engagement read, in full: "NEEDS OPERATOR: ...
+// Full question in the task notes." — a pointer to the very text being read.
+// A fourth was a paragraph of incident status with nothing to answer at all.
+// The operator is on a phone with only the dashboard: what is on screen is the
+// whole question, and if it does not stand alone it is unanswerable.
+function askGate(t, flags) {
+  const q = `${flags.brief ?? t.brief ?? ""}\n${flags.notes ?? t.notes ?? ""}\n${flags.note ?? ""}`.trim();
+  const bare = q.replace(/\s+/g, " ");
+  if (bare.length < 80)
+    die(`BLOCK REFUSED — task #${t.id} has no readable question. The dashboard shows exactly this text and nothing else: write the question, the options with what each one means, and your recommended default, into --brief.`);
+  if (/\b(see|full question|details?)\b[^.]{0,30}\b(the )?(task )?notes\b/i.test(bare) || /full question is (in|below)/i.test(bare))
+    die(`BLOCK REFUSED — task #${t.id} points at "the task notes", but the notes ARE what the operator sees. Put the whole question on screen, not a reference to somewhere else.`);
+  if (!/\?/.test(bare))
+    die(`BLOCK REFUSED — task #${t.id} contains no question. If there is nothing for a person to decide, do not block: if you are waiting on something external, leave it queued with a note and keep working the rest of the queue; if another task must finish first, name that task and it becomes a dependency.`);
+}
+
 // CHAINING WAS ADVICE, SO IT NEVER HAPPENED. Two engagements, 24 validated
 // findings, zero with a parent — while `--parents`, `chainDepth` and CHAIN_MAX
 // all sat there working. "Ask what this unlocks" in a methodology document is a
@@ -921,7 +938,26 @@ const commands = {
     // and answering one moved nothing. If the reason names another task, depend
     // on it instead: the task stays queued, asks nobody, and becomes ready the
     // moment the real blocker merges.
+    // PROCEED ON YOUR OWN RECOMMENDATION. The operator handed over credentials
+    // and a scope and expected the work to happen. A question they must answer
+    // before anything moves is a stopped engagement; a question they can
+    // OVERRULE later is a running one. So when the loop has a defensible
+    // default, it takes it, says so, and keeps going — the operator sees the
+    // decision on the dashboard and can change it, which requeues the task.
+    if (flags.status === "blocked" && flags.assume) {
+      askGate(t, flags);
+      t.assumed = { choice: flags.assume, question: flags.brief ?? t.brief ?? flags.notes ?? "", at: now() };
+      t.brief = flags.brief ?? t.brief;
+      t.notes = `PROCEEDING ON MY OWN CALL: ${flags.assume}\n\nYou can change this any time — answering requeues the task with your decision.\n\n${flags.brief ?? t.brief ?? flags.notes ?? ""}`;
+      // set the STATUS itself, not just the flag — this branch returns before
+      // the flag-application loop below ever runs
+      t.status = "queued"; t.priority = Math.min(t.priority ?? 3, 2); t.updatedAt = now();
+      event(s, `task #${t.id} proceeding on its own call: ${String(flags.assume).slice(0, 60)}`);
+      saveState(id, s); return out({ id: t.id, status: t.status, assumed: flags.assume });
+    }
     if (flags.status === "blocked") {
+      // dependency FIRST: a task waiting on another task is not a question at
+      // all, so it must never be held to the question-quality gate below.
       const why = `${flags.notes ?? ""} ${flags.note ?? ""}`;
       const on = [...why.matchAll(/\b(?:task|#)\s*#?(\d+)/gi)].map((m) => Number(m[1]))
         .filter((n) => n !== t.id && s.tasks.some((x) => x.id === n && !DONE.has(x.status) && x.status !== "superseded"));
@@ -929,6 +965,8 @@ const commands = {
         t.deps = [...new Set([...(t.deps ?? []), ...on])];
         flags.status = "queued";
         event(s, `task #${t.id} depends on #${on.join(",#")} instead of asking again`);
+      } else {
+        askGate(t, flags);   // still blocked ⇒ a person must read it, so it must be readable
       }
     }
     for (const k of ["status", "branch", "notes", "phase", "target", "priority", "category", "phaseName"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
