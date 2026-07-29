@@ -288,6 +288,16 @@ task; a rule in `CLAUDE.md` fixes every future task. This is what stops the loop
 re-making the same regression. (Also mirror durable/generalizable lessons to
 `knowledge/<pack>.md` via `sch-learn`.)
 
+**RETRACT A WRONG DIAGNOSIS IN WRITING.** When a theory you recorded turns out to
+be false, say so explicitly where you recorded it — the task notes and
+`CLAUDE.md` — rather than quietly writing a new one beside it. One engagement
+accumulated five successive explanations for the same failure ("the environment
+is unstable", "anti-automation blocks us", "the auth service is down", …), none
+true and none retracted. A fresh context cannot tell a superseded theory from a
+current one, so every stale guess it inherits reads as an established fact and
+sends it down the same dead end. "This was WRONG, here is why, the actual cause
+is X" is worth more than the correction itself.
+
 **WRITE THAT FILE WITH THE `Write`/`Edit` TOOL — never through a shell heredoc.**
 A pass wrote the hard-won working login recipe into `CLAUDE.md` with
 `cat > CLAUDE.md <<EOF` (unquoted delimiter). The shell ran every backtick as a
