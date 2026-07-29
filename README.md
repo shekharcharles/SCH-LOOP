@@ -120,7 +120,8 @@ scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project c
                           answer box, skill picker, filter; fluid, no flicker. Port 4600.
 scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
 scripts/secret-scan-hook.mjs  PreToolUse hook — makes the secret gate UNBYPASSABLE on git commit/push.
-scripts/report.mjs        Findings → CERT-In report (Markdown + print-to-PDF HTML).
+scripts/report.mjs        Findings → CERT-In report (Markdown + print-to-PDF HTML). Refuses while a coverage cell is untested.
+scripts/poc.mjs           Captures ONE reproducible PoC per finding (curl or a pasted exchange), tokens redacted.
 scripts/verify-skills.mjs Proves (from the session transcript) which skills were actually used.
 scripts/skills-used.mjs   Lists real skill invocations across sessions.
 scripts/notify.mjs        Push a blocked-question / done notice to Slack/Teams/ntfy (SCH_NOTIFY_WEBHOOK).

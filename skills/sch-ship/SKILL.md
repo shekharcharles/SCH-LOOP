@@ -55,7 +55,21 @@ Any gap → do not deliver; log it and end (or file a fix task).
   ```
   It writes `<project>/reports/<REPORT-ID>.md` and `.html` (open the HTML → Print
   → Save as PDF). Before generating, confirm findings are complete + evidence
-  paths are set (`finding-list`). The report includes severity summary, per-
+  paths are set (`finding-list`).
+
+  **COVERAGE GATE — check before you generate:**
+  ```bash
+  node scripts/state.mjs coverage-list --project <id> --summary true
+  ```
+  `report.mjs` **refuses to run while any cell is `untested`**, because a report
+  that omits them silently claims they were tested and clean. Resolve every cell
+  first: test it (`validated` / `tested-clean`), or mark it honestly —
+  `blocked` with a `--note` saying what prevented it, or `not-applicable` with
+  why. Those two are covered outcomes and appear in the report's coverage
+  section; a client can act on "we could not reach this and here is why", and
+  cannot act on silence. Only override with `--force-coverage` when the operator
+  has explicitly accepted an incomplete matrix, and the report will say so on
+  its face. The report includes severity summary, per-
   finding detail + CVSS + evidence, the **coverage matrix / controls-that-held**,
   and compliance mapping. Everything below is what that report must contain: Every
   finding named by its exact taxonomy (OWASP Web Top-10 2021 + WSTG id, or OWASP
