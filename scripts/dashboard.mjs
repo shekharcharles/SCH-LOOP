@@ -439,6 +439,14 @@ const PAGE = `<!doctype html>
   .fsev{font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;color:#fff;font-weight:700}
   .f-critical{background:#7c0000}.f-high{background:#ff2a2a}.f-medium{background:#e67e00}.f-low{background:#2a8f6b}.f-info{background:#777}
   .frow{display:flex;gap:8px;align-items:baseline;padding:7px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .fwarn{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--red);border:1px solid var(--red);padding:1px 5px}
+  .obsbox{border:1px solid var(--line);border-top:0;background:var(--panel)}
+  .obsbox>summary{cursor:pointer;padding:7px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;
+                  color:var(--dim);list-style:none}
+  .obsbox>summary::-webkit-details-marker{display:none}
+  .obsbox>summary::before{content:"▸ ";color:var(--amber)}
+  .obsbox[open]>summary::before{content:"▾ "}
+  .obsbox>summary:hover{color:var(--fg)}
   .bar2{display:inline-block;width:64px;height:8px;background:#222;border:1px solid var(--line);vertical-align:middle;margin-right:6px}.bar2 span{display:block;height:100%;background:var(--green)}
   .pctn{font-size:11px;color:var(--dim)}.in{background:var(--red);color:#fff;padding:1px 7px;font-weight:700;font-size:11px}
   table.projects tbody tr{cursor:pointer}table.projects tbody tr:hover td{background:#181818}
@@ -1275,8 +1283,16 @@ function projApply(id,r){
   const fsev=(x)=>({critical:"f-critical",high:"f-high",medium:"f-medium",low:"f-low"}[(x||"info").toLowerCase()]||"f-info");
   const vf=finds.filter(f=>f.status==="validated").sort((a,b)=>srank(a.severity)-srank(b.severity)||a.id-b.id);
   const cn=finds.filter(f=>f.status==="tested-clean").length;
+  // Observations and COVERAGE GAP records were logged and then shown nowhere —
+  // nine of them on one engagement, four being cells that could not be tested.
+  // An untested cell you cannot see reads exactly like a clean one.
+  const ob=finds.filter(f=>!["validated","tested-clean","false-positive"].includes(f.status))
+    .sort((a,b)=>srank(a.severity)-srank(b.severity)||a.id-b.id);
   // findings are a pentest concept — never shown on a dev/tool project
-  set("findsec",!OFF(p.domain)?"":'<h2>findings<span class="n mono">'+vf.length+'V / '+cn+'C</span></h2>'+(vf.length?vf.map(f=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="pctn">'+esc(f.target)+'</span>':''}</div>\`).join(""):'<div class="empty">no validated findings yet</div>'));
+  const frow=(f)=>\`<div class="frow"><span class="fsev \${fsev(f.severity)}">\${esc(f.severity||"info")}</span><strong>\${esc(f.title)}</strong> <span class="id">\${esc(f.category||"")}</span>\${(f.parents&&f.parents.length)?' <span class="id">⛓ #'+f.parents.join(",#")+'</span>':''}\${f.target?' <span class="pctn">'+esc(f.target)+'</span>':''}\${(f.status==="validated"&&!f.evidence)?' <span class="fwarn" title="A validated finding with no PoC file cannot go in the report">no PoC</span>':''}</div>\`;
+  set("findsec",!OFF(p.domain)?"":'<h2>findings<span class="n mono">'+vf.length+'V / '+cn+'C / '+ob.length+'O</span></h2>'+
+    (vf.length?vf.map(frow).join(""):'<div class="empty">no validated findings yet</div>')+
+    (ob.length?'<details class="obsbox"><summary>'+ob.length+' observation'+(ob.length>1?'s':'')+' &amp; coverage gaps — recorded, not yet a finding</summary>'+ob.map(frow).join("")+'</details>':''));
   // inbox + activity
   const nb=s.inbox.filter(i=>i.status==="new");
   // Every submission stays on the page — SUBMITTED until a pass plans it, then
