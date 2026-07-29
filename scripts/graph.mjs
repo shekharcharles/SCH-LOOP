@@ -28,8 +28,11 @@ import { mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
-const dbPath = (project) => join(ROOT, "projects", project, "graph.db");
+// Resolved per call, not at import: a module is cached, so a process that sets
+// SCH_HOME after first importing this file would otherwise keep writing to the
+// old home for the rest of its life.
+const root = () => process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
+const dbPath = (project) => join(root(), "projects", project, "graph.db");
 
 // What a node can be. Code kinds and engagement kinds live in one table on
 // purpose — the join between them is the whole point.
