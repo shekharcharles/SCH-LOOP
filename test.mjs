@@ -391,7 +391,10 @@ test("session: the recipe survives, and failed attempts are counted toward locko
   assert.equal(JSON.parse(S("session-get", "--project", P, "--role", "broker", "--max-age", "0")).stale, true);
 
   assert.equal(JSON.parse(S("session-fail", "--project", P, "--role", "broker", "--why", "password field cleared before submit")).attemptsLeft, 2);
-  assert.equal(JSON.parse(S("session-fail", "--project", P, "--role", "broker", "--why", "same again")).attemptsLeft, 1);
+  // the SECOND failure exits non-zero — the cap is mechanical, not a rule to remember
+  assert.throws(() => S("session-fail", "--project", P, "--role", "broker", "--why", "same again"), /session-fail/);
+  assert.equal(JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8")).sessions.broker.failedAttempts, 2,
+    "the failure is still recorded even though the command exits non-zero");
   // the recipe is not lost when an attempt fails
   assert.equal(JSON.parse(S("session-get", "--project", P, "--role", "broker")).recipe, "reports/recon/login-recipe.md");
   rmSync(home, { recursive: true, force: true });

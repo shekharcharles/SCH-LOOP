@@ -833,8 +833,23 @@ const commands = {
     event(s, `login FAILED for role "${role}" (${sess.failedAttempts} total): ${sess.lastFailure}`);
     saveState(id, s);
     const left = sess.lockoutLimit === null ? null : sess.lockoutLimit - sess.failedAttempts;
-    if (left !== null && left <= 1) process.stderr.write(`[session] STOP — role "${role}" has ${left} attempt(s) left before lockout. Do not retry: diagnose from the screenshot, or ask the operator.\n`);
     out({ role, failedAttempts: sess.failedAttempts, attemptsLeft: left });
+    // TWO IS THE CAP. A third attempt is what locks the account, and a locked
+    // account stops every dependent task in the engagement — so this exits
+    // non-zero rather than trusting a tired agent to remember a rule. The
+    // failure is already recorded; the non-zero exit is the "stop now" signal.
+    const cap = Number(flags["max-attempts"] ?? 2);
+    if (sess.failedAttempts >= cap) {
+      process.stderr.write(
+        `[session] STOP — role "${role}" has failed ${sess.failedAttempts} time(s)${left === null ? "" : `, ${left} left before lockout`}.\n` +
+        `Do NOT retry. Diagnose from the screenshot against the failure-signature table in the pack:\n` +
+        `  · empty password field  -> the form cleared between typing and the click\n` +
+        `  · "session timed out"   -> too slow, the IdP execution token expired\n` +
+        `  · 400 at another step   -> a later stage is broken, the credentials are fine\n` +
+        `  · a CAPTCHA appeared    -> escalate; submitting past it blind is what locks accounts\n` +
+        `Record what you found, then block the task for the operator.\n`);
+      process.exitCode = 1;
+    }
   },
   "session-get"({ flags }) {
     const s = loadState(pid(flags));
