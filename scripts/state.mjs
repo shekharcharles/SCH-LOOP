@@ -40,18 +40,21 @@ export function invokedSkills(sinceMs) {
 
 // SCH_HOME overrides where state lives (documented as the engine home; also lets
 // tests run against a throwaway directory instead of the real registry).
-const ROOT = process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
-export const REGISTRY_PATH = join(ROOT, "projects.json");
-const PROJECTS_DIR = join(ROOT, "projects");
-const LOGS_DIR = join(ROOT, "logs");
+// Resolved per call, not once at import: a module is cached, so a process that
+// sets SCH_HOME after first importing this file kept reading the old home for
+// the rest of its life — silently answering about the wrong machine's state.
+const root = () => process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
+export const registryPath = () => join(root(), "projects.json");
+const PROJECTS_DIR = () => join(root(), "projects");
+const LOGS_DIR = () => join(root(), "logs");
 
 // Append-only audit log — one JSONL line per action, rotated by date. This is
 // the durable "who did what, when, against which target, and was it in scope"
 // record a regulated (banking) engagement needs. Never mutated, only appended.
 export function auditLog(entry) {
   try {
-    mkdirSync(LOGS_DIR, { recursive: true });
-    const f = join(LOGS_DIR, "audit-" + new Date().toISOString().slice(0, 10) + ".jsonl");
+    mkdirSync(LOGS_DIR(), { recursive: true });
+    const f = join(LOGS_DIR(), "audit-" + new Date().toISOString().slice(0, 10) + ".jsonl");
     appendFileSync(f, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
   } catch { /* logging must never break the engine */ }
 }
@@ -65,13 +68,18 @@ export const OFFENSIVE = new Set(["web-pentest", "api-pentest", "mobile-android"
   "red-team-external", "red-team-internal", "external-network", "internal-network"]);
 
 const REGISTRY_EMPTY = { version: 3, projects: [], authorizations: [] };
-const STATE_EMPTY = { tasks: [], inbox: [], events: [], findings: [], seq: { task: 0, inbox: 0, event: 0, finding: 0 } };
+// `coverage` is the matrix "coverage is the contract" always claimed but never
+// held: one row per endpoint × class × role, so an untested cell is a fact the
+// report must state rather than an absence nobody can see. `sessions` is the
+// per-role login recipe, so authenticated tasks resume instead of re-racing a
+// bank's login and spending its lockout budget.
+const STATE_EMPTY = { tasks: [], inbox: [], events: [], findings: [], coverage: [], sessions: {}, seq: { task: 0, inbox: 0, event: 0, finding: 0 } };
 // Scope is the authorization gate for offensive packs. authorized=false or an
 // empty targets list means active tasks must not run.
 const SCOPE_EMPTY = { authorized: false, targets: [], outOfScope: [], roe: "", ref: "", halt: false, expiry: "", client: "", compliance: [] };
 
 const now = () => new Date().toISOString();
-const statePath = (id) => join(PROJECTS_DIR, id, "state.json");
+const statePath = (id) => join(PROJECTS_DIR(), id, "state.json");
 
 // Corrupt-state recovery: a truncated/invalid file must never hard-crash every
 // command. Fall back to the .bak written on the previous successful write; if
@@ -137,8 +145,8 @@ function withFileLock(path, fn) {
   return result;
 }
 
-export const loadRegistry = () => readJson(REGISTRY_PATH, REGISTRY_EMPTY);
-export const saveRegistry = (r) => writeJson(REGISTRY_PATH, r);
+export const loadRegistry = () => readJson(registryPath(), REGISTRY_EMPTY);
+export const saveRegistry = (r) => writeJson(registryPath(), r);
 export const getProject = (id) => loadRegistry().projects.find((p) => p.id === id) || null;
 export const loadState = (id) => readJson(statePath(id), STATE_EMPTY);
 export const saveState = (id, s) => writeJson(statePath(id), s);
@@ -216,6 +224,53 @@ export function addFinding(state, f) {
   return finding;
 }
 
+// CHAINING WAS ADVICE, SO IT NEVER HAPPENED. Two engagements, 24 validated
+// findings, zero with a parent — while `--parents`, `chainDepth` and CHAIN_MAX
+// all sat there working. "Ask what this unlocks" in a methodology document is a
+// suggestion; a task in the queue is a commitment. Every validated medium+
+// finding now spawns its own chain hunt unless the depth cap is reached or the
+// caller explicitly opts out with --no-chain.
+function chainHunt(state, f, flags) {
+  if (f.status !== "validated") return null;
+  if (flags["no-chain"] === "true") return null;
+  if (!["medium", "high", "critical"].includes((f.severity ?? "").toLowerCase())) return null;
+  if ((f.chainDepth ?? 0) >= CHAIN_MAX) return null;
+  const t = addTask(state, {
+    phase: f.phase, priority: 2, active: true, target: f.target, source: "chain",
+    category: "security", phaseName: "Chaining & impact",
+    title: `Chain hunt from finding #${f.id}: ${f.title}`,
+    notes: `PRIMITIVE (finding #${f.id}, ${f.severity}${f.category ? ", " + f.category : ""}): ${f.title}\n`
+      + `Evidence: ${f.evidence || "n/a"}\n\n`
+      + `What does this primitive UNLOCK? Do not re-test the finding — take it as given and reach for impact: `
+      + `combine it with what other tasks already proved, escalate privilege, cross a tenant boundary, reach data or money. `
+      + `A proven chain outranks its parts and is reported as one attack narrative.\n`
+      + `Record the result with finding-add --parents ${f.id} so lineage and depth are tracked. `
+      + `If nothing chains, log it tested-clean with why — that is a real answer, not a failure.`,
+    ac: [`The chain from finding #${f.id} is either demonstrated end to end with a PoC, or recorded as not-chainable with the reason`],
+    ng: ["No destructive action", "No out-of-scope pivot", "Do not re-prove the parent finding"],
+  });
+  event(state, `chain-hunt task #${t.id} spawned from finding #${f.id} (depth ${(f.chainDepth ?? 0) + 1})`);
+  return t.id;
+}
+
+// A coverage cell is endpoint × class × role. `blocked` and `not-applicable`
+// are honest outcomes and count as covered — "we could not reach it, here is
+// why" is a statement a client can act on; silence is not.
+const COVERAGE_STATUS = new Set(["untested", "validated", "tested-clean", "blocked", "not-applicable"]);
+const COVERED = new Set(["validated", "tested-clean", "blocked", "not-applicable"]);
+const cellOf = (s, e, c, r) => (s.coverage ?? []).find((x) => x.endpoint === e && x.class === c && x.role === r);
+export function coverageSummary(state) {
+  const cells = state.coverage ?? [];
+  const by = {}; for (const st of COVERAGE_STATUS) by[st] = cells.filter((c) => c.status === st).length;
+  const untested = cells.filter((c) => c.status === "untested");
+  return {
+    total: cells.length, covered: cells.filter((c) => COVERED.has(c.status)).length,
+    pct: cells.length ? Math.round(cells.filter((c) => COVERED.has(c.status)).length / cells.length * 100) : 0,
+    byStatus: by,
+    untestedCells: untested.slice(0, 40).map((c) => `${c.endpoint} × ${c.class} × ${c.role}`),
+  };
+}
+
 // A `validated` finding is a CLAIM ABOUT THE CLIENT'S SYSTEM. It goes in the
 // CERT-In report, so it needs a PoC someone else can re-run — not a pointer at
 // the phase write-up. An engagement reached 20 validated findings whose entire
@@ -227,6 +282,12 @@ export function pocGate(project, state, f) {
   const home = getProject(project)?.path;
   const title = (f.title ?? "").trim();
   if (!title || title === "(untitled)") die("FINDING BLOCKED — a validated finding needs a --title. It is going in the client report.");
+  // The report has a CVSS row for every finding. One engagement filled it once
+  // in twenty, so nineteen client-facing findings render as "—" and nothing can
+  // be prioritised. Required from medium up; info/low may carry a bare severity.
+  const sev = (f.severity ?? "").toLowerCase();
+  if (["medium", "high", "critical"].includes(sev) && !(f.cvss ?? "").trim())
+    die(`FINDING BLOCKED — "${title}" is ${sev} and needs --cvss (e.g. "6.1 (AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N)"). The report prioritises on it.`);
   const ev = (f.evidence ?? "").trim();
   if (!ev) die(`FINDING BLOCKED — "${title}" is validated with no --evidence. Write the PoC first (raw request + response, or a screenshot) under reports/evidence/, then log the finding pointing at that file.`);
   if (home && !existsSync(join(home, ev)) && !existsSync(ev))
@@ -414,7 +475,7 @@ const pid = (flags) => flags.project || process.env.SCH_PROJECT || detectProject
 const die = (m) => { console.error("error: " + m); process.exit(1); };
 
 const commands = {
-  init() { saveRegistry(loadRegistry()); out("registry ready: " + REGISTRY_PATH); },
+  init() { saveRegistry(loadRegistry()); out("registry ready: " + registryPath()); },
 
   "project-add"({ flags }) {
     const r = loadRegistry();
@@ -679,10 +740,113 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     pocGate(id, s, flags);
     const f = addFinding(s, { phase: flags.phase, target: flags.target, title: flags.title, category: flags.category, severity: flags.severity, cvss: flags.cvss, status: flags.status, evidence: flags.evidence, notes: flags.notes, parents: splitList(flags.parents) });
+    const chain = chainHunt(s, f, flags);
+    // a finding IS a coverage result — record the cell without a second command
+    if (flags.endpoint && flags.category) {
+      const cell = cellOf(s, flags.endpoint, flags.category, flags.role ?? "anon");
+      const st = f.status === "validated" ? "validated" : f.status === "tested-clean" ? "tested-clean" : null;
+      if (st) { if (cell) Object.assign(cell, { status: st, finding: f.id, ts: now() });
+                else s.coverage.push({ endpoint: flags.endpoint, class: flags.category, role: flags.role ?? "anon", status: st, finding: f.id, note: "", ts: now() }); }
+    }
     saveState(id, s);
     await recordFinding(id, s, f);
-    out(f.id.toString());
+    out(chain ? { finding: f.id, chainTask: chain } : f.id.toString());
   },
+  // ---- coverage matrix (offensive) ----------------------------------------
+  // "Coverage is the contract" was prose: `coverage_required` was set on every
+  // offensive pack and nothing ever computed it, so "no untested cell" meant an
+  // agent reading its own notes. A cell is endpoint × class × role.
+  "coverage-add"({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    const eps = splitList(flags.endpoints ?? flags.endpoint);
+    const cls = splitList(flags.classes ?? flags.class);
+    const roles = splitList(flags.roles ?? flags.role);
+    if (!eps.length || !cls.length) die("need --endpoints and --classes (pipe-separated); --roles defaults to anon");
+    let added = 0;
+    for (const e of eps) for (const c of cls) for (const r of (roles.length ? roles : ["anon"])) {
+      if (cellOf(s, e, c, r)) continue;                       // declaring twice is not a reset
+      s.coverage.push({ endpoint: e, class: c, role: r, status: "untested", finding: null, note: "", ts: now() });
+      added++;
+    }
+    event(s, `coverage: +${added} cell(s) declared (${eps.length}ep × ${cls.length}cls × ${roles.length || 1}role)`);
+    saveState(id, s); out({ added, total: s.coverage.length, untested: s.coverage.filter((c) => c.status === "untested").length });
+  },
+  "coverage-set"({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    const e = flags.endpoint ?? die("need --endpoint");
+    const c = flags.class ?? die("need --class");
+    const r = flags.role ?? "anon";
+    const st = flags.status ?? die("need --status validated|tested-clean|blocked|not-applicable|untested");
+    if (!COVERAGE_STATUS.has(st)) die(`unknown --status "${st}" — use one of: ${[...COVERAGE_STATUS].join(", ")}`);
+    // A cell nobody declared is still a cell that was tested — record it rather
+    // than refusing, or the matrix only ever describes what planning predicted.
+    let cell = cellOf(s, e, c, r);
+    if (!cell) { cell = { endpoint: e, class: c, role: r, status: "untested", finding: null, note: "", ts: now() }; s.coverage.push(cell); }
+    if (st === "blocked" && !flags.note) die("a blocked cell needs --note saying what blocked it — that text goes in the client's coverage section");
+    Object.assign(cell, { status: st, finding: flags.finding ? Number(flags.finding) : cell.finding, note: flags.note ?? cell.note, ts: now() });
+    event(s, `coverage: ${e} × ${c} × ${r} -> ${st}`);
+    saveState(id, s); out(cell);
+  },
+  "coverage-list"({ flags }) {
+    const s = loadState(pid(flags));
+    let rows = s.coverage ?? [];
+    if (flags.status) rows = rows.filter((c) => c.status === flags.status);
+    if (flags.endpoint) rows = rows.filter((c) => c.endpoint === flags.endpoint);
+    if (flags.role) rows = rows.filter((c) => c.role === flags.role);
+    out(flags.summary === "true" ? coverageSummary(s) : rows);
+  },
+
+  // ---- per-role sessions ---------------------------------------------------
+  // Every authenticated task used to re-derive the login from zero, and the
+  // authorization matrix needs several roles live at once. Storing the recipe
+  // (and where Playwright's storage state lives) turns a race against a bank's
+  // lockout counter into a resume.
+  "session-set"({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    const role = flags.role ?? die("need --role (e.g. anon, retail-user, broker, admin)");
+    s.sessions = s.sessions ?? {};
+    const prev = s.sessions[role] ?? {};
+    s.sessions[role] = {
+      role, account: flags.account ?? prev.account ?? "",
+      recipe: flags.recipe ?? prev.recipe ?? "",          // path to the written recipe, or the steps inline
+      storageState: flags["storage-state"] ?? prev.storageState ?? "",  // Playwright storage_state json
+      verifiedAt: flags.verified ?? now(),                // when a login last actually succeeded
+      landedOn: flags["landed-on"] ?? prev.landedOn ?? "",
+      failedAttempts: flags["failed-attempts"] !== undefined ? Number(flags["failed-attempts"]) : (prev.failedAttempts ?? 0),
+      lockoutLimit: flags["lockout-limit"] !== undefined ? Number(flags["lockout-limit"]) : (prev.lockoutLimit ?? null),
+      notes: flags.notes ?? prev.notes ?? "",
+    };
+    event(s, `session recorded for role "${role}"${flags.account ? ` (${flags.account})` : ""}`);
+    saveState(id, s); out(s.sessions[role]);
+  },
+  // Records a failed login WITHOUT touching the recipe, and shouts before the
+  // engagement locks a client's test account.
+  "session-fail"({ flags }) {
+    const id = pid(flags); const s = loadState(id);
+    const role = flags.role ?? die("need --role");
+    s.sessions = s.sessions ?? {};
+    const sess = s.sessions[role] ?? { role, failedAttempts: 0, lockoutLimit: null };
+    sess.failedAttempts = (sess.failedAttempts ?? 0) + 1;
+    sess.lastFailure = flags.why ?? "(no reason recorded — screenshot it and say what you saw)";
+    sess.lastFailureAt = now();
+    s.sessions[role] = sess;
+    event(s, `login FAILED for role "${role}" (${sess.failedAttempts} total): ${sess.lastFailure}`);
+    saveState(id, s);
+    const left = sess.lockoutLimit === null ? null : sess.lockoutLimit - sess.failedAttempts;
+    if (left !== null && left <= 1) process.stderr.write(`[session] STOP — role "${role}" has ${left} attempt(s) left before lockout. Do not retry: diagnose from the screenshot, or ask the operator.\n`);
+    out({ role, failedAttempts: sess.failedAttempts, attemptsLeft: left });
+  },
+  "session-get"({ flags }) {
+    const s = loadState(pid(flags));
+    const all = s.sessions ?? {};
+    const one = flags.role ? all[flags.role] : null;
+    if (flags.role && !one) return out(`no session recorded for role "${flags.role}" — log in, then record it with session-set`);
+    const age = (x) => x?.verifiedAt ? Math.round((Date.now() - new Date(x.verifiedAt).getTime()) / 60000) : null;
+    // >= so `--max-age 0` means "treat everything as stale, re-verify now"
+    const stamp = (x) => ({ ...x, ageMinutes: age(x), stale: age(x) === null || age(x) >= Number(flags["max-age"] ?? 60) });
+    out(one ? stamp(one) : Object.fromEntries(Object.entries(all).map(([k, v]) => [k, stamp(v)])));
+  },
+
   // Chain lineage: show each validated finding and what it chained from/into.
   "chains"({ flags }) {
     const s = loadState(pid(flags));
@@ -1100,7 +1264,8 @@ const commands = {
 // trail. Pure reads (list/get/find/stats/help) are not, to keep the log signal.
 const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-from-auth",
   "auth-add", "auth-add-domain", "auth-remove", "cr-new", "task-add", "task-set",
-  "finding-add", "finding-set", "inbox-add", "inbox-mark"]);
+  "finding-add", "finding-set", "inbox-add", "inbox-mark",
+  "coverage-add", "coverage-set", "session-set", "session-fail"]);
 
 // Commands that mutate state must hold the write lock for the whole
 // read-modify-write, or concurrent writers (parallel waves + dashboard) clobber
@@ -1116,5 +1281,5 @@ if (process.argv[1] && process.argv[1].endsWith("state.mjs")) {
   // rather than letting the promise reject unhandled and exit 0
   const run = () => Promise.resolve((commands[cmd] ?? commands.help)(parsed))
     .catch((e) => { console.error(e.message); process.exitCode = 1; });
-  MUTATING.has(cmd) ? withFileLock(REGISTRY_PATH, run) : run();
+  MUTATING.has(cmd) ? withFileLock(registryPath(), run) : run();
 }

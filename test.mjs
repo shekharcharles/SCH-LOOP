@@ -302,6 +302,101 @@ test("graph: records facts, finds them by natural phrasing, returns callers", as
   rmSync(home, { recursive: true, force: true });
 });
 
+// "Coverage is the contract" was prose for two engagements: coverage_required
+// was set on every offensive pack and nothing computed it, so a report could
+// claim complete coverage over cells nobody had touched.
+test("coverage: the gate refuses a report while a cell is untested", async () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-cov-"));
+  const P = "c";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "c", domain: "web-pentest", path: home, client: "ACME",
+      scope: { authorized: true, targets: ["app.test"], ref: "R-1" } }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+
+  S("coverage-add", "--project", P, "--endpoints", "/login|/transfer", "--classes", "SQLi|XSS", "--roles", "anon");
+  assert.equal(JSON.parse(S("coverage-list", "--project", P, "--summary", "true")).total, 4);
+
+  process.env.SCH_HOME = home;
+  const R = await import("./scripts/report.mjs");
+  assert.throws(() => R.buildReport(P, {}), /COVERAGE INCOMPLETE/, "an untested cell must stop the report");
+
+  // resolve every cell — including the honest outcomes, which count as covered
+  S("coverage-set", "--project", P, "--endpoint", "/login", "--class", "SQLi", "--status", "tested-clean");
+  S("coverage-set", "--project", P, "--endpoint", "/login", "--class", "XSS", "--status", "tested-clean");
+  S("coverage-set", "--project", P, "--endpoint", "/transfer", "--class", "SQLi", "--status", "blocked", "--note", "WAF hard-blocks every position");
+  assert.throws(() => S("coverage-set", "--project", P, "--endpoint", "/transfer", "--class", "XSS", "--status", "blocked"),
+    /needs --note/, "a blocked cell without a reason is not an answer");
+  S("coverage-set", "--project", P, "--endpoint", "/transfer", "--class", "XSS", "--status", "not-applicable", "--note", "no reflection sink on this endpoint");
+
+  const sum = JSON.parse(S("coverage-list", "--project", P, "--summary", "true"));
+  assert.equal(sum.pct, 100);
+  const rep = R.buildReport(P, {});
+  assert.match(readFileSync(rep.md, "utf8"), /WAF hard-blocks every position/, "a blocked cell and its reason must reach the client");
+  rmSync(home, { recursive: true, force: true });
+});
+
+// Two engagements, 24 validated findings, zero chained — while --parents,
+// chainDepth and CHAIN_MAX all worked. Advice in a document is not a commitment.
+test("finding-add: a validated medium+ finding spawns its own chain hunt", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-chain-"));
+  const P = "h";
+  mkdirSync(join(home, "projects", P, ), { recursive: true });
+  mkdirSync(join(home, "reports", "evidence"), { recursive: true });
+  writeFileSync(join(home, "reports", "evidence", "ssrf.md"), "POST /fetch url=http://169.254.169.254/\nHTTP/1.1 200 — instance metadata");
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "h", domain: "web-pentest", path: home, scope: { authorized: true } }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+  const read = () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8"));
+
+  // medium+ requires a CVSS — the report prioritises on it
+  assert.throws(() => S("finding-add", "--project", P, "--title", "SSRF to metadata", "--status", "validated",
+    "--severity", "high", "--evidence", "reports/evidence/ssrf.md"), /needs --cvss/);
+
+  S("finding-add", "--project", P, "--title", "SSRF to metadata", "--status", "validated", "--severity", "high",
+    "--cvss", "8.6 (AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N)", "--evidence", "reports/evidence/ssrf.md",
+    "--endpoint", "/fetch", "--category", "WSTG-INPV-19");
+  const s = read();
+  const chain = s.tasks.find((t) => t.source === "chain");
+  assert.ok(chain, "a validated high finding must leave a chain-hunt task behind");
+  assert.match(chain.title, /finding #1/);
+  // and the finding doubles as a coverage result, without a second command
+  assert.equal(s.coverage.find((c) => c.endpoint === "/fetch")?.status, "validated");
+
+  // info findings are noise to chain on
+  S("finding-add", "--project", P, "--title", "Version banner", "--status", "validated", "--severity", "info",
+    "--evidence", "reports/evidence/ssrf.md");
+  assert.equal(read().tasks.filter((t) => t.source === "chain").length, 1);
+  rmSync(home, { recursive: true, force: true });
+});
+
+// A bank locks accounts. An agent whose context resets cannot count its own
+// attempts, so the count has to live where the next pass will read it.
+test("session: the recipe survives, and failed attempts are counted toward lockout", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-sess-"));
+  const P = "s";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "s", domain: "web-pentest", path: home, scope: { authorized: true } }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+
+  S("session-set", "--project", P, "--role", "broker", "--account", "77707711",
+    "--recipe", "reports/recon/login-recipe.md", "--landed-on", "/retail-app/dashboard", "--lockout-limit", "3");
+  const got = JSON.parse(S("session-get", "--project", P, "--role", "broker"));
+  assert.equal(got.account, "77707711");
+  assert.equal(got.stale, false, "a session verified just now is fresh");
+  assert.equal(JSON.parse(S("session-get", "--project", P, "--role", "broker", "--max-age", "0")).stale, true);
+
+  assert.equal(JSON.parse(S("session-fail", "--project", P, "--role", "broker", "--why", "password field cleared before submit")).attemptsLeft, 2);
+  assert.equal(JSON.parse(S("session-fail", "--project", P, "--role", "broker", "--why", "same again")).attemptsLeft, 1);
+  // the recipe is not lost when an attempt fails
+  assert.equal(JSON.parse(S("session-get", "--project", P, "--role", "broker")).recipe, "reports/recon/login-recipe.md");
+  rmSync(home, { recursive: true, force: true });
+});
+
 // Ten tasks each blocked with a copy of "waiting on the login task" asked the
 // operator the same question ten times, and each answer moved only its own task.
 test("task-set: a blocker naming another task becomes a dependency, not a question", () => {
@@ -352,6 +447,7 @@ test("finding-add: the finding, its target and its evidence reach the graph", as
   writeFileSync(join(home, "reports", "poc", "idor.md"), "GET /api/statements/9911\nHTTP/1.1 200 — other customer's statement");
 
   S("finding-add", "--project", P, "--title", "IDOR on statement download", "--severity", "high",
+    "--cvss", "7.5 (AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N)",
     "--status", "validated", "--target", "api.example.test", "--evidence", "reports/poc/idor.md");
 
   process.env.SCH_HOME = home;
