@@ -426,9 +426,46 @@ test("task-set: a blocker naming another task becomes a dependency, not a questi
   S("task-set", "--project", P, "1", "--status", "merged", "--note", "fixed", "--tokens", "100");
   assert.equal(JSON.parse(S("task-next", "--project", P)).id, 2);
 
-  // a genuine operator question still blocks — it names no task
-  S("task-set", "--project", P, "2", "--status", "blocked", "--notes", "Which account should I use?");
+  // a genuine operator question still blocks — it names no task, and it stands alone
+  const real = "Which of the two test accounts should I use for the transfer flow? "
+    + "Option A: the retail account, which has a payee list already set up. "
+    + "Option B: the broker account, which has none. Recommended: A.";
+  S("task-set", "--project", P, "2", "--status", "blocked", "--brief", real, "--notes", "needs an account choice");
   assert.equal(read().tasks.find((t) => t.id === 2).status, "blocked");
+  rmSync(home, { recursive: true, force: true });
+});
+
+// Three real questions read, in full, "NEEDS OPERATOR: ... full question in the
+// task notes" — a pointer to the text being read. A fourth was incident status
+// with nothing to answer. The operator has the dashboard and nothing else.
+test("task-set: a question that cannot be understood or answered is refused", () => {
+  const home = mkdtempSync(join(tmpdir(), "sch-ask-"));
+  const P = "q";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "q", domain: "web-pentest", path: home, scope: { authorized: true } }], authorizations: [] }));
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: { ...process.env, SCH_HOME: home } }).trim();
+  const read = () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8"));
+  S("task-add", "--project", P, "--title", "needs a call", "--ac", "x");
+
+  assert.throws(() => S("task-set", "--project", P, "1", "--status", "blocked", "--notes", "NEEDS OPERATOR: decide."),
+    /no readable question/, "a one-liner is not a question the operator can answer");
+  assert.throws(() => S("task-set", "--project", P, "1", "--status", "blocked", "--notes",
+    "NEEDS OPERATOR: decide whether the third-party handoff gets tested end to end, or reported from our side only. Full question in the task notes."),
+    /points at "the task notes"/, "the notes ARE what the operator reads");
+  assert.throws(() => S("task-set", "--project", P, "1", "--status", "blocked", "--notes",
+    "OUTAGE SCOPE REFINED. Both backend proxy paths now return 503 on the primary host, while the separate API host is healthy. Whoever investigates should look at the upstream proxy configuration rather than only at the auth service."),
+    /contains no question/, "an incident report has nothing to answer");
+
+  // --assume does not block at all: the work keeps moving, overridable later
+  S("task-set", "--project", P, "1", "--status", "blocked", "--assume", "report from our side only (option c)",
+    "--brief", "Should the third-party payout handoff be tested end to end? Option A: get authorization from the other platform's owner. Option B: HDFC tests it internally. Option C: we report only what we proved on this side. Recommended: C — it is actionable now and waits on nobody.");
+  const t = read().tasks.find((x) => x.id === 1);
+  assert.equal(t.status, "queued", "a decision the loop can make itself must not stop the engagement");
+  assert.ok(read().tasks.find((x) => x.id === 1).status !== "blocked", "the status on disk must actually change, not just the returned flag");
+  assert.match(t.assumed.choice, /option c/i);
+  assert.match(t.notes, /PROCEEDING ON MY OWN CALL/);
   rmSync(home, { recursive: true, force: true });
 });
 

@@ -4,10 +4,11 @@
 // referencing a script that no longer exists, a hardcoded machine-specific path,
 // or an engagement-data file about to be committed. Run: `npm run validate`.
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fail = [];
@@ -76,5 +77,47 @@ for (const [cond, msg] of [
   [review.includes("Definition of Done"), "sch-review must validate the Definition-of-Done checklist"],
 ]) ok(cond, msg);
 
+// 7. the dashboard's CLIENT script must parse.
+// dashboard.mjs serves its whole UI from one JS template literal, so a stray
+// backtick inside it — in a comment, even — ends the string early and the
+// dashboard dies at startup with a syntax error nobody sees until the operator
+// finds a dead page. `node --check` only parses the outer module and cannot
+// catch it; parsing the inner script can.
+{
+  // First the module itself: a stray backtick inside the template ENDS the
+  // template, and the file stops parsing. That is the failure that actually
+  // shipped — the dashboard died at startup and looked simply "down".
+  for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/report.mjs", "scripts/graph.mjs", "scripts/poc.mjs"]) {
+    try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
+    catch (e) {
+      const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;
+      fail.push(`${f}: does not parse — ${why.trim()}`);
+    }
+  }
+  const src = read("scripts/dashboard.mjs");
+  const m = src.match(/<script>([\s\S]*?)<\/script>/);
+  ok(m, "dashboard.mjs: could not find the client <script> block to validate");
+  if (m) {
+    // the template is interpolated at serve time; blank the ${...} holes out so
+    // this parses the code's shape rather than its runtime values.
+    // Checked with `node --check` in a separate process: the script is never
+    // compiled or run inside this one, so validating a file cannot execute it.
+    // The source is a template literal, so what the browser receives is the
+    // UNESCAPED text: `\\n` in source is `\n` at runtime, `\$` is `$`. Resolve
+    // the escapes the way JS does, or every regex in the file looks malformed.
+    const unescape = (s) => s.replace(/\\([\s\S])/g, (_, c) =>
+      c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c);
+    const body = unescape(m[1]).replace(/\$\{[\s\S]*?\}/g, "0");
+    const tmp = join(tmpdir(), `sch-dashboard-client-${process.pid}.js`);
+    try {
+      writeFileSync(tmp, body);
+      execFileSync(process.execPath, ["--check", tmp], { stdio: "pipe" });
+    } catch (e) {
+      const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error|error/.test(l)) || e.message;
+      fail.push(`dashboard.mjs: the client script does not parse — ${why.trim()} (a raw backtick inside the template will do this)`);
+    } finally { try { rmSync(tmp, { force: true }); } catch {} }
+  }
+}
+
 if (fail.length) { console.error("validate: FAILED\n" + fail.map((f) => "  ✗ " + f).join("\n")); process.exit(1); }
-console.log(`validate: OK — ${SKILLS.length} skills, ${Object.keys(packs).length - 1} packs, README + portability + safety contracts verified`);
+console.log(`validate: OK — ${SKILLS.length} skills, ${Object.keys(packs).length - 1} packs, README + portability + safety contracts + dashboard client script verified`);

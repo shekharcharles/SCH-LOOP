@@ -34,8 +34,11 @@ function rollup() {
     // Blockers travel with the rollup so the home page can answer questions from
     // every project at once — the operator is on a phone and should not have to
     // open each project to discover which one is waiting on them.
+    // `brief` carries the FULL plain-language question; without it the home page
+    // could only show the one-line summary, which is often just a pointer to the
+    // brief the operator never got to see.
     const blockers = s.tasks.filter((t) => t.status === "blocked" || t.status === "stuck")
-      .map((t) => ({ id: t.id, title: t.title, notes: t.notes || "", status: t.status }));
+      .map((t) => ({ id: t.id, title: t.title, notes: t.notes || "", brief: t.brief || "", status: t.status }));
     return { id: p.id, name: p.name, domain: p.domain, offensive: OFFENSIVE.has(p.domain), authorized: p.scope?.authorized ?? false, halt: p.scope?.halt ?? false, status, total, done, pending: c("queued"), building: c("building"), review: c("review"), blocked: c("blocked"), stuck: c("stuck"), findings: (s.findings || []).length, inboxNew: s.inbox.filter((i) => i.status === "new").length, pct: total ? Math.round(done / total * 100) : 0, run: s.run || null, blockers };
   });
 }
@@ -260,6 +263,16 @@ const PAGE = `<!doctype html>
   .attn{border:1px solid var(--red);border-left:4px solid var(--red);background:rgba(255,42,42,.07);padding:12px 15px}
   .attn>b{color:var(--red);letter-spacing:.1em;display:block;margin-bottom:8px}
   .attn-row{padding:8px 0;border-top:1px solid rgba(255,42,42,.25)}.attn-row:first-of-type{border-top:0}
+  /* Decisions the loop took itself: informational, so amber and collapsed — the
+     work is already moving and this is a chance to overrule, not a chore. */
+  .assumed{border:1px solid var(--line);border-left:4px solid var(--amber);background:var(--panel);margin-top:10px}
+  .assumed>summary{cursor:pointer;padding:9px 12px;font-size:11px;color:var(--amber);letter-spacing:.06em;
+                   text-transform:uppercase;list-style:none}
+  .assumed>summary::-webkit-details-marker{display:none}
+  .assumed>summary::before{content:"▸ "} .assumed[open]>summary::before{content:"▾ "}
+  .assumed>summary:hover{color:var(--fg)}
+  .assumed .attn-row{padding:8px 12px;border-top:1px solid var(--line)}
+  .acall{color:var(--green);font-size:12px;margin:3px 0 2px}
   /* A question is READ, on a phone, before a decision. It gets real line breaks
      (the loop writes them; this used to collapse them all into a wall of text),
      a readable measure, and its own scroll if it is long. */
@@ -269,10 +282,11 @@ const PAGE = `<!doctype html>
   .attn-row .q{opacity:.92;margin:7px 0 11px;line-height:1.62;white-space:pre-wrap;
                font-size:12.5px;padding:11px 14px;background:rgba(0,0,0,.28);
                border-left:2px solid rgba(255,42,42,.4)}
-  @media(min-width:1100px){
-    .attn-row .q{column-count:2;column-gap:34px;column-rule:1px solid rgba(255,42,42,.18)}
-  }
-  @media(min-width:1800px){ .attn-row .q{column-count:3} }
+  /* One column, always. Newspaper columns made a decision text run down the left
+     and continue on the right — fine for an article you are browsing, wrong for
+     a question you must read completely before answering. Cap the measure
+     instead: ~80 characters is the readable line length. */
+  .attn-row .q{max-width:78ch}
   /* keep a label and its option together rather than orphaned at a column break */
   .attn-row .q .qlabel,.attn-row .q .qopt{break-after:avoid;page-break-after:avoid}
   .attn-row .q .qlabel{color:var(--red);letter-spacing:.06em;font-weight:700}
@@ -971,6 +985,19 @@ function loopBar(run,advice,st){
 }
 
 // ---- tap-to-answer ---------------------------------------------------------
+// THE QUESTION IS WHEREVER THE LOOP WROTE IT. It writes the full plain-language
+// question — options, consequences, recommendation — into the brief field, and
+// leaves a one-line summary in notes. The dashboard only ever rendered notes, so
+// the operator read "full question in the task notes" — a pointer to the very
+// text they were looking at — and could not answer questions that were, in fact,
+// written properly. Show the real thing, and fall back only when there is none.
+const questionOf=(t)=>{
+  const brief=(t.brief||"").trim(), notes=(t.notes||"").trim();
+  if(!brief) return notes||"(no question was written — the loop must rewrite this one)";
+  // the note adds nothing when it just points at the brief
+  return /see (the )?(task )?notes|full question|in the task notes/i.test(notes)||notes.length<brief.length/3
+    ? brief : brief+"\\n\\n"+notes;
+};
 // A DECISION task carries its options as words. Pull them out so the answer is
 // one tap instead of typing the exact token on a phone keyboard.
 // Pull the REAL options out of a question. Order matters: a numbered list is an
@@ -981,13 +1008,30 @@ function loopBar(run,advice,st){
 function parseOpts(notes){
   const t=(notes||"");
   // 1) numbered options: "1) Keep signing only - ..."  → self-describing value
-  const num=[...t.matchAll(/(?:^|\\n|\\s)(\\d)\\)\\s+([^\\n]{3,80}?)(?:\\s+[-–—]\\s|\\.\\s|\\n|\$)/g)];
+  const num=[...t.matchAll(/(?:^|\\n|[.;:!?]\\s)\\s*(\\d)\\)\\s+([^\\n]{3,80}?)(?=\\s+[-–—]\\s|[.;]|\\n|\$)/g)];
   if(num.length>=2){
     const seen=new Set();
     return num.filter(m=>!seen.has(m[1])&&seen.add(m[1]))
       .slice(0,5).map(m=>{
         const words=m[2].trim().split(/\\s+/).slice(0,5).join(" ").replace(/[,;:]\$/,"");
         return {label:m[1]+") "+words, value:m[1]+") "+words};
+      });
+  }
+  // 1b) lettered options — "(a) provide such an account, and we test it properly;"
+  // The loop writes these at least as often as numbers, and without this the
+  // operator had to type the answer by hand on a phone.
+  // the cap is generous on purpose: a written option often runs a long clause
+  // before its first full stop, and a missing button is worse than a long label
+  // (only the first few words are shown anyway)
+  // the terminator is a LOOKAHEAD: consuming the "; " that ends option (a) also
+  // ate the separator option (b) needs as its lead-in, so only a and c matched
+  const alpha=[...t.matchAll(/(?:^|\\n|[.;:!?]\\s|[-–—]\\s)\\s*\\(([a-e])\\)\\s+([^\\n]{3,200}?)(?=\\s+[-–—]\\s|[.;]|\\n|\$)/g)];
+  if(alpha.length>=2){
+    const seen=new Set();
+    return alpha.filter(m=>!seen.has(m[1])&&seen.add(m[1]))
+      .slice(0,5).map(m=>{
+        const words=m[2].trim().split(/\\s+/).slice(0,6).join(" ").replace(/[,;:]\$/,"");
+        return {label:"("+m[1]+") "+words, value:"("+m[1]+") "+words};
       });
   }
   // 2) an explicit one-line list: "OPTIONS: untrack / allow / manual"
@@ -1010,7 +1054,13 @@ function parseOpts(notes){
 // markup — the text is operator/agent-supplied.
 function fmtQ(s){
   let t=esc(s||"");
-  t=t.replace(/\\s*(\\d\\))\\s+/g,"\\n\\n<span class=\\"qopt\\">$1</span> ");           // 1) 2) 3) each on its own line
+  // 1) 2) 3) each on its own line — but ONLY a real option marker. Matching any
+  // digit before ")" turned "(BM/15017, AK/49, BM/910)" into a fake option and
+  // ate the closing bracket, so the question read as nonsense. An option marker
+  // starts a line or follows sentence-ending punctuation, and is a lone digit.
+  t=t.replace(/(^|\\n|[.;:!?]\\s)\\s*(\\d\\))\\s+/g,"$1\\n\\n<span class=\\"qopt\\">$2</span> ");
+  // (a) (b) (c) are just as common in a written question as 1) 2) 3)
+  t=t.replace(/(^|\\n|[.;:!?]\\s|[-–—]\\s)\\s*(\\([a-e]\\))\\s+/g,"$1\\n\\n<span class=\\"qopt\\">$2</span> ");
   t=t.replace(/(^|\\n|\\s)(THE QUESTION|OPTIONS[^:\\n]{0,24}|WHAT EACH ONE DOES|RECOMMENDATION|RECOMMENDED|QUESTION ASKED|ANSWERED)\\s*:/g,
               "\\n\\n<span class=\\"qlabel\\">$2:</span>\\n");
   t=t.replace(/\\s*(Example:)/g,"\\n    $1");                                       // examples sit under their option
@@ -1025,7 +1075,7 @@ function srcChip(t){
 // one answer block, used by BOTH the project page and the home page. From home,
 // stay on home after answering so several projects can be cleared in a row.
 function answerBlock(pid,t,home){
-  const opts=parseOpts(t.notes);
+  const opts=parseOpts(questionOf(t));
   return '<form class="ans ansform" method="POST" action="/answer">'+csrf+
     (home?'<input type="hidden" name="back" value="home">':'')+
     '<input type="hidden" name="project" value="'+esc(pid)+'"><input type="hidden" name="id" value="'+t.id+'">'+
@@ -1108,7 +1158,7 @@ function homeApply(ps){
     new Set(xs.map(x=>x.p.id)).size+' project(s)</b>'+
     xs.map(({p,t})=>'<div class="attn-row"><div class="xp"><a href="/?project='+encodeURIComponent(p.id)+'">'+esc(p.name)+'</a> · task #'+t.id+'</div>'+
       '<div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <strong>'+esc(t.title)+'</strong></div>'+
-      '<div class="q">'+fmtQ(t.notes||"(open the project)")+'</div>'+answerBlock(p.id,t,true)+'</div>').join("")+
+      '<div class="q">'+fmtQ(questionOf(t))+'</div>'+answerBlock(p.id,t,true)+'</div>').join("")+
     '</div>':"");
   const by=(c)=>ps.filter(p=>p.status===c).length;
   set("pchips",'<div class="chips">'+[["active",by("active"),"active"],["in progress",by("inprogress"),"inprogress"],["failed / awaiting",by("attention"),"attention"],["completed",by("completed"),"completed"],["new",by("new"),"new"]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
@@ -1165,11 +1215,24 @@ function projApply(id,r){
   if(attn.length){
     attnHtml='<div class="attn"><b>&#9888; NEEDS YOU — '+attn.length+' task(s)</b>';
     for(const t of attn){
-      attnHtml+='<div class="attn-row"><div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <span class="id">TASK #'+t.id+'</span> <strong>'+esc(t.title)+'</strong></div><div class="q">'+fmtQ(t.notes||"(open the task)")+'</div>'+
+      attnHtml+='<div class="attn-row"><div><span class="st st-'+t.status+'">'+(t.status==="blocked"?"AWAITING":"FAILED")+'</span> <span class="id">TASK #'+t.id+'</span> <strong>'+esc(t.title)+'</strong></div><div class="q">'+fmtQ(questionOf(t))+'</div>'+
         answerBlock(id,t)+
         actForm(id,t.id,"close","&#10005; close (superseded)")+'</div>';
     }
     attnHtml+='</div>';
+  }
+  // Decisions the loop made on its own rather than stopping to ask. These are
+  // FYI, not a queue of chores: the work is already moving. Tap to overrule.
+  const assumed=s.tasks.filter(t=>t.assumed&&t.status!=="merged"&&t.status!=="superseded");
+  if(assumed.length){
+    attnHtml+='<details class="assumed"><summary>'+assumed.length+' decision'+(assumed.length>1?'s':'')+
+      ' the loop made on its own — work is proceeding, tap to change</summary>';
+    for(const t of assumed){
+      attnHtml+='<div class="attn-row"><div><span class="id">TASK #'+t.id+'</span> <strong>'+esc(t.title)+'</strong></div>'+
+        '<div class="acall">proceeding: '+esc(t.assumed.choice)+'</div>'+
+        '<div class="q">'+fmtQ(t.assumed.question||"")+'</div>'+answerBlock(id,t)+'</div>';
+    }
+    attnHtml+='</details>';
   }
   set("attn",attnHtml);
   // scope
