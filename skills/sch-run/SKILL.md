@@ -595,6 +595,11 @@ Ambiguous objective, conflict with an `NG`/RoE, or a decision only a human can m
   values: does the element exist, is the text/color right, any console error).
   Cap total browser calls to **~2–3 per task**. Validate once at the end, not
   after every edit. A failed check → fix, then one re-check, not a loop of snapshots.
+  **This is a budget rule, not a blindfold.** Take fewer screenshots — then
+  actually LOOK at the ones you take. On offensive work especially, a screenshot
+  you captured and never read is the most expensive call in the pass: you paid
+  for it and learned nothing. Name what is on the screen and reason about it
+  (see "Observe → reason → act" in the pentest pack) before deciding what next.
 - `run-the-tool` (tool-dev): invoke the CLI/lib, assert output/exit code.
 - `poc-evidence` (pentest): reproduce each finding — raw request/response +
   screenshot / decrypted Burp request; ground truth, not a guess. **Write the PoC
