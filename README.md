@@ -122,6 +122,15 @@ scripts/skills.mjs        Skill registry: read-only discovery of installed skill
 scripts/workspace.mjs     The canonical per-project `.sch-loop/` workspace: init, versioned
                           manifest, path containment, symlink/junction refusal, narrow
                           runtime ignore rules (the durable record stays trackable).
+scripts/candidate.mjs     The delivery candidate: every changed path as CONTENT identity
+                          (porcelain v2 + blob hashes), canonical hashing, and the git
+                          argv guard that refuses add -A / commit -a / force / reset --hard.
+scripts/delivery.mjs      The fail-closed Git transaction controller — the ONLY component
+                          allowed to stage, commit or push a managed project. Diff binding,
+                          approval, explicit staging, secret gate, commit, divergence, push,
+                          independent remote verification, task completion.
+scripts/sch-deliver-run.mjs  CLI for one delivery: --project <id> --run <RUN-id>. One run,
+                          one commit, then stop.
 scripts/executor.mjs      Provider-neutral AgentExecutor + ClaudeCliExecutor: a fresh
                           external worker process, allowlisted environment, SCH-owned
                           timeout/cancel, process-tree kill, bounded output.
@@ -197,9 +206,15 @@ skill-recommend --project <id> [--task <n> | --type <t> --phase <n> --files a|b]
 sch-commands [<name>]                                (the /SCH command table)
 task-add | task-list [--status] | task-set <n> --status ... | task-next | task-answer   (all --project)
 task-add / task-set --allow "src/**|tests/**" --forbid "..." --verify "npm test"   (run policy)
+task-set --verify-json '[{"id":"unit","exe":"npm","args":["test"],"cwd":".","timeout_ms":600000}]'
+task-set --control-category decisions        (the ONE .sch-loop/ category a task may write)
 workspace-init | workspace-status                    (the per-project .sch-loop/ workspace)
 run-list [--limit n] | run-get --run <RUN-id> | run-cancel --run <RUN-id>
+handoff-promote --run <RUN-id>                 (raw run handoff → the durable record)
+delivery-status --run <RUN-id> | delivery-list | delivery-cancel --run <RUN-id>
+delivery-approve --run <RUN-id> --approver <name> [--message "..."] [--reject true]
 sch-run-task.mjs --project <id> --task <n> [--preflight-only]   (one supervised run)
+sch-deliver-run.mjs --project <id> --run <RUN-id> [--dry-run]   (one Git delivery)
 finding-add | finding-list | finding-set | chains   (offensive)
 retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
 provenance --ref <auth-ref>                          (who shared which asset, when, how)
@@ -250,12 +265,12 @@ the **supervised external single-task runner** below.
 
 ### Planned, and NOT implemented
 
-Automatic retry and repair · sequential queue continuation · an independent
-semantic reviewer · a target-project Git transaction controller · automatic
-commit, push and remote verification · dashboard authentication · a full SCH MCP ·
-automatic knowledge ingestion · parallel Git worktrees · graph fan-out and joins ·
-distributed workers · SQLite / event-sourced operational state. The runner below
-is **one task, one attempt, then stop** — it never commits and never pushes.
+Sequential queue continuation · automatic retry and repair · an independent
+semantic reviewer · dashboard authentication · a full SCH MCP · automatic
+knowledge ingestion · parallel Git worktrees · graph fan-out and joins ·
+distributed workers · SQLite / event-sourced operational state. The runner is
+**one task, one attempt, then stop**; the delivery controller is **one run, one
+commit, then stop**. Neither continues to anything else.
 
 ## 🧪 Supervised external single-task runner
 
@@ -335,6 +350,83 @@ append-only JSONL with a versioned vocabulary, and the human-readable handoff at
 **Platform honesty.** Process-tree cleanup uses `taskkill /T /F` on Windows and a
 process-group signal on POSIX; a grandchild that detaches itself into a new
 session escapes both, and nothing here claims otherwise. Both paths are tested.
+
+**`.sch-loop/` is control state, and workers are default-denied from all of it.**
+A task may name at most **one** durable category it is authorized to write
+(`--control-category decisions`); everything else under `.sch-loop/` is refused
+however broad the allow-list is, and `project.yaml`, `runs/`, `locks/` and the
+other runtime directories are refused under every category. Only the *ignored
+runtime* paths are exempt from the clean-tree gate — an uncommitted `SPEC.md`,
+`PLAN.md`, task, decision or promoted handoff blocks a run like any other file.
+A run's raw handoff stays at `.sch-loop/runs/<run-id>/handoff.md`; promotion into
+the durable `.sch-loop/handoffs/` is a separate act (`handoff-promote`, and
+automatically on delivery). Verification commands are stored structured —
+`{id, exe, args[], cwd, timeout_ms}` — so an argument may contain a space;
+`--verify "npm test"` is shorthand that compiles into that shape.
+
+## 🚚 Fail-closed Git transaction controller
+
+```bash
+node scripts/sch-deliver-run.mjs   --project <id> --run <RUN-id>   # stops for approval
+node scripts/state.mjs delivery-approve --project <id> --run <RUN-id> --approver <you>
+node scripts/sch-deliver-run.mjs   --project <id> --run <RUN-id>   # commits and pushes
+```
+
+The **only** component in SCH allowed to stage, commit or push a managed project.
+It takes one `VERIFIED` run and stops after one commit. It runs no worker,
+selects no task, retries nothing, and never merges, rebases, cherry-picks,
+amends, resets, reverts or force-pushes — those argv shapes are refused by
+`assertSafeGitArgs` on **every** git call, and every invocation is recorded so a
+test can prove what was not run.
+
+**Verified-diff binding.** `VERIFIED` alone does not make a run deliverable. When
+verification passes, the runner records `delivery-candidate.json`: every changed
+path as *content identity* (blob hash, status, rename source, modes) plus the
+verification evidence, hashed into `verified_diff_hash`, `verified_effects_hash`
+and `verification_evidence_hash`. The controller recomputes all three immediately
+before staging. Any drift — edited content, an added or deleted file, a rename, a
+mode change, a moved HEAD, a changed branch, different verification evidence —
+is `VERIFIED_DIFF_CHANGED`, and nothing is staged.
+
+**Approval is required by default**, before the commit and again before the push.
+An approval is a signature over the *specific* candidate (delivery, run, baseline
+HEAD, branch, diff hash, evidence hash, commit message, remote, upstream) with an
+expiry and a named approver. Change any of those and it becomes `INVALIDATED`:
+yesterday's yes never authorizes today's different diff. The worker cannot
+approve anything.
+
+**Explicit staging.** `git add -- <exact verified pathspecs>`, always after `--`,
+so a filename with spaces is one argument and one beginning with `-` is a
+filename. Modifications, additions, deletions and renames are all handled. Then
+the index is proved against the candidate by blob identity — staged paths must
+equal approved paths exactly, staged content must equal verified content, nothing
+approved may remain unstaged, and an index that already held someone else's work
+blocks the delivery outright. On mismatch only the paths *this* transaction
+staged are unstaged; working-tree content is never touched. Then the existing
+secret gate runs against the exact staged content, and a failure unstages and
+stops.
+
+**Commit, divergence, push, remote verification.** One commit, message built from
+trusted task data (AI co-author and session trailers refused), delivered on stdin
+so it can never be read as an option. Post-commit the tree is proved again: one
+parent, the verified baseline, exactly the approved blobs — and a mismatch is
+`NEEDS_DECISION` with the commit left **unamended and unreset**. Then a fetch,
+and hard gates: any incoming commit, any divergence, anything other than exactly
+one outgoing commit, a missing or moved remote branch, a changed remote or
+upstream, or a credential-bearing remote URL all stop the push. The push is an
+explicit refspec. Afterwards SCH **fetches again and asks the remote** — push
+stdout is the pushing process describing its own success and is never accepted as
+proof; the commit's tree and parent are re-checked against what was committed.
+
+**Only then** does the task become `delivered` — a new terminal status distinct
+from `merged` (which means the in-session loop finished it *locally* and was
+never pushed). `delivered` is unreachable from `task-set`; only the controller
+sets it, with the commit, branch, remote, pushed range and verification time
+attached. Every delivery is a transaction under `.sch-loop/runs/<run-id>/delivery/`
+with append-only, fail-closed events and a read-only dashboard projection at
+`/api/deliveries`. **Delivery and approval are operator authority and stay on the
+CLI: they must not be exposed remotely until the dashboard has authentication,
+which it does not have.**
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.

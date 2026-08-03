@@ -916,8 +916,10 @@ test("skills: /SCH routing metadata is complete and case-insensitive", () => {
   // advertised as working is everything past it — retry, queue continuation, and
   // any target-project commit or push.
   assert.ok(names.includes("run-task"), "the supervised external runner must be routable");
-  assert.match(all.find((c) => c.name === "run").note, /automatic retry, queue continuation and any target-project commit\/push are not implemented/);
+  assert.ok(names.includes("deliver"), "the Git transaction controller must be routable");
+  assert.match(all.find((c) => c.name === "run").note, /sequential queue continuation and automatic retry are not implemented/);
   assert.match(all.find((c) => c.name === "run-task").note, /VERIFIED is not committed, pushed or done/);
+  assert.match(all.find((c) => c.name === "deliver").note, /only after the commit is verified on the remote/);
   fx.done();
 });
 

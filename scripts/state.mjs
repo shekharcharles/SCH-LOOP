@@ -60,11 +60,19 @@ export function auditLog(entry) {
   } catch { /* logging must never break the engine */ }
 }
 
-export const STATUSES = ["queued", "building", "review", "changes", "merged", "blocked", "stuck", "superseded"];
+export const STATUSES = ["queued", "building", "review", "changes", "merged", "delivered", "blocked", "stuck", "superseded"];
 // "superseded" = closed because it was replaced/decomposed. Not done, not
 // awaiting — it must never show up in the "needs you" banner.
-export const CLOSED = new Set(["merged", "superseded"]);
-const DONE = new Set(["merged"]); // "merged" = the generic "done" status for any pack
+export const CLOSED = new Set(["merged", "delivered", "superseded"]);
+// "merged"    = the in-session loop finished it LOCALLY. It is not pushed, and
+//               it never was — reusing it to mean "delivered" would have made
+//               every existing merged task claim a remote it never reached.
+// "delivered" = committed, pushed and VERIFIED ON THE REMOTE by the delivery
+//               controller. Only that controller may set it (see markDelivered).
+const DONE = new Set(["merged", "delivered"]);
+// Statuses no operator command may set directly — they assert something only the
+// controller that performed the irreversible act can honestly assert.
+export const CONTROLLER_ONLY_STATUSES = new Set(["delivered"]);
 export const OFFENSIVE = new Set(["web-pentest", "api-pentest", "mobile-android", "mobile-ios",
   "red-team-external", "red-team-internal", "external-network", "internal-network"]);
 
@@ -180,6 +188,10 @@ export function addTask(state, t) {
     // loop is unaffected, which is why every existing task keeps working.
     allowedPaths: t.allowedPaths ?? [],
     forbiddenPaths: t.forbiddenPaths ?? [],
+    // At most one durable `.sch-loop/` category this task may write. Null means
+    // the whole workspace is off limits, which is the right default for the
+    // application-development task that has no business editing SCH's own state.
+    controlCategory: t.controlCategory ?? null,
     verify: t.verify ?? [],
     // A question for the operator MUST be born blocked. Creating it queued and
     // blocking it in a second call is how three real questions ended up invisible:
@@ -201,6 +213,33 @@ export function addTask(state, t) {
   state.tasks.push(task);
   event(state, `task #${task.id} added (${task.source}): ${task.title}`);
   return task;
+}
+
+// THE ONLY WAY A TASK BECOMES `delivered`.
+//
+// Called by the delivery controller after — and only after — the commit has been
+// pushed and independently verified on the remote. It is a plain function rather
+// than a CLI command on purpose: there is no argv that reaches it, so no prompt,
+// skill or operator can talk a task into claiming a remote it never reached.
+// The provenance is written with the status, because "delivered" without the
+// commit that delivered it is a claim nobody can check.
+export function markDelivered(projectId, taskId, provenance) {
+  const s = loadState(projectId);
+  const t = s.tasks.find((x) => x.id === Number(taskId));
+  if (!t) return { ok: false, message: `no task #${taskId} in ${projectId}` };
+  for (const k of ["run_id", "delivery_id", "commit", "branch", "remote"])
+    if (!provenance?.[k]) return { ok: false, message: `refusing to mark task #${taskId} delivered without ${k}` };
+  t.status = "delivered";
+  t.delivery = {
+    run_id: provenance.run_id, delivery_id: provenance.delivery_id, commit: provenance.commit,
+    branch: provenance.branch, remote: provenance.remote, remote_ref: provenance.remote_ref ?? null,
+    pushed_range: provenance.pushed_range ?? null, verified_at: provenance.verified_at ?? now(),
+  };
+  t.updatedAt = now();
+  event(s, `task #${t.id} DELIVERED: ${provenance.commit.slice(0, 8)} on ${provenance.remote}/${provenance.branch} (delivery ${provenance.delivery_id})`);
+  saveState(projectId, s);
+  auditLog({ kind: "delivery", project: projectId, task: String(taskId), ...t.delivery, event: "task-delivered" });
+  return { ok: true, task: t };
 }
 
 // A finding is one tested class: either a validated issue (with evidence) or a
@@ -487,12 +526,35 @@ function parseFlags(argv) {
 }
 const splitList = (s) => (s ? s.split(/\s*\|\s*|\n/).map((x) => x.trim()).filter(Boolean) : []);
 // A verification command is an executable and its arguments — never a shell
-// string. Splitting on whitespace here is what makes that structural: there is
-// no place for a `;` or a `&&` to mean anything.
-const parseVerify = (s, from = 1) => splitList(s).map((c, i) => {
-  const parts = c.split(/\s+/).filter(Boolean);
-  return { id: `VER-${from + i}`, exe: parts[0], args: parts.slice(1) };
+// string. The AUTHORITATIVE stored form is structured:
+//   { id, exe, args: [...], cwd, timeout_ms }
+// `--verify "npm test"` is convenience shorthand that COMPILES INTO that shape;
+// nothing downstream ever splits a string again, so `--verify-json` can carry an
+// argument containing a space and it still runs as one argument.
+const VERIFY_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+const verifyRecord = (v, i) => ({
+  id: String(v.id ?? `VER-${i + 1}`),
+  exe: String(v.exe ?? ""),
+  args: Array.isArray(v.args) ? v.args.map(String) : [],
+  cwd: v.cwd ? String(v.cwd) : ".",
+  timeout_ms: Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : VERIFY_DEFAULT_TIMEOUT_MS,
 });
+const parseVerify = (s) => splitList(s).map((c, i) => {
+  const parts = c.split(/\s+/).filter(Boolean);
+  return verifyRecord({ exe: parts[0], args: parts.slice(1) }, i);
+});
+// Exact commands, no splitting: a JSON array of the structured shape.
+const parseVerifyJson = (s) => {
+  let v;
+  try { v = JSON.parse(s); } catch (e) { die(`--verify-json is not valid JSON: ${e.message}`); }
+  if (!Array.isArray(v)) die("--verify-json must be a JSON array of { id, exe, args, cwd, timeout_ms }");
+  return v.map((x, i) => {
+    if (!x || typeof x !== "object" || Array.isArray(x)) die(`--verify-json entry ${i} must be an object`);
+    if (x.args !== undefined && !Array.isArray(x.args)) die(`--verify-json entry ${i}: args must be an array of strings`);
+    if (!x.exe) die(`--verify-json entry ${i}: needs an "exe"`);
+    return verifyRecord(x, i);
+  });
+};
 const out = (v) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
 // Resolve the project from the current working directory, so --project is
 // optional: run the command from inside a project's folder and it just works.
@@ -932,7 +994,8 @@ const commands = {
   "task-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
     const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status, files: splitList(flags.files),
-      allowedPaths: splitList(flags.allow), forbiddenPaths: splitList(flags.forbid), verify: parseVerify(flags.verify) });
+      allowedPaths: splitList(flags.allow), forbiddenPaths: splitList(flags.forbid), controlCategory: flags["control-category"],
+      verify: flags["verify-json"] !== undefined ? parseVerifyJson(flags["verify-json"]) : parseVerify(flags.verify) });
     saveState(id, s); out(t.id.toString());
   },
   "task-list"({ flags }) {
@@ -947,6 +1010,14 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     const t = s.tasks.find((x) => x.id === Number(pos[0]));
     if (!t) return out("not found");
+    // "delivered" asserts that a commit exists on the remote and was verified
+    // there. Nobody can assert that by typing it — not an operator, not a skill,
+    // and certainly not a worker. Only the delivery controller sets it, and only
+    // after independent remote verification.
+    if (CONTROLLER_ONLY_STATUSES.has(flags.status))
+      die(`"${flags.status}" is set by the delivery controller only — it means committed, pushed and verified on the remote.\n` +
+          `  Deliver a VERIFIED run instead: node scripts/sch-deliver-run.mjs --project ${id} --run <RUN-id>\n` +
+          `  (for a locally finished task the status you want is "merged")`);
     // HARD GATE (smart): a UI/design task cannot complete unless AT LEAST ONE of
     // the project's chosen design skills was actually invoked (transcript-verified,
     // unfakeable). Only fires on design tasks — backend/recon/etc are never blocked.
@@ -1006,6 +1077,10 @@ const commands = {
     if (flags.allow !== undefined) t.allowedPaths = splitList(flags.allow);
     if (flags.forbid !== undefined) t.forbiddenPaths = splitList(flags.forbid);
     if (flags.verify !== undefined) t.verify = parseVerify(flags.verify);
+    if (flags["verify-json"] !== undefined) t.verify = parseVerifyJson(flags["verify-json"]);
+    // The one SCH control-state category this task may write, if any. Naming it
+    // is a deliberate act; the default is that `.sch-loop/` is off limits.
+    if (flags["control-category"] !== undefined) t.controlCategory = flags["control-category"] || null;
     // what the work actually cost. Without this "are tokens going down?" is
     // unanswerable, and every efficiency change is a guess.
     // Guard the arithmetic: Number("unknown") is NaN, and a NaN written here would
@@ -1532,6 +1607,71 @@ const commands = {
     } catch (e) { die(e.message); }
   },
 
+  // ---- delivery transactions -----------------------------------------------
+  // Reads and authorization only. STARTING a delivery is
+  // `scripts/sch-deliver-run.mjs` — a separate entry point on purpose, so
+  // nothing on the ordinary CLI surface can commit or push as a side effect of
+  // a status query. There is deliberately no generic git command here.
+  async "delivery-status"({ flags, pos }) {
+    const D = await import("./delivery.mjs");
+    const runId = flags.run ?? pos[0] ?? die("need --run <RUN-id>");
+    const d = D.readDelivery(pid(flags), runId);
+    if (!d.ok) die(`${d.failure.code} — ${d.failure.message}`);
+    out({
+      delivery_id: d.transaction.delivery_id, state: d.transaction.state,
+      approval: d.approval_status, approver: d.transaction.approval?.approver ?? null,
+      commit_message: d.transaction.commit_message, verified_paths: d.transaction.verified_paths,
+      verified_diff_hash: d.transaction.verified_diff_hash,
+      commit: d.transaction.commit?.hash ?? null, push: d.transaction.push ?? null,
+      remote_verification: d.transaction.remote_verification ?? null,
+      failure: d.transaction.failure, events: d.events.length, dir: d.dir,
+    });
+  },
+  async "delivery-list"({ flags }) {
+    const D = await import("./delivery.mjs");
+    out(D.deliveryProjection(pid(flags), { limit: Number(flags.limit ?? 10) }));
+  },
+  // The human gate. Binds a signature to THIS diff, branch, remote and message;
+  // change any of them and the approval stops applying, by design.
+  async "delivery-approve"({ flags, pos }) {
+    const D = await import("./delivery.mjs");
+    const id = pid(flags);
+    const runId = flags.run ?? pos[0] ?? die("need --run <RUN-id>");
+    const r = D.approveDelivery(id, runId, {
+      approver: flags.approver ?? die("need --approver <name> — an approval nobody signed is not an approval"),
+      decision: flags.reject === "true" ? "REJECTED" : "APPROVED",
+      message: flags.message ?? null,
+      ttlMs: flags["ttl-min"] ? Number(flags["ttl-min"]) * 60000 : null,
+      why: flags.why ?? "",
+    });
+    if (!r.ok) die(`${r.failure.code} — ${r.failure.message}`);
+    const s = loadState(id); event(s, `delivery for run ${runId} ${r.approval.decision} by ${r.approval.approver}`); saveState(id, s);
+    out({ ...r, next: r.approval.decision === "APPROVED" ? `node scripts/sch-deliver-run.mjs --project ${id} --run ${runId}` : "delivery rejected" });
+  },
+  async "delivery-cancel"({ flags, pos }) {
+    const D = await import("./delivery.mjs");
+    const id = pid(flags);
+    const runId = flags.run ?? pos[0] ?? die("need --run <RUN-id>");
+    const r = D.cancelDelivery(id, runId, flags.reason ?? "operator cancelled");
+    if (!r.ok) die(`${r.failure.code} — ${r.failure.message}`);
+    out(r);
+  },
+  // Promote a run's raw handoff into the durable, trackable record. Separate
+  // from the run on purpose: an attempt is not automatically worth keeping, and
+  // one untracked file per attempt is litter, not history.
+  async "handoff-promote"({ flags, pos }) {
+    const id = pid(flags); const p = getProject(id);
+    if (!p) die("no such project: " + id);
+    const [WS, R] = [await import("./workspace.mjs"), await import("./runner.mjs")];
+    const runId = flags.run ?? pos[0] ?? die("need --run <RUN-id>");
+    try {
+      const wsDir = WS.resolveWorkspaceDir(WS.repositoryRoot(p.path) ?? p.path, { mustExist: true });
+      const r = R.promoteHandoff(wsDir, id, runId, { reason: flags.reason ?? "manual promotion" });
+      if (!r.ok) die(r.message);
+      out(r);
+    } catch (e) { die(e.message); }
+  },
+
   help() { out("commands: " + Object.keys(commands).join(", ")); },
 };
 
@@ -1541,7 +1681,8 @@ const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-f
   "auth-add", "auth-add-domain", "auth-remove", "cr-new", "task-add", "task-set",
   "finding-add", "finding-set", "inbox-add", "inbox-mark",
   "coverage-add", "coverage-set", "session-set", "session-fail",
-  "skill-discover", "skill-trust", "profile-set", "workspace-init", "run-cancel"]);
+  "skill-discover", "skill-trust", "profile-set", "workspace-init", "run-cancel",
+  "delivery-approve", "delivery-cancel", "handoff-promote"]);
 
 // Commands that mutate state must hold the write lock for the whole
 // read-modify-write, or concurrent writers (parallel waves + dashboard) clobber

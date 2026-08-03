@@ -84,18 +84,33 @@ node scripts/sch-run-task.mjs --project <id> --task <n>    # ONE task, ONE attem
 It runs one explicitly selected, pre-approved task in a **fresh external `claude`
 process**, inspects the actual Git effects, runs SCH's own verification commands,
 records a run outcome under `<repo>/.sch-loop/runs/<run-id>/`, and stops. It never
-selects another task, never retries, and never stages, commits or pushes.
-`VERIFIED` means in-policy and verified — **not** committed, pushed or done.
+selects another task and never retries. `VERIFIED` means in-policy and verified —
+**not** committed, pushed or done.
 
-Still **not implemented**: automatic retry or repair, queue continuation, an
-independent semantic reviewer, the Git transaction controller (commit / push /
-remote verification), the authenticated dashboard, the SCH MCP, and the structured
-learning database. If asked for any of those, say plainly that they are planned
-and name the next milestone:
+Delivering that run is a **separate, fail-closed controller** — the only thing in
+SCH allowed to stage, commit or push a managed project:
 
-> Implement the fail-closed target-project Git transaction controller for explicit
-> staging, staged-diff verification, commit creation, outgoing-commit inspection,
-> push and remote commit verification.
+```bash
+node scripts/sch-deliver-run.mjs --project <id> --run <RUN-id>   # stops for approval
+node scripts/state.mjs delivery-approve --project <id> --run <RUN-id> --approver <you>
+node scripts/sch-deliver-run.mjs --project <id> --run <RUN-id>   # commits and pushes
+```
+
+It recomputes the verified content hashes and refuses on any drift, requires an
+approval bound to that exact diff/branch/remote/message, stages explicit
+pathspecs, runs the secret gate on staged content, makes one commit, blocks on
+any incoming or unrelated outgoing commit, pushes without force, then fetches
+again and asks the remote before the task becomes `delivered`. It never merges,
+rebases, amends, resets or force-pushes. One run, one commit, then stop.
+
+Still **not implemented**: sequential queue continuation, automatic retry or
+repair, an independent semantic reviewer, the authenticated dashboard, the SCH
+MCP, and the structured learning database. If asked for any of those, say plainly
+that they are planned and name the next milestone:
+
+> Implement the sequential queue-driven task graph with closed transitions,
+> bounded retries, human gates, and execution through fresh supervised worker
+> processes.
 
 Never imply autonomous multi-task execution already works, and never simulate it.
 

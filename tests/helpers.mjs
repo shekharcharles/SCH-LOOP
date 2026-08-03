@@ -19,6 +19,8 @@ export const WS = await import(url(join(ROOT, "scripts", "workspace.mjs")));
 export const RUN = await import(url(join(ROOT, "scripts", "runner.mjs")));
 export const EXEC = await import(url(join(ROOT, "scripts", "executor.mjs")));
 export const STATE = await import(url(join(ROOT, "scripts", "state.mjs")));
+export const CAND = await import(url(join(ROOT, "scripts", "candidate.mjs")));
+export const DEL = await import(url(join(ROOT, "scripts", "delivery.mjs")));
 
 export const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
@@ -72,7 +74,8 @@ export function fixture(name, { register = true, commit = true } = {}) {
     home, repo, P, cli,
     state: () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8")),
     wsDir: () => join(repo, ".sch-loop"),
-    done: () => { for (const d of [home, repo]) { try { rmSync(d, { recursive: true, force: true }); } catch {} } },
+    bare: null,
+    done: function () { for (const d of [home, repo, this.bare].filter(Boolean)) { try { rmSync(d, { recursive: true, force: true }); } catch {} } },
   };
 }
 
@@ -113,3 +116,56 @@ export const run = (fx, taskId, executor, extra = {}) =>
   RUN.runTask({ projectId: fx.P, taskId, executor, env: { ...process.env, ...(extra.env ?? {}) }, ...extra });
 
 export const readIf = (p) => (existsSync(p) ? readFileSync(p, "utf8") : null);
+
+// ------------------------------------------------------------- delivery
+
+// A LOCAL BARE REMOTE. Every delivery test pushes to a directory on this
+// machine: no network, no GitHub, no credential, and a real `git push` with
+// real rejection semantics rather than a mock that always agrees.
+export function withRemote(fx, { branch = "main" } = {}) {
+  const bare = mkdtempSync(join(tmpdir(), "sch-remote-"));
+  execFileSync("git", ["init", "--bare", "-q", "-b", branch, bare], { stdio: "ignore" });
+  git(fx.repo, "remote", "add", "origin", bare);
+  git(fx.repo, "push", "-q", "origin", `${branch}:${branch}`);
+  git(fx.repo, "branch", `--set-upstream-to=origin/${branch}`, branch);
+  fx.bare = bare;
+  return bare;
+}
+
+// A second working copy of the same bare remote — how another person's commit
+// arrives on the remote in an incoming-commit test.
+export function otherClone(bare, name = "other") {
+  const dir = mkdtempSync(join(tmpdir(), `sch-${name}-`));
+  execFileSync("git", ["clone", "-q", bare, dir], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "config", "user.email", "other@t"], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "config", "user.name", "other"], { stdio: "ignore" });
+  return dir;
+}
+
+// Run a task to VERIFIED so there is something deliverable, without asserting
+// on the run itself — the delivery tests are about what happens next.
+export async function verifiedRun(fx, taskId, behaviour) {
+  const rec = await run(fx, taskId, fakeExecutor(fx, behaviour));
+  if (rec.outcome !== "VERIFIED") throw new Error(`fixture expected VERIFIED, got ${rec.outcome}: ${rec.failure?.message}`);
+  return rec;
+}
+
+// Approve a delivery the way an operator actually does.
+//
+// An approval signs a TRANSACTION — its diff hash, branch, remote and message —
+// so the transaction has to exist first. That is what the operator flow looks
+// like too: run the delivery, it stops at APPROVAL_REQUIRED having written down
+// exactly what it intends, and only then is there something to sign.
+export function approve(fx, runId, extra = {}) {
+  if (!DEL.readTransaction(DEL.deliveryPathFor(join(fx.repo, ".sch-loop"), runId)))
+    DEL.deliverRun({ projectId: fx.P, runId });
+  return DEL.approveDelivery(fx.P, runId, { approver: "test-operator", why: "fixture", ...extra });
+}
+export const deliver = (fx, runId, extra = {}) => DEL.deliverRun({ projectId: fx.P, runId, ...extra });
+
+// Record every git argv SCH runs, so a test can assert on what was NOT run.
+export function recordGit() {
+  const calls = [];
+  CAND.setGitAudit((args) => calls.push(args.join(" ")));
+  return { calls, stop: () => CAND.gitAuditOff() };
+}

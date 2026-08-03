@@ -97,6 +97,23 @@ for (const [cond, msg] of [
     [workspace.includes('WORKSPACE = ".sch-loop"'), "the workspace directory must be exactly .sch-loop"],
   ]) ok(cond, msg);
 
+  // 6c. the delivery controller. These are the guarantees the README makes
+  // about the only component allowed to push, so they are enforced rather than
+  // trusted: a regression here reaches a remote before anyone notices.
+  const candidate = read("scripts/candidate.mjs");
+  const delivery = read("scripts/delivery.mjs");
+  for (const [cond, msg] of [
+    [/FORBIDDEN_ARGV\s*=\s*\[/.test(candidate), "candidate.mjs must keep the forbidden git argv table"],
+    [candidate.includes("assertSafeGitArgs"), "every git call must pass through assertSafeGitArgs"],
+    // the controller must own no git execution path that skips the guard
+    [!/\bspawnSync\(\s*["']git["']/.test(delivery), "delivery.mjs must not spawn git directly — it goes through candidate.mjs's gitRun"],
+    [!/execFileSync\(\s*["']git["']/.test(delivery), "delivery.mjs must not exec git directly — it goes through candidate.mjs's gitRun"],
+    [delivery.includes("markDelivered"), "only the delivery controller may complete a task"],
+    [delivery.includes("secret-scan.mjs"), "the delivery controller must run the secret gate against staged content"],
+    [/independent_fetch/.test(delivery), "remote verification must fetch independently rather than trust push stdout"],
+    [read("scripts/state.mjs").includes("CONTROLLER_ONLY_STATUSES"), "`delivered` must be unreachable from task-set"],
+  ]) ok(cond, msg);
+
   // The whole point of the narrow ignore rules: never hide the durable record.
   // Checked against the rules the module actually emits, not against its prose.
   const WS = await import("./workspace.mjs");
@@ -119,7 +136,8 @@ for (const [cond, msg] of [
   // shipped — the dashboard died at startup and looked simply "down".
   for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/skills.mjs", "scripts/report.mjs",
                    "scripts/graph.mjs", "scripts/poc.mjs", "scripts/workspace.mjs", "scripts/executor.mjs",
-                   "scripts/runner.mjs", "scripts/sch-run-task.mjs"]) {
+                   "scripts/runner.mjs", "scripts/sch-run-task.mjs", "scripts/candidate.mjs",
+                   "scripts/delivery.mjs", "scripts/sch-deliver-run.mjs"]) {
     try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
     catch (e) {
       const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;
