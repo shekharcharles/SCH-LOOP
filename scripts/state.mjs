@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendF
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import * as SK from "./skills.mjs";
 
 // Skills actually invoked in Claude Code's session transcripts since `sinceMs`.
 // Ground truth the agent cannot fake — used to hard-gate completion.
@@ -683,6 +684,16 @@ const commands = {
       if (rescued) { event(s, `orphan recovery: ${rescued} interrupted task(s) requeued`); saveState(id, s); }
     }
     let verdict;
+    // PAUSED is a state contract, not a suggestion: "no new work may start"
+    // means the pass does not start. Only fires when a capability profile
+    // explicitly sets it — a project without a profile defaults to SINGLE_TASK
+    // and behaves exactly as it always has.
+    const elig = SK.runEligibility(SK.readProfile(getProject(id)));
+    if (!elig.eligible) {
+      s.run = { ...(s.run ?? {}), lastPass: now(), verdict: "PAUSED", intervalMin: Number(flags.interval ?? s.run?.intervalMin ?? 0) || 0 };
+      saveState(id, s);
+      return out(`PAUSED — ${elig.reason}. Resume with: state.mjs profile-set --project ${id} --mode SINGLE_TASK`);
+    }
     // Spend cap first: past it, there is nothing worth loading a pack for.
     const b = budgetStatus(id);
     if (b.over) {
@@ -996,6 +1007,14 @@ const commands = {
     }
     // record which installed skills this task dispatched to (visible on the dashboard)
     if (flags.skills !== undefined) t.skills = [...new Set([...(t.skills ?? []), ...splitList(flags.skills)])];
+    // A TASK-LEVEL skill override outranks every project profile — it is the one
+    // place that knows this particular task is not like its neighbours. It says
+    // which skills to use, never which tools they get.
+    for (const [flag, bucket] of [["skill-required", "required"], ["skill-recommended", "recommended"], ["skill-disabled", "disabled"]])
+      if (flags[flag] !== undefined) {
+        t.skillProfile = t.skillProfile ?? {};
+        t.skillProfile[bucket] = splitList(flags[flag]);
+      }
     // a status note (the "what it's doing" / the blocked question) sticks to the
     // task so the dashboard can surface it, not just log it as an event.
     // The planner's brief is ground truth and must survive status chatter.
@@ -1310,6 +1329,128 @@ const commands = {
     for (const t of s.tasks) by[t.status]++;
     out({ project: p?.name, domain: p?.domain, offensive: OFFENSIVE.has(p?.domain), authorized: p?.scope?.authorized ?? false, expiry: p?.scope?.expiry || "", client: p?.scope?.client || "", tasks: s.tasks.length, byStatus: by, findings: (s.findings ?? []).length, inboxNew: s.inbox.filter((i) => i.status === "new").length });
   },
+  // ---- skill registry + capability profile (see scripts/skills.mjs) --------
+  //
+  // Discovery is READ-ONLY and executes nothing: it reads SKILL.md text, parses
+  // the frontmatter, hashes the body. A skill is never imported, never spawned,
+  // and a script its metadata names is never followed.
+  "skill-discover"({ flags }) {
+    const r = SK.refresh({ repo: flags.repo ?? process.cwd(), global: flags.global !== "false" });
+    out({ discoveredAt: r.discoveredAt, roots: r.roots, found: r.skills.length, warnings: r.warnings });
+  },
+  "skill-list"({ flags }) {
+    const reg = SK.registry({ repo: flags.repo ?? process.cwd(), global: flags.global !== "false" });
+    let rows = reg.skills ?? [];
+    if (flags.trust) rows = rows.filter((s) => s.trust === flags.trust);
+    if (flags.source) rows = rows.filter((s) => s.source_kind === flags.source);
+    if (flags.capability) rows = rows.filter((s) => (s.capabilities ?? []).includes(flags.capability));
+    if (flags["task-type"]) rows = rows.filter((s) => (s.task_types ?? []).includes(flags["task-type"]));
+    out(flags.full === "true" ? rows : rows.map((s) => ({
+      id: s.id, trust: s.trust + (s.stale_approval ? " (stale approval)" : ""),
+      source: s.source_kind, capabilities: s.capabilities, complete: s.capabilities_complete,
+    })));
+  },
+  "skill-get"({ flags, pos }) {
+    const reg = SK.registry({ repo: flags.repo ?? process.cwd(), global: flags.global !== "false" });
+    out(SK.findSkill(reg, flags.id ?? pos[0]) ?? "not found");
+  },
+  // Trust is a human decision. Discovery never promotes anything, and an
+  // approval is recorded against the exact content hash it was given to — edit
+  // the skill and the approval stops applying.
+  "skill-trust"({ flags, pos }) {
+    const id = flags.id ?? pos[0] ?? die("need a skill id");
+    const state = flags.state ?? pos[1] ?? die(`need --state (${SK.SETTABLE_TRUST.join(" | ")})`);
+    try { out(SK.setTrust(id, state, { why: flags.why ?? "" })); } catch (e) { die(e.message); }
+  },
+  "profile-get"({ flags }) { out(SK.readProfile(getProject(pid(flags)))); },
+  // Every write validates first and refuses rather than persisting nonsense.
+  "profile-set"({ flags }) {
+    const r = loadRegistry(); const p = r.projects.find((x) => x.id === pid(flags));
+    if (!p) die("no such project");
+    const prof = SK.readProfile(p);
+    const changes = [];
+    if (flags.mode !== undefined) {
+      if (!SK.EXECUTION_MODES.includes(flags.mode))
+        die(`invalid --mode "${flags.mode}" — use one of: ${SK.EXECUTION_MODES.join(", ")}`);
+      if (prof.execution_mode !== "PAUSED") prof.previous_execution_mode = prof.execution_mode;
+      prof.execution_mode = flags.mode;
+      changes.push(`execution mode -> ${flags.mode}`);
+    }
+    if (flags.resume === "true") {
+      prof.execution_mode = SK.EXECUTION_MODES.includes(prof.previous_execution_mode) && prof.previous_execution_mode !== "PAUSED"
+        ? prof.previous_execution_mode : "SINGLE_TASK";
+      changes.push(`resumed -> ${prof.execution_mode}`);
+    }
+    if (flags["default-skills"] !== undefined || flags["disable-defaults"] !== undefined) {
+      const on = splitList(flags["default-skills"]).map((skill_id) => ({ skill_id, enabled: true }));
+      const off = splitList(flags["disable-defaults"]).map((skill_id) => ({ skill_id, enabled: false }));
+      const merged = new Map((prof.default_skills ?? []).map((d) => [d.skill_id, d]));
+      for (const d of [...on, ...off]) merged.set(d.skill_id, d);
+      prof.default_skills = [...merged.values()];
+      changes.push(`default skills: ${prof.default_skills.map((d) => (d.enabled === false ? "-" : "+") + d.skill_id).join(" ") || "(none)"}`);
+    }
+    const layerKey = flags["task-type"] ? ["task_type_profiles", flags["task-type"]]
+      : flags.phase !== undefined ? ["phase_profiles", String(flags.phase)] : null;
+    if (layerKey) {
+      const [table, name] = layerKey;
+      const layer = { ...(prof[table]?.[name] ?? {}) };
+      for (const [flag, bucket] of [["recommended", "recommended"], ["required", "required"], ["disabled", "disabled"]])
+        if (flags[flag] !== undefined) layer[bucket] = splitList(flags[flag]);
+      prof[table] = { ...(prof[table] ?? {}), [name]: layer };
+      changes.push(`${table === "phase_profiles" ? "phase" : "task-type"} profile "${name}" updated`);
+    }
+    for (const [flag, key] of [["require-approval-on-hash-change", "require_skill_approval_on_hash_change"],
+      ["allow-unreviewed", "allow_unreviewed_skills_during_autonomous_run"]])
+      if (flags[flag] !== undefined) { prof.approval[key] = flags[flag] === "true"; changes.push(`${key} = ${prof.approval[key]}`); }
+
+    const reg = SK.registry({ repo: p.path || process.cwd(), global: flags.global !== "false" });
+    const problems = SK.validateProfile(prof, reg);
+    // A profile that names a blocked skill or an unapproved required skill is not
+    // saved — it would be a run permission nobody granted.
+    const blocking = problems.filter((x) => /BLOCKED|requires|invalid execution_mode|malformed|must be a list/.test(x));
+    if (blocking.length && flags.force !== "true")
+      die("profile REFUSED:\n  " + blocking.join("\n  ") + "\n(fix these, or pass --force to save anyway)");
+    p.capabilities = prof;
+    saveRegistry(r);
+    const s = loadState(p.id); event(s, `capability profile: ${changes.join("; ") || "(no change)"}`); saveState(p.id, s);
+    out({ project: p.id, changes, profile: prof, warnings: problems });
+  },
+  "profile-validate"({ flags }) {
+    const p = getProject(pid(flags));
+    const prof = SK.readProfile(p);
+    const reg = SK.registry({ repo: p?.path || process.cwd(), global: flags.global !== "false" });
+    const problems = SK.validateProfile(prof, reg);
+    out({ project: p?.id, execution_mode: prof.execution_mode, eligibility: SK.runEligibility(prof), problems, ok: problems.length === 0 });
+  },
+  // Which skills for THIS task, and why. Deterministic; loads no skill body.
+  "skill-recommend"({ flags, pos }) {
+    const id = pid(flags); const p = getProject(id);
+    const prof = SK.readProfile(p);
+    const reg = SK.registry({ repo: p?.path || process.cwd(), global: flags.global !== "false" });
+    let taskType = flags.type ?? null, phase = flags.phase ?? null, files = splitList(flags.files), overrides = null;
+    const tid = Number(flags.task ?? pos[0]);
+    if (Number.isFinite(tid) && tid > 0) {
+      const t = loadState(id).tasks.find((x) => x.id === tid);
+      if (!t) die(`no task #${tid} in ${id}`);
+      taskType = taskType ?? t.category ?? null;
+      phase = phase ?? t.phase;
+      files = files.length ? files : (t.files ?? []);
+      overrides = t.skillProfile ?? null;
+    }
+    out(SK.recommend({
+      profile: prof, reg, taskType: taskType || null, phase, files, overrides,
+      autonomous: flags.autonomous !== "false",
+    }));
+  },
+  // The one /SCH command table — the router skill, the CLI and the dashboard all
+  // read this, so what they say about a command cannot drift apart.
+  "sch-commands"({ flags, pos }) {
+    const name = flags.name ?? pos[0];
+    if (!name) return out(SK.SCH_COMMANDS);
+    const c = SK.resolveCommand(name);
+    out(c ?? { error: `unknown /SCH command "${name}"`, available: SK.SCH_COMMANDS.map((x) => x.name) });
+  },
+
   help() { out("commands: " + Object.keys(commands).join(", ")); },
 };
 
@@ -1318,7 +1459,8 @@ const commands = {
 const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-from-auth",
   "auth-add", "auth-add-domain", "auth-remove", "cr-new", "task-add", "task-set",
   "finding-add", "finding-set", "inbox-add", "inbox-mark",
-  "coverage-add", "coverage-set", "session-set", "session-fail"]);
+  "coverage-add", "coverage-set", "session-set", "session-fail",
+  "skill-discover", "skill-trust", "profile-set"]);
 
 // Commands that mutate state must hold the write lock for the whole
 // read-modify-write, or concurrent writers (parallel waves + dashboard) clobber

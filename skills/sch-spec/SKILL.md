@@ -291,6 +291,25 @@ Then: `/loop 15m /sch-run --project <slug>`.
 
 ---
 
+## The specification contract (both shapes)
+
+Specification is **interactive** and produces structured state, not code.
+
+- **Identify what is missing.** Name the product facts you do not have rather
+  than filling them in silently. A gap the operator can close in one line is
+  worth asking about; one you can defensibly default, default and say so.
+- **Separate requirement from assumption.** A requirement came from the
+  operator. An assumption came from you. Write them as different things in
+  `PRD.md` / `SCOPE.md` — an assumption promoted to a requirement by tidy prose
+  is how a product ends up built to nobody's specification.
+- **Record decisions where they survive.** The contract file for anything that
+  binds the build; `state.mjs event-add --text "DECISION: … — because …"` for the
+  reasoning, so the next fresh context can find out why.
+- **Options, not answers, are `/SCH brainstorm`'s job.** If the operator needs
+  to weigh alternatives, hand off there and come back with what they chose.
+- **Write no implementation code.** Spec produces the contract, the registered
+  project and a planned queue. Nothing else.
+
 ## Rules
 
 - Offensive: a client on record = zero friction; the user relaying an asset is

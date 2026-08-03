@@ -345,6 +345,46 @@ the genuinely-blocked one as the DECISION task.
 
 ---
 
+## 8. Approve the execution profile before you finish (interactive runs)
+
+Planning ends with the operator agreeing **how this project may execute**, not
+just what it will do. Do this once per project, and again whenever the shape
+changes; skip it for the unattended inbox-folding pass.
+
+```bash
+node scripts/state.mjs skill-recommend --project <id> --type frontend   # per task type in the plan
+node scripts/state.mjs profile-get --project <id>
+```
+
+Play back three things and get agreement:
+
+1. **Execution mode** — `SINGLE_TASK` (one task, then stop), `SUPERVISED_PHASE`
+   (the current phase, stopping at its boundary and at every human gate),
+   `AUTONOMOUS_PROJECT` (across eligible phases until a terminal state or a
+   safety gate), or `PAUSED`. There is no unlimited mode. Every mode remains
+   subject to retries, time, token and cost limits, approval gates,
+   authorization, Git safety and cancellation.
+2. **Skills per task type** — from `skill-recommend`, which gives a reason for
+   each. The operator approves or edits the list; they should never have to
+   recall skill names from memory.
+3. **Human gates** — which tasks stop for a person no matter the mode.
+
+Persist what they agreed:
+
+```bash
+node scripts/state.mjs profile-set --project <id> --mode SUPERVISED_PHASE \
+  --task-type frontend --recommended "impeccable|taste-skill" \
+  --default-skills "superpowers-brainstorming"
+node scripts/state.mjs profile-validate --project <id>
+```
+
+An **UNREVIEWED, DISABLED or BLOCKED** skill is never selected for autonomous
+use, and a skill whose content changed since approval is stale. Both are
+resolved by a human (`skill-trust <id> --state APPROVED`), never by the planner.
+
+**Planning never starts the run.** End by telling the operator the one command
+to run, and stop.
+
 ## Rules
 
 - Never duplicate an existing task — check `task-list` first.
