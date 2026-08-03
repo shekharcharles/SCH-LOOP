@@ -14,6 +14,7 @@ import { statSync } from "node:fs";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
 import { projection as capabilityProjection } from "./skills.mjs";
 import { runProjection } from "./runner.mjs";
+import { deliveryProjection } from "./delivery.mjs";
 import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats, logQuery } from "./graph.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
@@ -31,7 +32,10 @@ function rollup() {
   return reg.projects.map((p) => {
     const s = loadState(p.id);
     const c = (st) => s.tasks.filter((t) => t.status === st).length;
-    const total = s.tasks.filter((t) => t.status !== "superseded").length, done = c("merged");
+    // "delivered" counts as done alongside "merged": the first means the commit
+    // reached and was verified on the remote, the second that the in-session
+    // loop finished it locally. Both are finished work; only one was pushed.
+    const total = s.tasks.filter((t) => t.status !== "superseded").length, done = c("merged") + c("delivered");
     const status = total === 0 ? "new" : (c("stuck") || c("blocked")) ? "attention" : done === total ? "completed" : (c("building") || c("review") || c("changes")) ? "active" : "inprogress";
     // Blockers travel with the rollup so the home page can answer questions from
     // every project at once — the operator is on a phone and should not have to
@@ -213,6 +217,16 @@ const server = createServer(async (req, res) => {
     const project = url.searchParams.get("project");
     if (!getProject(project)) return json(res, { error: "no such project" });
     try { return json(res, runProjection(project, { limit: Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || 10))) })); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // Git delivery transactions for one project: what is being pushed, where it
+  // stands, and whether it is waiting on a person to approve it. READ ONLY —
+  // approving and delivering are operator authority and stay on the CLI until
+  // this dashboard has authentication, which it does not.
+  if (url.pathname === "/api/deliveries") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, deliveryProjection(project, { limit: Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || 10))) })); }
     catch (e) { return json(res, { error: e.message }); }
   }
   if (url.pathname === "/api/graph-map") {

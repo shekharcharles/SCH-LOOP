@@ -263,11 +263,60 @@ export function validateWorkspace({ projectId, repoPath }) {
 export const runsDir = (wsDir) => join(wsDir, "runs");
 export const locksDir = (wsDir) => join(wsDir, "locks");
 export const runDir = (wsDir, runId) => join(runsDir(wsDir), runId);
+export const deliveryDir = (wsDir, runId) => join(runDir(wsDir, runId), "delivery");
 export const handoffDir = (wsDir, taskId) => join(wsDir, "handoffs", String(taskId));
 
-// Paths inside the workspace that a WORKER may never touch: its own evidence,
-// the lease that says it may run at all, and the manifest that identifies the
-// project. Checked against actual git effects, not against a promise.
-export const WORKER_FORBIDDEN = [
-  `${WORKSPACE}/runs/`, `${WORKSPACE}/locks/`, `${WORKSPACE}/${MANIFEST}`, ".git/",
+// ------------------------------------------------------- worker path policy
+//
+// DEFAULT DENY for the whole workspace. `.sch-loop/` is SCH's control state: an
+// application-development task has no business editing the spec, the plan, the
+// queue, a decision record or a handoff, and the first version of this list —
+// which denied only runs/, locks/ and the manifest — left every one of those
+// writable by any task whose allow-list happened to be broad.
+//
+// These are absolute. No task policy can re-open them, because they are the
+// evidence and the identity the controller grades the worker against.
+export const WORKSPACE_ALWAYS_DENY = [
+  `${WORKSPACE}/${MANIFEST}`,
+  ...RUNTIME_DIRS.map((d) => `${WORKSPACE}/${d}/`),
 ];
+
+// Durable categories a task MAY be explicitly authorized to write, one at a
+// time (`task.controlCategory`). Everything here is denied unless named.
+export const WORKSPACE_DURABLE_CATEGORIES = {
+  spec: `${WORKSPACE}/SPEC.md`,
+  plan: `${WORKSPACE}/PLAN.md`,
+  queue: `${WORKSPACE}/TASK-QUEUE.md`,
+  learning: `${WORKSPACE}/LEARNING.md`,
+  phases: `${WORKSPACE}/phases/`,
+  tasks: `${WORKSPACE}/tasks/`,
+  decisions: `${WORKSPACE}/decisions/`,
+  handoffs: `${WORKSPACE}/handoffs/`,
+};
+
+// `.git/` is never negotiable either. Kept separate from the workspace rules so
+// the reason each path is denied stays legible.
+export const WORKER_FORBIDDEN = [".git/", `${WORKSPACE}/`];
+
+// Is a repository-relative path SCH control state a worker must not touch?
+// `controlCategory` names at most one durable category the task authorizes.
+export function workerDenied(rel, { controlCategory = null } = {}) {
+  const p = String(rel ?? "").replace(/\\/g, "/");
+  if (p === ".git" || p.startsWith(".git/")) return { denied: true, why: "`.git/` is never writable by a worker" };
+  if (p !== WORKSPACE && !p.startsWith(`${WORKSPACE}/`)) return { denied: false };
+  for (const deny of WORKSPACE_ALWAYS_DENY)
+    if (p === deny.replace(/\/$/, "") || p.startsWith(deny)) return { denied: true, why: `${deny} is SCH-owned and never writable by a worker` };
+  const allow = controlCategory ? WORKSPACE_DURABLE_CATEGORIES[controlCategory] : null;
+  if (allow && (p === allow.replace(/\/$/, "") || p.startsWith(allow) || p === allow))
+    return { denied: false, why: `authorized by this task's control category "${controlCategory}"` };
+  return { denied: true, why: `${WORKSPACE}/ is SCH control state — a task must name a control category to write here` };
+}
+
+// Runtime paths are ignored, so an uncommitted change to one of them is not the
+// operator's work in progress. Everything else under `.sch-loop/` — the spec,
+// the plan, a decision, a promoted handoff — is durable project content and
+// MUST participate in dirty-tree and diff inspection like any other file.
+export function isRuntimePath(rel) {
+  const p = String(rel ?? "").replace(/\\/g, "/");
+  return RUNTIME_DIRS.some((d) => p === `${WORKSPACE}/${d}` || p.startsWith(`${WORKSPACE}/${d}/`));
+}

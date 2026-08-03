@@ -300,7 +300,9 @@ test("handoff: the human-readable handoff separates reported, observed and verif
     write: [{ path: "src/doc.js", content: "doc\n" }],
     handoff: { summary: "I changed everything perfectly", files_reported_changed: ["src/doc.js", "src/lies.js"] },
   }));
-  const md = readFileSync(join(fx.repo, ".sch-loop", "handoffs", String(t), `${rec.run_id}.md`), "utf8");
+  // The RAW handoff lives with the run's other evidence, in the ignored run
+  // directory. Promotion into `.sch-loop/handoffs/` is a separate act.
+  const md = readFileSync(join(rec.run_dir, "handoff.md"), "utf8");
   assert.match(md, /## Worker reported \(UNTRUSTED/);
   assert.match(md, /## System observed/);
   assert.match(md, /## System verified/);

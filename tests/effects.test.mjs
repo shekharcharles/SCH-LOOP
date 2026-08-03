@@ -105,20 +105,21 @@ test("effects: the worker writing into .git/ is caught", async () => {
   fx.done();
 });
 
-test("effects: the worker writing into .sch-loop/runs or .sch-loop/locks is refused", async () => {
+test("effects: the whole of .sch-loop/ is denied to a worker, category or not", async () => {
   const fx = fixture("ef-evidence"); initWorkspace(fx);
   const t = addTask(fx, { allow: ".sch-loop/**", forbid: "" });
-  // .sch-loop/runs and .sch-loop/locks are runner-owned whatever the task says,
-  // so an "allow everything under .sch-loop" policy still cannot reach them.
-  const c = RUN.classifyPath(fx.repo, ".sch-loop/runs/RUN-x/stdout.log", { allowed: [".sch-loop/**"], forbidden: [] });
+  const broad = { allowed: [".sch-loop/**"], forbidden: [] };
+  // Runner-owned evidence and the manifest are denied under EVERY policy.
+  const c = RUN.classifyPath(fx.repo, ".sch-loop/runs/RUN-x/stdout.log", broad);
   assert.equal(c.verdict, "REJECTED");
   assert.match(c.why, /\.sch-loop\/runs\//);
-  const l = RUN.classifyPath(fx.repo, ".sch-loop/locks/task-1.json", { allowed: [".sch-loop/**"], forbidden: [] });
-  assert.equal(l.verdict, "REJECTED");
-  const m = RUN.classifyPath(fx.repo, ".sch-loop/project.yaml", { allowed: [".sch-loop/**"], forbidden: [] });
-  assert.equal(m.verdict, "REJECTED", "the manifest identifies the project — the worker may not rewrite it");
-  const ok = RUN.classifyPath(fx.repo, ".sch-loop/SPEC.md", { allowed: [".sch-loop/**"], forbidden: [] });
-  assert.equal(ok.verdict, "ALLOWED");
+  assert.equal(RUN.classifyPath(fx.repo, ".sch-loop/locks/task-1.json", broad).verdict, "REJECTED");
+  assert.equal(RUN.classifyPath(fx.repo, ".sch-loop/project.yaml", broad).verdict, "REJECTED",
+    "the manifest identifies the project — the worker may not rewrite it");
+  // And durable control state is denied too, unless the task names its category.
+  assert.equal(RUN.classifyPath(fx.repo, ".sch-loop/SPEC.md", broad).verdict, "REJECTED",
+    "an allow-list must not be able to reach SCH's own spec");
+  assert.equal(RUN.classifyPath(fx.repo, ".sch-loop/SPEC.md", { ...broad, controlCategory: "spec" }).verdict, "ALLOWED");
   assert.equal(t > 0, true);
   fx.done();
 });

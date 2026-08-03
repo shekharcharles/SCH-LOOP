@@ -265,7 +265,7 @@ test("learning: a candidate lesson keeps its provenance and becomes no policy", 
   // knowledge store — only into this run's evidence, with the run id attached.
   assert.equal(existsSync(join(fx.repo, ".sch-loop", "LEARNING.md")), false);
   assert.equal(existsSync(join(fx.repo, "CLAUDE.md")), false);
-  const md = readFileSync(join(fx.repo, ".sch-loop", "handoffs", String(t), `${rec.run_id}.md`), "utf8");
+  const md = readFileSync(join(rec.run_dir, "handoff.md"), "utf8");
   assert.match(md, /Candidate lessons it proposed \(NOT policy/);
   assert.match(md, /always uses tabs/);
   fx.done();

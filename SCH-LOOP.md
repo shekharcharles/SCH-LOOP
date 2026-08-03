@@ -29,10 +29,27 @@ cleared terminal are not. SCH owns the timeout, the kill, the lease, the prompt,
 the effect inspection and the verification; the worker cannot mark itself
 verified. A task needs `--allow`, `--forbid` and `--verify` before it is eligible.
 Evidence lands in `<repo>/.sch-loop/runs/<run-id>/` (ignored) with the readable
-handoff in `.sch-loop/handoffs/<task>/<run>.md` (trackable). `VERIFIED` means the
+handoff at `.sch-loop/runs/<run-id>/handoff.md` (raw, ignored; promoted into
+`.sch-loop/handoffs/` only on delivery or `handoff-promote`). `VERIFIED` means the
 change is in policy and the required commands passed — **not** committed, **not**
-pushed, and the task is **not** done. Automatic retry, queue continuation and any
-target-project commit/push are the NEXT milestone and do not exist.
+pushed, and the task is **not** done.
+
+`.sch-loop/` is SCH control state: a worker is **denied all of it** unless the
+task names one durable category (`--control-category decisions`). Only the
+ignored runtime dirs are exempt from the clean-tree gate — an uncommitted
+`SPEC.md`, decision or promoted handoff blocks a run.
+
+**Delivery (one run, one commit, then stop):**
+`sch-deliver-run.mjs --project <id> --run <RUN-id>`. It is the only thing allowed
+to stage, commit or push a managed project. It recomputes the verified content
+hashes and refuses on any drift, requires an operator approval bound to that
+exact diff/branch/remote/message, stages explicit pathspecs after `--`, runs the
+secret gate on staged content, makes one commit, blocks on any incoming or
+unrelated outgoing commit, pushes without force, then **fetches again and asks
+the remote** before marking the task `delivered` (a terminal status distinct from
+`merged`, unreachable from `task-set`). Approve with
+`state.mjs delivery-approve --run <RUN-id> --approver <you>`. Sequential queue
+continuation and automatic retry are the NEXT milestone and do not exist.
 
 **Interval:** ask the engine, don't guess —
 `state.mjs interval-advice --project <id>` (also shown on the dashboard). A pass
