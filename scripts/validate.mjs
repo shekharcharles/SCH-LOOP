@@ -80,6 +80,33 @@ for (const [cond, msg] of [
   [review.includes("Definition of Done"), "sch-review must validate the Definition-of-Done checklist"],
 ]) ok(cond, msg);
 
+// 6b. the supervised runner's structural guarantees. These are the claims the
+// README makes about it; a claim nothing enforces is the exact class of drift
+// this file exists to catch.
+{
+  const runner = read("scripts/runner.mjs");
+  const executor = read("scripts/executor.mjs");
+  const workspace = read("scripts/workspace.mjs");
+  for (const [cond, msg] of [
+    [executor.includes("ENV_ALLOW"), "executor must build the worker environment from an allowlist, not the parent environment"],
+    [!/ENV_ALLOW\s*=\s*\[[^\]]*"SCH_HOME"/s.test(executor), "SCH_HOME must never be passed to a worker — it is the state that grades it"],
+    [executor.includes("spawn("), "the worker must be spawned with an argument array, never an interpolated shell string"],
+    [runner.includes("FORBIDDEN_GIT_EFFECT"), "the runner must classify worker-created git effects"],
+    [runner.includes("WORKER_FORBIDDEN"), "the runner must apply the runner-owned forbidden paths to every effect"],
+    [/GIT_READONLY\s*=\s*new Set/.test(runner), "verification must allow git subcommands by allowlist, not by deny-list"],
+    [workspace.includes('WORKSPACE = ".sch-loop"'), "the workspace directory must be exactly .sch-loop"],
+  ]) ok(cond, msg);
+
+  // The whole point of the narrow ignore rules: never hide the durable record.
+  // Checked against the rules the module actually emits, not against its prose.
+  const WS = await import("./workspace.mjs");
+  const emitted = WS.RUNTIME_DIRS.map((d) => `${WS.WORKSPACE}/${d}/`);
+  ok(!emitted.some((r) => /^\.sch-loop\/?$/.test(r)),
+    "the workspace must never emit a bare .sch-loop/ ignore rule — that hides the durable project record");
+  for (const t of WS.TRACKED_PATHS)
+    ok(!emitted.some((r) => t.startsWith(r)), `the durable path ${t} must not fall under an ignore rule`);
+}
+
 // 7. the dashboard's CLIENT script must parse.
 // dashboard.mjs serves its whole UI from one JS template literal, so a stray
 // backtick inside it — in a comment, even — ends the string early and the
@@ -90,7 +117,9 @@ for (const [cond, msg] of [
   // First the module itself: a stray backtick inside the template ENDS the
   // template, and the file stops parsing. That is the failure that actually
   // shipped — the dashboard died at startup and looked simply "down".
-  for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/skills.mjs", "scripts/report.mjs", "scripts/graph.mjs", "scripts/poc.mjs"]) {
+  for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/skills.mjs", "scripts/report.mjs",
+                   "scripts/graph.mjs", "scripts/poc.mjs", "scripts/workspace.mjs", "scripts/executor.mjs",
+                   "scripts/runner.mjs", "scripts/sch-run-task.mjs"]) {
     try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
     catch (e) {
       const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;

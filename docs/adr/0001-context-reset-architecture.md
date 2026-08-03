@@ -62,10 +62,21 @@ the invariant the external runner must preserve.
 - `/clear` remains a convenience for the human. It is not the mechanism, and no
   design may depend on it.
 
-## Not implemented here
+## Status
 
-Stage 0 records this and builds the contracts it needs (execution modes, the
-capability profile, deterministic skill recommendation). It does **not** spawn
-worker processes. Next milestone: implement the supervised external single-task
-Claude CLI runner using fresh worker processes, the approved project capability
-profile, deterministic effect inspection and no target-project commit or push.
+Stage 0 recorded this decision and built the contracts it needs (execution modes,
+the capability profile, deterministic skill recommendation) without spawning
+anything. The next milestone implemented the decision: `scripts/executor.mjs`
+starts a **fresh external `claude` process per attempt** and
+`scripts/sch-run-task.mjs` runs exactly one task through it. A new process is the
+context boundary; there is no session to reuse, so the invariant is structural
+rather than a rule anyone has to follow.
+
+Continuity comes from what the ADR requires it to come from: `$SCH_HOME` state,
+the per-project `.sch-loop/` workspace, Git, and the run artifacts under
+`.sch-loop/runs/<run-id>/`. The controller outliving its workers is enforced by
+the task lease (stale-lease recovery, released on success, failure, timeout,
+cancellation and exception) and by every run reaching a terminal outcome on disk.
+
+Still not implemented: retry (which this ADR defines as a *new process*, never a
+repaired conversation), queue continuation, and any target-project commit or push.

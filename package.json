@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test.mjs",
+    "test": "node --test test.mjs \"tests/*.test.mjs\"",
     "validate": "node scripts/validate.mjs",
     "check": "npm run validate && npm test && npm run doctor",
     "dashboard": "node scripts/dashboard.mjs",

@@ -172,6 +172,15 @@ export function addTask(state, t) {
     // the discovery is paid once — and so the engine can tell which ready tasks
     // sit on the SAME files and could share one subagent's ground truth.
     files: t.files ?? [],
+    // The task's PATH POLICY and its REQUIRED VERIFICATION. These are the two
+    // things the external runner enforces mechanically: a worker may only touch
+    // allowedPaths, may never touch forbiddenPaths, and "it works" means these
+    // commands passed in SCH's own process — not that the worker said so.
+    // Absent = the task is not eligible for an autonomous run; the in-session
+    // loop is unaffected, which is why every existing task keeps working.
+    allowedPaths: t.allowedPaths ?? [],
+    forbiddenPaths: t.forbiddenPaths ?? [],
+    verify: t.verify ?? [],
     // A question for the operator MUST be born blocked. Creating it queued and
     // blocking it in a second call is how three real questions ended up invisible:
     // the second call was simply never made, so they sat in the queue looking like
@@ -477,6 +486,13 @@ function parseFlags(argv) {
   return { flags, pos };
 }
 const splitList = (s) => (s ? s.split(/\s*\|\s*|\n/).map((x) => x.trim()).filter(Boolean) : []);
+// A verification command is an executable and its arguments — never a shell
+// string. Splitting on whitespace here is what makes that structural: there is
+// no place for a `;` or a `&&` to mean anything.
+const parseVerify = (s, from = 1) => splitList(s).map((c, i) => {
+  const parts = c.split(/\s+/).filter(Boolean);
+  return { id: `VER-${from + i}`, exe: parts[0], args: parts.slice(1) };
+});
 const out = (v) => console.log(typeof v === "string" ? v : JSON.stringify(v, null, 2));
 // Resolve the project from the current working directory, so --project is
 // optional: run the command from inside a project's folder and it just works.
@@ -915,7 +931,8 @@ const commands = {
 
   "task-add"({ flags }) {
     const id = pid(flags); const s = loadState(id);
-    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status, files: splitList(flags.files) });
+    const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status, files: splitList(flags.files),
+      allowedPaths: splitList(flags.allow), forbiddenPaths: splitList(flags.forbid), verify: parseVerify(flags.verify) });
     saveState(id, s); out(t.id.toString());
   },
   "task-list"({ flags }) {
@@ -984,6 +1001,11 @@ const commands = {
     // the files this task touches — what locate-first found, so it is never
     // rediscovered and co-located tasks can be batched
     if (flags.files !== undefined) t.files = [...new Set([...(t.files ?? []), ...splitList(flags.files)])];
+    // The run policy REPLACES rather than merges: a path policy you cannot
+    // narrow is not a policy, and appending would only ever widen it.
+    if (flags.allow !== undefined) t.allowedPaths = splitList(flags.allow);
+    if (flags.forbid !== undefined) t.forbiddenPaths = splitList(flags.forbid);
+    if (flags.verify !== undefined) t.verify = parseVerify(flags.verify);
     // what the work actually cost. Without this "are tokens going down?" is
     // unanswerable, and every efficiency change is a guess.
     // Guard the arithmetic: Number("unknown") is NaN, and a NaN written here would
@@ -1451,6 +1473,65 @@ const commands = {
     out(c ?? { error: `unknown /SCH command "${name}"`, available: SK.SCH_COMMANDS.map((x) => x.name) });
   },
 
+  // ---- the per-project `.sch-loop/` workspace ------------------------------
+  // Explicit and idempotent. A run REQUIRES an initialized workspace and will
+  // not create one for you: silently initializing a repository immediately
+  // before writing to it is how a runner ends up creating a workspace in the
+  // wrong folder and calling it success.
+  async "workspace-init"({ flags }) {
+    const id = pid(flags); const p = getProject(id);
+    if (!p) die("no such project: " + id);
+    const WS = await import("./workspace.mjs");
+    let r;
+    try { r = WS.initWorkspace({ projectId: id, repoPath: flags.path ?? p.path }); }
+    catch (e) { die(`${e.code ?? "WORKSPACE_INVALID"} — ${e.message}`); }
+    const s = loadState(id);
+    event(s, `workspace ${r.created ? "initialized" : "revalidated"} at ${WS.WORKSPACE}/${r.ignore.changed ? " (+ runtime ignore rules)" : ""}`);
+    saveState(id, s);
+    if (r.ignore.overBroad)
+      process.stderr.write(`[workspace] warning: .gitignore ignores ALL of ${WS.WORKSPACE}/ — the durable project record (project.yaml, SPEC, PLAN, decisions, handoffs) is meant to be trackable. Narrow that rule.\n`);
+    out({ workspace: r.dir, repository_root: r.root, created: r.created, manifest: r.manifest, ignore: r.ignore,
+      next: "commit .sch-loop/project.yaml and the .gitignore rules — a run requires a clean working tree" });
+  },
+  async "workspace-status"({ flags }) {
+    const id = pid(flags); const p = getProject(id);
+    if (!p) die("no such project: " + id);
+    const WS = await import("./workspace.mjs");
+    out(WS.validateWorkspace({ projectId: id, repoPath: flags.path ?? p.path }));
+  },
+
+  // ---- external single-task runs -------------------------------------------
+  // Reads only. Starting a run is `scripts/sch-run-task.mjs` — a separate
+  // entry point on purpose, so nothing in the normal CLI surface can launch a
+  // worker process as a side effect of a status query.
+  async "run-list"({ flags }) {
+    const R = await import("./runner.mjs");
+    out(R.runProjection(pid(flags), { limit: Number(flags.limit ?? 10) }));
+  },
+  async "run-get"({ flags, pos }) {
+    const R = await import("./runner.mjs");
+    const runId = flags.run ?? pos[0] ?? die("need --run <RUN-id>");
+    try {
+      const r = R.readRun(pid(flags), runId);
+      // stdout/stderr stay on disk: they are unbounded and may contain anything.
+      out({ ...r, stdout: r.stdout === null ? null : `[${r.stdout.length} chars in ${r.dir}/stdout.log]`,
+                  stderr: r.stderr === null ? null : `[${r.stderr.length} chars in ${r.dir}/stderr.log]` });
+    } catch (e) { die(e.message); }
+  },
+  async "run-cancel"({ flags, pos }) {
+    const id = pid(flags); const p = getProject(id);
+    if (!p) die("no such project: " + id);
+    const [WS, R] = [await import("./workspace.mjs"), await import("./runner.mjs")];
+    const runId = flags.run ?? pos[0] ?? die("need --run <RUN-id>");
+    try {
+      const wsDir = WS.resolveWorkspaceDir(WS.repositoryRoot(p.path) ?? p.path, { mustExist: true });
+      const r = R.cancelRun(wsDir, runId, flags.reason ?? "operator cancelled");
+      if (!r.ok) die(r.message);
+      const s = loadState(id); event(s, `run ${runId} cancellation requested: ${r.reason}`); saveState(id, s);
+      out(r);
+    } catch (e) { die(e.message); }
+  },
+
   help() { out("commands: " + Object.keys(commands).join(", ")); },
 };
 
@@ -1460,7 +1541,7 @@ const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-f
   "auth-add", "auth-add-domain", "auth-remove", "cr-new", "task-add", "task-set",
   "finding-add", "finding-set", "inbox-add", "inbox-mark",
   "coverage-add", "coverage-set", "session-set", "session-fail",
-  "skill-discover", "skill-trust", "profile-set"]);
+  "skill-discover", "skill-trust", "profile-set", "workspace-init", "run-cancel"]);
 
 // Commands that mutate state must hold the write lock for the whole
 // read-modify-write, or concurrent writers (parallel waves + dashboard) clobber

@@ -912,8 +912,12 @@ test("skills: /SCH routing metadata is complete and case-insensitive", () => {
   assert.equal(fx.J("sch-commands", "PLAN").name, "plan");
   assert.equal(fx.J("sch-commands", "Brainstorm").name, "brainstorm");
   assert.ok(fx.J("sch-commands", "nonsense").error);
-  // the autonomous runner must not be advertised as working
-  assert.match(all.find((c) => c.name === "run").note, /EXTERNAL autonomous runner .*not implemented/);
+  // The supervised single-task runner exists and is routable; what must NOT be
+  // advertised as working is everything past it — retry, queue continuation, and
+  // any target-project commit or push.
+  assert.ok(names.includes("run-task"), "the supervised external runner must be routable");
+  assert.match(all.find((c) => c.name === "run").note, /automatic retry, queue continuation and any target-project commit\/push are not implemented/);
+  assert.match(all.find((c) => c.name === "run-task").note, /VERIFIED is not committed, pushed or done/);
   fx.done();
 });
 

@@ -119,6 +119,17 @@ scripts/state.mjs         Engine + CLI: multi-project registry, tasks, findings,
 scripts/skills.mjs        Skill registry: read-only discovery of installed skills (built-in, repo,
                           commands, plugins, global), content hashing, trust states, per-project
                           capability profile, execution modes, deterministic task→skill advice.
+scripts/workspace.mjs     The canonical per-project `.sch-loop/` workspace: init, versioned
+                          manifest, path containment, symlink/junction refusal, narrow
+                          runtime ignore rules (the durable record stays trackable).
+scripts/executor.mjs      Provider-neutral AgentExecutor + ClaudeCliExecutor: a fresh
+                          external worker process, allowlisted environment, SCH-owned
+                          timeout/cancel, process-tree kill, bounded output.
+scripts/runner.mjs        The supervised single-task orchestrator: preflight, lease,
+                          baseline, prompt compilation, handoff parsing, ACTUAL git-effect
+                          inspection, deterministic verification, outcome, run events.
+scripts/sch-run-task.mjs  CLI for one supervised run: --project <id> --task <n>. One task,
+                          one attempt, then stop. Never stages, commits or pushes.
 scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project control,
                           answer box, skill picker, filter; fluid, no flicker. Port 4600.
 scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
@@ -185,6 +196,10 @@ profile-get | profile-set --mode <mode> [--task-type <t> --recommended a|b] | pr
 skill-recommend --project <id> [--task <n> | --type <t> --phase <n> --files a|b]
 sch-commands [<name>]                                (the /SCH command table)
 task-add | task-list [--status] | task-set <n> --status ... | task-next | task-answer   (all --project)
+task-add / task-set --allow "src/**|tests/**" --forbid "..." --verify "npm test"   (run policy)
+workspace-init | workspace-status                    (the per-project .sch-loop/ workspace)
+run-list [--limit n] | run-get --run <RUN-id> | run-cancel --run <RUN-id>
+sch-run-task.mjs --project <id> --task <n> [--preflight-only]   (one supervised run)
 finding-add | finding-list | finding-set | chains   (offensive)
 retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
 provenance --ref <auth-ref>                          (who shared which asset, when, how)
@@ -230,16 +245,96 @@ autonomous use. A project without a profile keeps working on safe defaults.
 Unified `/SCH` routing contract · skill discovery + trust records · project
 capability profiles · deterministic task→skill recommendation · execution-mode
 configuration and validation · dashboard-readable capability state
-(`/api/capabilities`) · the in-session loop (`/sch-run`) that has always existed.
+(`/api/capabilities`) · the in-session loop (`/sch-run`) that has always existed ·
+the **supervised external single-task runner** below.
 
 ### Planned, and NOT implemented
 
-Autonomous execution driven from outside the session · fresh Claude worker
-processes per task · a Git transaction controller · an authenticated dashboard ·
-an SCH MCP · the structured learning database (see `docs/adr/0002`) · automatic
-queue continuation · parallel worktrees · automatic commit and push. `/SCH run`
-runs today's in-session loop; nothing here simulates the runner that does not
-exist yet.
+Automatic retry and repair · sequential queue continuation · an independent
+semantic reviewer · a target-project Git transaction controller · automatic
+commit, push and remote verification · dashboard authentication · a full SCH MCP ·
+automatic knowledge ingestion · parallel Git worktrees · graph fan-out and joins ·
+distributed workers · SQLite / event-sourced operational state. The runner below
+is **one task, one attempt, then stop** — it never commits and never pushes.
+
+## 🧪 Supervised external single-task runner
+
+```bash
+node scripts/state.mjs workspace-init --project <id>     # once per repository
+node scripts/state.mjs task-set <n> --project <id> \
+     --allow "src/**|tests/**" --forbid "src/generated/**" --verify "npm test"
+node scripts/sch-run-task.mjs --project <id> --task <n>
+```
+
+One explicitly selected, pre-approved task runs in a **fresh external `claude`
+process**. A new process per attempt IS the fresh-context guarantee — it is
+structural, not a sentence in a prompt, and clearing a terminal is not a context
+reset. The outer runner owns everything the worker must not: task selection,
+eligibility, skill selection, prompt compilation, timeout, cancellation, process
+cleanup, the task lease, effect inspection, verification, and the outcome. **The
+worker cannot mark its own work verified.**
+
+**`.sch-loop/` — the canonical per-project workspace** (exactly that spelling,
+lowercase, at the repository root). Tracked when present: `project.yaml` (a
+versioned manifest carrying `repository_root: .`, never a machine path), `SPEC.md`,
+`PLAN.md`, `TASK-QUEUE.md`, `LEARNING.md`, `phases/`, `tasks/`, `decisions/`,
+`handoffs/`. Ignored by default: `runs/`, `artifacts/`, `logs/`, `cache/`,
+`locks/`, `tmp/` — raw prompts, stdout and evidence can contain anything. The
+whole directory is **never** ignored wholesale. `workspace-init` is idempotent,
+preserves existing planning files, and refuses a `.sch-loop` symlink/junction, a
+conflicting manifest, a foreign project id, an unsupported schema, or a repository
+that is not the registered root. A run **requires** an initialized workspace and
+never creates one for you.
+
+**State authority is unchanged.** `$SCH_HOME/projects/<id>/state.json` remains
+operational truth (registration, task status, dependencies, execution mode, skill
+profile, locks, run references, audit). `.sch-loop/` holds the portable record.
+`SCH_HOME` is deliberately **not** in the worker's environment.
+
+**Preflight fails closed** on 37 conditions — project, task, real repository path,
+repository root, execution mode, task eligibility, dependency completion,
+capability profile, skill approval and hash staleness, workspace + manifest,
+branch and HEAD, a clean tree and index, merge/rebase/cherry-pick/revert/bisect in
+progress, an existing lease or unresolved run, path policy, verification-command
+safety, the Claude executable, and the timeout/prompt/output limits.
+
+**Context is selected, not concatenated.** Only skills the recommendation engine
+picked are loaded — never every installed skill, never an `UNREVIEWED`, `DISABLED`,
+`BLOCKED` or stale-approval one — and each is recorded with its content hash and
+the reason it was chosen. `prompt-manifest.json` accounts for every section **in
+characters, not tokens** (there is no tokenizer, so there is no token count). Over
+the limit, optional context is compacted and then dropped, in order, and recorded;
+the safety kernel, task, acceptance criteria, allowed paths, forbidden paths and
+required verification are never touched — if they alone exceed the limit the run
+fails closed.
+
+**Then SCH checks the repository itself.** The worker returns exactly one
+delimited `SCH_HANDOFF_JSON` object — validated for delimiter count, JSON, schema
+version, run/project/task identity, enum values, field and array sizes — and every
+claim in it is treated as untrusted. What counts is `git-effects.json`: modified,
+deleted, renamed and untracked paths, each normalized and containment-checked
+(absolute paths, `..`, symlink/junction escapes and `.git/` refused; forbidden
+rules applied before allowed ones); plus staged files, created commits, HEAD,
+branch, remote, local-config and `.git` metadata changes. Any of those is a
+`FORBIDDEN_GIT_EFFECT` — evidence preserved, **nothing reverted, nothing pushed**,
+and a human decides.
+
+**Verification is SCH's own process.** Commands come from trusted task data as an
+executable plus arguments (never a shell string); shell interpreters, destructive
+tools, shell metacharacters and any non-read-only `git` subcommand are refused
+before a run starts. A worker's "tests passed" is recorded and changes nothing.
+
+Outcomes: `VERIFIED` · `RETRYABLE` · `NEEDS_DECISION` · `FAILED` · `CANCELLED`.
+**`VERIFIED` does not mean committed, pushed, delivered, or task-done** — this
+milestone deliberately implements no target-project git writes at all. Runs are
+readable after a restart (`run-list`, `run-get`, `/api/runs`), events are
+append-only JSONL with a versioned vocabulary, and the human-readable handoff at
+`.sch-loop/handoffs/<task>/<run>.md` keeps *worker reported*, *system observed*,
+*system verified* and *system outcome* strictly apart.
+
+**Platform honesty.** Process-tree cleanup uses `taskkill /T /F` on Windows and a
+process-group signal on POSIX; a grandchild that detaches itself into a new
+session escapes both, and nothing here claims otherwise. Both paths are tested.
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.
