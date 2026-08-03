@@ -66,22 +66,38 @@ know where their project stands, not to read a manual.
 Invoke the target skill with the Skill tool — do not re-explain what it does and
 do not summarise its instructions. Routing is the entire contribution here.
 
-## What is NOT implemented
+## The supervised external runner, and what is still NOT implemented
 
 `/SCH run` runs the **in-session** loop that exists today: a pass claims one
 task, dispatches a fresh-context subagent, verifies, reviews, and completes it.
 
-The **external autonomous runner** — a fresh non-interactive Claude process per
-task, driven from outside this session — does **not exist yet**. Neither does the
-Git transaction controller, the authenticated dashboard, the SCH MCP, or the
-structured learning database. If asked for any of those, say plainly that they
-are planned and name the next milestone:
+Alongside it there is now a **supervised external single-task runner**. It is not
+`/SCH run` and it is not autonomous:
 
-> Implement the supervised external single-task Claude CLI runner using fresh
-> worker processes, the approved project capability profile, deterministic effect
-> inspection and no target-project commit or push.
+```bash
+node scripts/state.mjs workspace-init --project <id>       # once per repository
+node scripts/state.mjs task-set <n> --project <id> \
+     --allow "src/**" --forbid "..." --verify "npm test"   # the run policy
+node scripts/sch-run-task.mjs --project <id> --task <n>    # ONE task, ONE attempt
+```
 
-Never imply autonomous external execution already works, and never simulate it.
+It runs one explicitly selected, pre-approved task in a **fresh external `claude`
+process**, inspects the actual Git effects, runs SCH's own verification commands,
+records a run outcome under `<repo>/.sch-loop/runs/<run-id>/`, and stops. It never
+selects another task, never retries, and never stages, commits or pushes.
+`VERIFIED` means in-policy and verified — **not** committed, pushed or done.
+
+Still **not implemented**: automatic retry or repair, queue continuation, an
+independent semantic reviewer, the Git transaction controller (commit / push /
+remote verification), the authenticated dashboard, the SCH MCP, and the structured
+learning database. If asked for any of those, say plainly that they are planned
+and name the next milestone:
+
+> Implement the fail-closed target-project Git transaction controller for explicit
+> staging, staged-diff verification, commit creation, outgoing-commit inspection,
+> push and remote commit verification.
+
+Never imply autonomous multi-task execution already works, and never simulate it.
 
 ## Skills are recommended, never assumed
 

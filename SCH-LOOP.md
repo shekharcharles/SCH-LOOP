@@ -18,9 +18,21 @@ status. The table is data: `state.mjs sch-commands`. Skills are **discovered**,
 not typed — `state.mjs skill-recommend --project <id> --task <n>` says which to
 use and why; an UNREVIEWED/DISABLED/BLOCKED skill is never selected for
 autonomous use, and approval is a human act. Execution modes (`SINGLE_TASK`,
-`SUPERVISED_PHASE`, `AUTONOMOUS_PROJECT`, `PAUSED`) are configuration only —
-**the external autonomous runner does not exist yet**; `/SCH run` is today's
-in-session loop.
+`SUPERVISED_PHASE`, `AUTONOMOUS_PROJECT`, `PAUSED`) are configuration; `/SCH run`
+is today's in-session loop.
+
+**Supervised external runner (one task, one attempt, then stop):**
+`state.mjs workspace-init --project <id>` once per repository, then
+`sch-run-task.mjs --project <id> --task <n>`. It runs the task in a **fresh
+external `claude` process** — a new process IS the context reset; `/clear` and a
+cleared terminal are not. SCH owns the timeout, the kill, the lease, the prompt,
+the effect inspection and the verification; the worker cannot mark itself
+verified. A task needs `--allow`, `--forbid` and `--verify` before it is eligible.
+Evidence lands in `<repo>/.sch-loop/runs/<run-id>/` (ignored) with the readable
+handoff in `.sch-loop/handoffs/<task>/<run>.md` (trackable). `VERIFIED` means the
+change is in policy and the required commands passed — **not** committed, **not**
+pushed, and the task is **not** done. Automatic retry, queue continuation and any
+target-project commit/push are the NEXT milestone and do not exist.
 
 **Interval:** ask the engine, don't guess —
 `state.mjs interval-advice --project <id>` (also shown on the dashboard). A pass

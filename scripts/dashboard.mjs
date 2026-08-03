@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
 import { projection as capabilityProjection } from "./skills.mjs";
+import { runProjection } from "./runner.mjs";
 import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats, logQuery } from "./graph.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
@@ -202,6 +203,16 @@ const server = createServer(async (req, res) => {
     const p = getProject(project);
     if (!p) return json(res, { error: "no such project" });
     try { return json(res, capabilityProjection(p, { taskType: url.searchParams.get("type") })); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // Supervised external runs for one project: what ran, on what, how it went,
+  // and whether it is waiting on a person. Bounded by design — stdout and stderr
+  // stay on disk and are referenced, never inlined, because they are unbounded
+  // and may contain anything the repository or the worker produced.
+  if (url.pathname === "/api/runs") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, runProjection(project, { limit: Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || 10))) })); }
     catch (e) { return json(res, { error: e.message }); }
   }
   if (url.pathname === "/api/graph-map") {
