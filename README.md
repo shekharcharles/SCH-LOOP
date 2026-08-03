@@ -116,6 +116,9 @@ compounding lessons).
 ```
 scripts/state.mjs         Engine + CLI: multi-project registry, tasks, findings, scope gate,
                           standing authorizations, run-lock, pass-gate, audit log, skill gate.
+scripts/skills.mjs        Skill registry: read-only discovery of installed skills (built-in, repo,
+                          commands, plugins, global), content hashing, trust states, per-project
+                          capability profile, execution modes, deterministic task→skill advice.
 scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project control,
                           answer box, skill picker, filter; fluid, no flicker. Port 4600.
 scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
@@ -143,7 +146,10 @@ scripts/validate.mjs      Self-check: skill frontmatter, installed-skill drift, 
                           accuracy, portability, gitignore of engagement data, safety contracts.
 packs/packs.json + *.md   Per-domain methodology (app-dev, tool-dev, web/api/mobile/red-team/network).
 knowledge/*.md            Self-learning knowledge base per pack.
-skills/sch-*              The loop skills: spec, plan, run, review, ship, learn.
+skills/SCH                The `/SCH` command router — one surface, routes to the skill or engine
+                          command that already does the work. `state.mjs sch-commands` is its table.
+skills/sch-*              The loop skills: spec, brainstorm, plan, run, review, ship, learn.
+docs/adr/*.md             Architecture records: what the design is, and what it is NOT yet.
 docs/CLAUDE.template.md   Per-project rules template (auto-loaded by Claude every reply).
 docs/settings.template.json  Per-project .claude/settings.json: pre-approved commands + hooks.
 docs/new-client-onboarding.md  Add a pentest client + the authorization-email template.
@@ -174,6 +180,10 @@ project-add | project-list | project-here | project-get --project <id>
 auth-add | auth-list | auth-find --target <t> | auth-add-domain | cr-new ...
 scope-get | scope-check | scope-set | scope-arm-from-auth   (offensive)
 skills-set --project <id> --skills a|b | skills-get --project <id>
+skill-discover | skill-list [--trust|--source|--capability] | skill-get <id> | skill-trust <id> --state APPROVED
+profile-get | profile-set --mode <mode> [--task-type <t> --recommended a|b] | profile-validate   (all --project)
+skill-recommend --project <id> [--task <n> | --type <t> --phase <n> --files a|b]
+sch-commands [<name>]                                (the /SCH command table)
 task-add | task-list [--status] | task-set <n> --status ... | task-next | task-answer   (all --project)
 finding-add | finding-list | finding-set | chains   (offensive)
 retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
@@ -190,6 +200,46 @@ npm test           # engine tests: scope gate, authorizations, queue, chains, se
 npm run check      # both (what CI runs)
 ```
 Requires **Node >= 20**. No dependencies.
+
+## 🧭 `/SCH` — the command surface
+
+One namespace, routed by `skills/SCH`: `/SCH` (status of the active project),
+`status`, `project`, `spec`, `brainstorm`, `plan`, `skills`, `run`, `review`,
+`learn`, `graph`, `pause`, `resume`, `stop`, `approve`, `dashboard`, `doctor`.
+Case-insensitive; canonical spelling is `/SCH <name>`. The table is data —
+`node scripts/state.mjs sch-commands` — so the router, the CLI and the dashboard
+cannot drift apart. The two-command flow (`/sch-spec`, `/loop … /sch-run`) still
+works unchanged.
+
+**Skills are discovered, not typed.** `skill-discover` walks the built-in,
+repo-local, `.claude/commands`, plugin-cache and user-global roots, reads each
+`SKILL.md` **as text** (nothing is executed, no script named in metadata is
+followed), hashes the body, and infers capabilities from explicit metadata, a
+built-in adapter table (superpowers / GSD), then keywords — inference is flagged
+incomplete rather than passed off as fact. Everything third-party lands
+`UNREVIEWED`; approval is a human act, recorded against the exact content hash,
+and an edited skill goes stale automatically. Per project, a **capability
+profile** holds the execution mode (`SINGLE_TASK`, `SUPERVISED_PHASE`,
+`AUTONOMOUS_PROJECT`, `PAUSED` — there is no unlimited mode) and the skills per
+task type; `skill-recommend` answers "which skills for this task" with a reason
+attached, and never selects an unreviewed, disabled or blocked skill for
+autonomous use. A project without a profile keeps working on safe defaults.
+
+### Implemented today
+
+Unified `/SCH` routing contract · skill discovery + trust records · project
+capability profiles · deterministic task→skill recommendation · execution-mode
+configuration and validation · dashboard-readable capability state
+(`/api/capabilities`) · the in-session loop (`/sch-run`) that has always existed.
+
+### Planned, and NOT implemented
+
+Autonomous execution driven from outside the session · fresh Claude worker
+processes per task · a Git transaction controller · an authenticated dashboard ·
+an SCH MCP · the structured learning database (see `docs/adr/0002`) · automatic
+queue continuation · parallel worktrees · automatic commit and push. `/SCH run`
+runs today's in-session loop; nothing here simulates the runner that does not
+exist yet.
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.

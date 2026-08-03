@@ -16,12 +16,15 @@ const ok = (cond, msg) => { if (!cond) fail.push(msg); };
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 
 // 1. every skill has valid frontmatter with a matching name
-const SKILLS = ["sch-spec", "sch-plan", "sch-run", "sch-review", "sch-ship", "sch-learn"];
+const SKILLS = ["SCH", "sch-spec", "sch-brainstorm", "sch-plan", "sch-run", "sch-review", "sch-ship", "sch-learn"];
 for (const s of SKILLS) {
   const p = `skills/${s}/SKILL.md`;
   if (!existsSync(join(ROOT, p))) { fail.push(`missing skill: ${p}`); continue; }
   const t = read(p);
-  const fm = t.match(/^---\n([\s\S]*?)\n---\n/);
+  // \r? — a Windows checkout with core.autocrlf=true has CRLF on disk, which an
+  // LF-only pattern reads as "no frontmatter at all". Every skill then failed
+  // validation on the machine the loop actually runs on, while CI stayed green.
+  const fm = t.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   ok(fm, `${p}: missing YAML frontmatter`);
   if (!fm) continue;
   ok(new RegExp(`^name:\\s*${s}\\s*$`, "m").test(fm[1]), `${p}: frontmatter name must be "${s}"`);
@@ -87,7 +90,7 @@ for (const [cond, msg] of [
   // First the module itself: a stray backtick inside the template ENDS the
   // template, and the file stops parsing. That is the failure that actually
   // shipped — the dashboard died at startup and looked simply "down".
-  for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/report.mjs", "scripts/graph.mjs", "scripts/poc.mjs"]) {
+  for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/skills.mjs", "scripts/report.mjs", "scripts/graph.mjs", "scripts/poc.mjs"]) {
     try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
     catch (e) {
       const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;

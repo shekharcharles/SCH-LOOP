@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
 import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
+import { projection as capabilityProjection } from "./skills.mjs";
 import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats, logQuery } from "./graph.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
@@ -192,6 +193,17 @@ const server = createServer(async (req, res) => {
   // live search over what the loop knows — the same query the agents make
   // A denser map on demand. The default is a readable core, not the whole graph —
   // but the operator must be able to see more when they want to.
+  // Skill registry + capability profile for one project. Fetched once when the
+  // project page is built rather than pushed on every SSE tick: this is
+  // configuration, it changes when a human changes it, and re-deriving it 5x a
+  // minute would cost more than it tells anyone.
+  if (url.pathname === "/api/capabilities") {
+    const project = url.searchParams.get("project");
+    const p = getProject(project);
+    if (!p) return json(res, { error: "no such project" });
+    try { return json(res, capabilityProjection(p, { taskType: url.searchParams.get("type") })); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
   if (url.pathname === "/api/graph-map") {
     const project = url.searchParams.get("project");
     const limit = Math.max(24, Math.min(600, Number(url.searchParams.get("limit") || 24)));
@@ -1184,6 +1196,7 @@ function projSkeleton(id){
     <form class="row-form" method="POST" action="/inbox">\${csrf}<input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" title="Describe a feature, fix or lead — the next loop pass reasons it into the right place in the queue" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button title="Send to the inbox — the next loop pass plans it into the queue">Add</button></form>
     <section id="inboxsec"></section>
     <section id="phase"></section>
+    <section id="capsec"></section>
     <section id="graphsec"></section>
     <section id="tasksec"></section>
     <section id="findsec"></section>
@@ -1418,11 +1431,55 @@ function fallback(txt,done){
   document.body.appendChild(ta);ta.select();try{document.execCommand("copy");done();}catch{}document.body.removeChild(ta);
 }
 
+// ---- capability profile + skill registry ----------------------------------
+// Read-only view of what /SCH knows about this project's skills: what is
+// installed, whether anyone approved it, whether it changed since they did, and
+// which execution mode the future runner is allowed to use. Trust is changed
+// from the CLI on purpose — an approval is a decision, not a tap.
+function loadCaps(pj){
+  fetch("/api/capabilities?project="+encodeURIComponent(pj))
+    .then(r=>r.json()).then(c=>set("capsec",capsSec(c))).catch(()=>{});
+}
+function capsSec(c){
+  if(!c||c.error)return"";
+  const n=c.counts||{}, el=c.eligibility||{};
+  const pill=(k)=>(n[k]?'<span class="badge">'+k.toLowerCase().replace("_"," ")+' '+n[k]+'</span> ':'');
+  let head='<div class="scope"><b>CAPABILITIES //</b> mode <b>'+esc(c.execution_mode||"?")+'</b>'+
+    (el.eligible?'':' · <span style="color:var(--red)">'+esc(el.reason||"not eligible")+'</span>')+'<br>'+
+    ["BUILT_IN","APPROVED","UNREVIEWED","DISABLED","BLOCKED"].map(pill).join("")+
+    '<span class="lx"> discovered '+esc((c.discoveredAt||"").slice(0,16).replace("T"," "))+'</span>';
+  const flags=[];
+  if((c.stale||[]).length)flags.push((c.stale.length)+' skill(s) CHANGED since approval: '+esc(c.stale.join(", ")));
+  for(const x of (c.conflicts||[]))flags.push(esc(x));
+  for(const x of (c.needs_approval||[]))flags.push(esc(x));
+  if(flags.length)head+='<div class="q">&#9888; '+flags.join("<br>")+'</div>';
+  head+='</div>';
+  // recommendations per task type, with the reason attached — a recommendation
+  // nobody can explain is one nobody should follow
+  let recs="";
+  for(const t of Object.keys(c.recommendations||{})){
+    const r=c.recommendations[t];
+    const line=(label,xs)=>xs&&xs.length?'<div><span class="lel">'+label+'</span> '+
+      xs.map(x=>'<code title="'+esc(x.reason||"")+'">'+esc(x.skill_id)+'</code>').join(" ")+'</div>':"";
+    recs+='<div class="ph"><div class="ph-h"><span class="ph-n">'+esc(t)+'</span></div>'+
+      line("required",r.required)+line("recommended",r.recommended)+line("optional",r.optional)+
+      line("excluded",r.excluded)+
+      ((r.warnings||[]).length?'<div class="q">'+r.warnings.map(esc).join("<br>")+'</div>':"")+'</div>';
+  }
+  const rows=(c.skills||[]).map(s=>'<div class="ph"><span class="ph-n">'+esc(s.id)+'</span> '+
+    '<span class="badge">'+esc(s.trust)+(s.stale_approval?" · stale":"")+'</span> '+
+    '<span class="lx">'+esc(s.source_kind)+' · '+esc((s.capabilities||[]).join(", ")||"unclassified")+
+    (s.capabilities_complete?"":" (incomplete)")+'</span></div>').join("");
+  return head+recs+
+    '<details class="box"><summary>'+((c.skills||[]).length)+' discovered skill(s) — trust is set from the CLI: '+
+    '<code>state.mjs skill-trust &lt;id&gt; --state APPROVED</code></summary><div class="boxin">'+rows+'</div></details>';
+}
+
 // ---- live stream (SSE) + graceful fallback ----
 let LAST=null, curProject=null, es=null;
 function connect(){
   const pj=qp("project"); curProject=pj;
-  if(pj)projSkeleton(pj); else homeSkeleton();
+  if(pj){projSkeleton(pj);loadCaps(pj);} else homeSkeleton();
   const url="/events"+(pj?"?project="+encodeURIComponent(pj):"");
   es=new EventSource(url);
   // never swallow silently: an empty catch here hid a render crash that blanked

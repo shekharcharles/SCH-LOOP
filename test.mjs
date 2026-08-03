@@ -636,3 +636,301 @@ test("pass-gate: refuses to start a pass once the daily budget is spent", () => 
   assert.equal(S("pass-gate", "--project", P), "WORK");
   rmSync(home, { recursive: true, force: true });
 });
+
+// ===========================================================================
+// SKILL REGISTRY + CAPABILITY PROFILE (Stage 0)
+//
+// Every test below runs against FIXTURE skill directories under a temporary
+// SCH_HOME. None of them can see, or be broken by, the skills the operator
+// actually has installed — SCH_SKILL_ROOTS replaces the discovery roots wholesale.
+// ===========================================================================
+
+const SK = await import(join(ROOT, "scripts", "skills.mjs").replace(/\\/g, "/").replace(/^([A-Za-z]):/, "file:///$1:"));
+
+// A throwaway home + fixture roots. Returns the helpers each test needs.
+function skillFixture(name) {
+  const home = mkdtempSync(join(tmpdir(), "sch-sk-" + name + "-"));
+  const roots = { global: join(home, "fx-global"), repo: join(home, "fx-repo"), command: join(home, "fx-cmd") };
+  for (const p of Object.values(roots)) mkdirSync(p, { recursive: true });
+  const skill = (root, id, fm, body = "body\n") => {
+    mkdirSync(join(roots[root], id), { recursive: true });
+    writeFileSync(join(roots[root], id, "SKILL.md"), "---\nname: " + id + "\n" + fm + "\n---\n\n" + body);
+  };
+  const P = "fx";
+  mkdirSync(join(home, "projects", P), { recursive: true });
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ version: 3, projects: [
+    { id: P, name: "fx", domain: "app-dev", path: home, scope: {} }], authorizations: [] }));
+  // the built-in root comes FIRST, so SCH's own skills are discovered as BUILT_IN
+  const env = () => ({
+    ...process.env, SCH_HOME: home, NODE_NO_WARNINGS: "1",
+    SCH_SKILL_ROOTS: ["builtin:" + join(ROOT, "skills"), "global:" + roots.global,
+      "repo:" + roots.repo, "command:" + roots.command].join("|"),
+  });
+  const S = (...a) => execFileSync("node", [join(ROOT, "scripts", "state.mjs"), ...a],
+    { encoding: "utf8", env: env() }).trim();
+  const J = (...a) => JSON.parse(S(...a));
+  return { home, roots, skill, P, S, J, env, done: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+test("skills: discovers built-ins, repo-local skills and repo commands", () => {
+  const fx = skillFixture("disc");
+  fx.skill("repo", "repo-helper", "description: a repo-local helper");
+  writeFileSync(join(fx.roots.command, "deploy.md"), "---\nname: deploy\ndescription: deploy it\n---\nrun\n");
+  const byId = Object.fromEntries(fx.J("skill-list", "--full", "true").map((s) => [s.id, s]));
+
+  // 1. built-in discovery: SCH's own skills, BUILT_IN by birth
+  assert.equal(byId["sch-plan"].source_kind, "builtin");
+  assert.equal(byId["sch-plan"].trust, "BUILT_IN");
+  assert.deepEqual(byId["sch-plan"].capabilities, ["planning", "task-decomposition"]);
+  // 2. repository-local discovery, and NEVER auto-approved
+  assert.equal(byId["repo-helper"].source_kind, "repo");
+  assert.equal(byId["repo-helper"].trust, "UNREVIEWED");
+  // 3. repository-local commands
+  assert.equal(byId["deploy"].source_kind, "command");
+  fx.done();
+});
+
+test("skills: safe global discovery is configured, and stays inside its roots", () => {
+  const fx = skillFixture("glob");
+  fx.skill("global", "a-global-skill", "description: installed for the user");
+  assert.ok(fx.J("skill-list").map((s) => s.id).includes("a-global-skill"));
+  assert.equal(fx.J("skill-get", "a-global-skill").trust, "UNREVIEWED",
+    "global discovery must never promote a third-party skill");
+  const roots = fx.J("skill-discover").roots.map((r) => r.path.toLowerCase());
+  for (const s of fx.J("skill-list", "--full", "true"))
+    assert.ok(roots.some((r) => s.source_path.toLowerCase().startsWith(r)),
+      s.id + " escaped its discovery root: " + s.source_path);
+  fx.done();
+});
+
+test("skills: a duplicate id is reported, not silently overwritten", () => {
+  const fx = skillFixture("dup");
+  fx.skill("global", "twin", "description: the global one");
+  fx.skill("repo", "twin", "description: the repo one");
+  const d = fx.J("skill-discover");
+  assert.equal(d.warnings.filter((w) => w.includes('duplicate skill id "twin"')).length, 1);
+  assert.equal(fx.J("skill-get", "twin").source_kind, "global", "first root wins, deterministically");
+  fx.done();
+});
+
+test("skills: the content hash is stable, and a change invalidates approval", () => {
+  const fx = skillFixture("hash");
+  fx.skill("global", "mutable", "description: v1", "instructions v1\n");
+  const h1 = fx.J("skill-get", "mutable").content_hash;
+  fx.S("skill-discover");
+  assert.equal(fx.J("skill-get", "mutable").content_hash, h1,
+    "rediscovering unchanged content must produce the same hash");
+
+  fx.S("skill-trust", "mutable", "--state", "APPROVED", "--why", "read it");
+  assert.equal(fx.J("skill-get", "mutable").trust, "APPROVED");
+
+  fx.skill("global", "mutable", "description: v1", "instructions v2 — CHANGED\n");
+  fx.S("skill-discover");
+  const after = fx.J("skill-get", "mutable");
+  assert.notEqual(after.content_hash, h1, "changed content must change the hash");
+  assert.equal(after.trust, "UNREVIEWED", "an approval given to the old body is not an approval");
+  assert.equal(after.stale_approval, true);
+  fx.done();
+});
+
+test("skills: trust rejects bad input and refuses to re-badge a built-in", () => {
+  const fx = skillFixture("trust");
+  assert.throws(() => fx.S("skill-trust", "nope", "--state", "APPROVED"), /unknown skill/);
+  fx.skill("global", "thing", "description: x");
+  fx.S("skill-discover");
+  assert.throws(() => fx.S("skill-trust", "thing", "--state", "SUPER_APPROVED"), /invalid trust state/);
+  assert.throws(() => fx.S("skill-trust", "thing", "--state", "BUILT_IN"), /invalid trust state/);
+  assert.throws(() => fx.S("skill-trust", "sch-plan", "--state", "BLOCKED"), /built-in/);
+  fx.done();
+});
+
+// --- recommendation: precedence, trust and conflicts ------------------------
+function recFixture() {
+  const fx = skillFixture("rec");
+  for (const id of ["ui-pro", "ui-alt", "tdd-pro", "override-pro", "phase-pro", "risky"])
+    fx.skill("global", id, "description: " + id);
+  fx.S("skill-discover");
+  for (const id of ["ui-pro", "ui-alt", "tdd-pro", "override-pro", "phase-pro"])
+    fx.S("skill-trust", id, "--state", "APPROVED");
+  fx.S("profile-set", "--project", fx.P, "--task-type", "frontend", "--recommended", "ui-pro");
+  fx.S("profile-set", "--project", fx.P, "--default-skills", "tdd-pro");
+  return fx;
+}
+
+test("skills: recommendation follows task > phase > task-type > defaults", () => {
+  const fx = recFixture();
+  const ids = (r, k) => r[k].map((x) => x.skill_id).sort();
+
+  // default-profile fallback: nothing task-specific, the project default applies
+  assert.deepEqual(ids(fx.J("skill-recommend", "--project", fx.P), "recommended"), ["tdd-pro"]);
+
+  // task-type profile
+  const fe = fx.J("skill-recommend", "--project", fx.P, "--type", "frontend");
+  assert.deepEqual(ids(fe, "recommended"), ["tdd-pro", "ui-pro"]);
+  assert.match(fe.recommended.find((x) => x.skill_id === "ui-pro").reason, /frontend profile/);
+
+  // phase profile outranks the task-type profile for the same skill
+  fx.S("profile-set", "--project", fx.P, "--phase", "2", "--disabled", "ui-pro", "--required", "phase-pro");
+  const ph = fx.J("skill-recommend", "--project", fx.P, "--type", "frontend", "--phase", "2");
+  assert.deepEqual(ids(ph, "required"), ["phase-pro"]);
+  assert.ok(!ids(ph, "recommended").includes("ui-pro"), "the phase profile disabled it");
+  assert.ok(ph.excluded.some((x) => x.skill_id === "ui-pro" && /phase 2 profile/.test(x.reason)));
+
+  // the task's own override outranks everything
+  fx.S("task-add", "--project", fx.P, "--title", "a frontend job", "--category", "frontend", "--phase", "2");
+  fx.S("task-set", "--project", fx.P, "1", "--skill-required", "override-pro", "--skill-disabled", "phase-pro");
+  const t = fx.J("skill-recommend", "--project", fx.P, "--task", "1");
+  assert.deepEqual(ids(t, "required"), ["override-pro"]);
+  assert.ok(t.excluded.some((x) => x.skill_id === "phase-pro" && /task override/.test(x.reason)));
+
+  // affected-file hints answer "what kind of task is this" when nobody said
+  assert.equal(fx.J("skill-recommend", "--project", fx.P, "--files", "src/App.tsx").task_type, "frontend");
+  fx.done();
+});
+
+test("skills: unreviewed, disabled and blocked are never selected autonomously", () => {
+  const fx = recFixture();
+  fx.S("profile-set", "--project", fx.P, "--task-type", "backend", "--recommended", "risky");
+  const auto = fx.J("skill-recommend", "--project", fx.P, "--type", "backend");
+  assert.ok(!auto.recommended.some((x) => x.skill_id === "risky"));
+  assert.ok(auto.excluded.some((x) => x.skill_id === "risky" && /never selected for autonomous use/.test(x.reason)));
+  // interactive use may still offer it, clearly labelled
+  const inter = fx.J("skill-recommend", "--project", fx.P, "--type", "backend", "--autonomous", "false");
+  assert.ok(inter.optional.some((x) => x.skill_id === "risky" && /approve it/.test(x.reason)));
+
+  // an APPROVED skill is recommended; DISABLED and BLOCKED are excluded
+  assert.ok(fx.J("skill-recommend", "--project", fx.P, "--type", "frontend").recommended.some((x) => x.skill_id === "ui-pro"));
+  fx.S("skill-trust", "ui-pro", "--state", "DISABLED");
+  let r = fx.J("skill-recommend", "--project", fx.P, "--type", "frontend");
+  assert.ok(r.excluded.some((x) => x.skill_id === "ui-pro" && /DISABLED/.test(x.reason)));
+  fx.S("skill-trust", "ui-pro", "--state", "BLOCKED");
+  r = fx.J("skill-recommend", "--project", fx.P, "--type", "frontend");
+  assert.ok(r.excluded.some((x) => x.skill_id === "ui-pro" && /BLOCKED/.test(x.reason)));
+  fx.done();
+});
+
+test("skills: conflicting skills selected together produce a warning", () => {
+  const fx = skillFixture("conf");
+  fx.skill("global", "left", "description: x\nconflicts_with: [right]");
+  fx.skill("global", "right", "description: y");
+  fx.S("skill-discover");
+  fx.S("skill-trust", "left", "--state", "APPROVED");
+  fx.S("skill-trust", "right", "--state", "APPROVED");
+  fx.S("profile-set", "--project", fx.P, "--task-type", "frontend", "--recommended", "left|right");
+  const r = fx.J("skill-recommend", "--project", fx.P, "--type", "frontend");
+  assert.ok(r.warnings.some((w) => /conflict/.test(w)), "a conflict must be surfaced, not silently resolved");
+  assert.ok(fx.J("profile-validate", "--project", fx.P).problems.some((p) => /conflicting/.test(p)));
+  fx.done();
+});
+
+// --- execution modes + the profile as a state contract ----------------------
+test("skills: execution modes validate, persist, and PAUSED stops a pass", () => {
+  const fx = skillFixture("mode");
+  // an existing project with NO profile loads on safe defaults
+  assert.equal(fx.J("profile-get", "--project", fx.P).execution_mode, "SINGLE_TASK");
+  assert.equal(fx.J("profile-validate", "--project", fx.P).ok, true);
+
+  assert.throws(() => fx.S("profile-set", "--project", fx.P, "--mode", "UNLIMITED"), /invalid --mode/);
+  assert.throws(() => fx.S("profile-set", "--project", fx.P, "--mode", "single_task"), /invalid --mode/);
+
+  fx.S("profile-set", "--project", fx.P, "--mode", "SUPERVISED_PHASE");
+  assert.equal(fx.J("profile-get", "--project", fx.P).execution_mode, "SUPERVISED_PHASE");
+  // persisted on the project record, so it survives the process
+  const reg = JSON.parse(readFileSync(join(fx.home, "projects.json"), "utf8"));
+  assert.equal(reg.projects[0].capabilities.execution_mode, "SUPERVISED_PHASE");
+
+  // PAUSED means no new work may start — a run contract, not a comment
+  fx.S("task-add", "--project", fx.P, "--title", "work", "--ac", "x");
+  assert.equal(fx.S("pass-gate", "--project", fx.P), "WORK");
+  fx.S("profile-set", "--project", fx.P, "--mode", "PAUSED");
+  assert.match(fx.S("pass-gate", "--project", fx.P), /^PAUSED/);
+  assert.equal(fx.J("profile-validate", "--project", fx.P).eligibility.eligible, false);
+  // resume restores what it was before the pause
+  fx.S("profile-set", "--project", fx.P, "--resume", "true");
+  assert.equal(fx.J("profile-get", "--project", fx.P).execution_mode, "SUPERVISED_PHASE");
+  assert.equal(fx.S("pass-gate", "--project", fx.P), "WORK");
+  fx.done();
+});
+
+test("skills: an invalid profile is refused, and mutations are audited", () => {
+  const fx = skillFixture("valid");
+  fx.skill("global", "unapproved", "description: x");
+  fx.S("skill-discover");
+  // a REQUIRED skill nobody approved is a run permission nobody granted
+  assert.throws(() => fx.S("profile-set", "--project", fx.P, "--task-type", "frontend", "--required", "unapproved"),
+    /profile REFUSED/);
+  // a BLOCKED skill cannot be selected
+  fx.S("skill-trust", "unapproved", "--state", "BLOCKED");
+  assert.throws(() => fx.S("profile-set", "--project", fx.P, "--task-type", "frontend", "--recommended", "unapproved"),
+    /profile REFUSED/);
+  // an uninstalled skill is reported rather than accepted as fact
+  fx.S("profile-set", "--project", fx.P, "--default-skills", "does-not-exist");
+  assert.ok(fx.J("profile-validate", "--project", fx.P).problems.some((p) => /not installed/.test(p)));
+  // an unknown project id is refused outright
+  assert.throws(() => fx.S("profile-set", "--project", "no-such-project", "--mode", "PAUSED"), /no such project/);
+
+  // every mutating command appends an audit event
+  const day = new Date().toISOString().slice(0, 10);
+  const log = readFileSync(join(fx.home, "logs", "audit-" + day + ".jsonl"), "utf8");
+  for (const cmd of ["skill-discover", "skill-trust", "profile-set"])
+    assert.ok(log.includes('"cmd":"' + cmd + '"'), cmd + " must be audited");
+  fx.done();
+});
+
+test("skills: a path escaping its discovery root is refused", () => {
+  const fx = skillFixture("escape");
+  const outside = mkdtempSync(join(tmpdir(), "sch-outside-"));
+  mkdirSync(join(outside, "sneaky"), { recursive: true });
+  writeFileSync(join(outside, "sneaky", "SKILL.md"), "---\nname: sneaky\ndescription: not yours\n---\nx\n");
+  let linked = false;
+  try {
+    // junction: the symlink flavour Windows allows without elevation
+    execFileSync("node", ["-e", 'require("fs").symlinkSync(process.argv[1],process.argv[2],"junction")',
+      join(outside, "sneaky"), join(fx.roots.global, "sneaky")], { stdio: "pipe" });
+    linked = true;
+  } catch { /* no symlink permission here — the containment check below still runs */ }
+  if (linked) {
+    assert.ok(!fx.J("skill-list").map((s) => s.id).includes("sneaky"),
+      "a skill symlinked out of its root must not be discovered");
+    assert.ok(fx.J("skill-discover").warnings.some((w) => /outside its discovery root/.test(w)));
+  }
+  // containment is never satisfied by an arbitrary path
+  assert.equal(SK.discoveryRoots({ repo: outside, global: false }).some((r) => r.path === outside), false);
+  rmSync(outside, { recursive: true, force: true });
+  fx.done();
+});
+
+test("skills: /SCH routing metadata is complete and case-insensitive", () => {
+  const fx = skillFixture("cmd");
+  const all = fx.J("sch-commands");
+  const names = all.map((c) => c.name);
+  for (const n of ["SCH", "status", "project", "spec", "brainstorm", "plan", "skills", "run", "review",
+    "learn", "graph", "pause", "resume", "stop", "approve", "dashboard", "doctor"])
+    assert.ok(names.includes(n), "/SCH " + n + " must be routable");
+  assert.equal(new Set(names).size, names.length, "no duplicate /SCH command");
+  for (const c of all) assert.ok(c.summary && c.status, c.name + " needs a status and a summary");
+  assert.equal(fx.J("sch-commands", "PLAN").name, "plan");
+  assert.equal(fx.J("sch-commands", "Brainstorm").name, "brainstorm");
+  assert.ok(fx.J("sch-commands", "nonsense").error);
+  // the autonomous runner must not be advertised as working
+  assert.match(all.find((c) => c.name === "run").note, /EXTERNAL autonomous runner .*not implemented/);
+  fx.done();
+});
+
+test("skills: capability inference marks a guess as a guess", () => {
+  const fx = skillFixture("infer");
+  fx.skill("global", "explicit-one", "description: whatever\ncapabilities: [accessibility, ui-review]");
+  fx.skill("global", "guessy", "description: a skill about accessibility and WCAG audits");
+  fx.skill("global", "opaque", "description: zzzz");
+  fx.S("skill-discover");
+  const g = (id) => fx.J("skill-get", id);
+  assert.deepEqual(g("explicit-one").capabilities, ["accessibility", "ui-review"]);
+  assert.equal(g("explicit-one").capabilities_complete, true, "declared metadata is a fact");
+  assert.deepEqual(g("guessy").capabilities, ["accessibility"]);
+  assert.equal(g("guessy").capabilities_complete, false, "keyword inference is a hint, not a classification");
+  assert.deepEqual(g("opaque").capabilities, []);
+  assert.equal(g("opaque").capabilities_complete, false, "an unclassifiable skill is preserved, not dropped");
+  // a capability provider is mapped by adapter, without its body being read
+  assert.deepEqual(SK.ADAPTERS["superpowers-test-driven-development"], ["test-driven-development"]);
+  fx.done();
+});

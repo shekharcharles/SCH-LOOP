@@ -10,6 +10,18 @@ CR); `/loop <interval> /sch-run` runs it (`--project` auto-detects from the
 current folder). The detailed methodology lives in the skills — follow them,
 don't re-derive.
 
+**One surface:** `/SCH` routes the whole family (`status`, `project`, `spec`,
+`brainstorm`, `plan`, `skills`, `run`, `review`, `learn`, `graph`, `pause`,
+`resume`, `stop`, `approve`, `dashboard`, `doctor`) to the skill or engine
+command that already does the work. Bare `/SCH` reports the active project's
+status. The table is data: `state.mjs sch-commands`. Skills are **discovered**,
+not typed — `state.mjs skill-recommend --project <id> --task <n>` says which to
+use and why; an UNREVIEWED/DISABLED/BLOCKED skill is never selected for
+autonomous use, and approval is a human act. Execution modes (`SINGLE_TASK`,
+`SUPERVISED_PHASE`, `AUTONOMOUS_PROJECT`, `PAUSED`) are configuration only —
+**the external autonomous runner does not exist yet**; `/SCH run` is today's
+in-session loop.
+
 **Interval:** ask the engine, don't guess —
 `state.mjs interval-advice --project <id>` (also shown on the dashboard). A pass
 **keeps working** after each task (up to 5 tasks / 25 min) instead of sleeping out
