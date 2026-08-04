@@ -11,8 +11,8 @@
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve, sep } from "node:path";
-import { git, repositoryRoot } from "./workspace.mjs";
+import { isAbsolute, join, resolve } from "node:path";
+import { git, repositoryRoot, contains } from "./workspace.mjs";
 import { assertSafeGitArgs } from "./candidate.mjs";
 
 export const SCHEMA_VERSION = 1;
@@ -46,12 +46,6 @@ export function branchNameFor(taskId) {
   return `${BRANCH_PREFIX}${taskId}`;
 }
 
-// Is `p` inside `parent`? Used to refuse a worktree root inside the repository.
-function within(parent, p) {
-  const a = resolve(parent).replace(/[\\/]+$/, "") + sep;
-  return resolve(p).startsWith(a);
-}
-
 export function worktreeState({ projectId, taskId, repoRoot, root = worktreesRoot() }) {
   const path = worktreePathFor(projectId, taskId, { root });
   const branch = branchNameFor(taskId);
@@ -72,7 +66,7 @@ export function ensureWorktree({ projectId, taskId, repoRoot, base, root = workt
   const path = worktreePathFor(projectId, taskId, { root });
   const branch = branchNameFor(taskId);
 
-  if (within(repoRoot, path))
+  if (contains(repoRoot, path))
     return { ok: false, code: "WORKTREE_CREATE_FAILED",
       message: `the worktree root resolves inside the managed repository (${path}) — worker scratch space must not live in the repository it edits` };
 
