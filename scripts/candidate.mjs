@@ -46,6 +46,8 @@ const FORBIDDEN_ARGV = [
     "git reset --hard destroys work the operator may not have finished"],
   [(a) => ["rebase", "cherry-pick", "revert", "filter-branch", "merge", "clean", "stash"].includes(a[0]),
     "rebase, cherry-pick, revert, filter-branch, merge, clean and stash are never run automatically"],
+  [(a) => a[0] === "worktree" && !["add", "remove", "list", "prune"].includes(a[1]),
+    "git worktree is only ever used to add, remove, list or prune a task's checkout"],
 ];
 
 export function assertSafeGitArgs(args) {
