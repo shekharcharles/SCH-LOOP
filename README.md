@@ -170,6 +170,11 @@ scripts/workflows.mjs     The versioned workflow-template registry: 9 templates 
                           handler registry. Project data names a handler id, never a module;
                           unknown handler/role/gate/envelope fails closed; a template can
                           never grant a tool or widen a write scope.
+scripts/semantic.mjs      The CLOSED registry of EXECUTABLE semantic AGENT phases (scout, plan,
+                          implement, repair, review, document). Each declares its role, effect
+                          policy, envelope and gates. A template may declare a semantic phase
+                          only if a handler exists — otherwise the template is REJECTED, never
+                          recorded as "absent".
 scripts/roles.mjs         The versioned agent-role roster (scout, planner, builder, repairer,
                           reviewer, documenter) and the logical model profiles. Role, executor,
                           provider, model, tools and write scope are six separate things, and a
@@ -806,20 +811,43 @@ enforces an explicit outer timeout — because a buffered, silent suite and a hu
 one look identical, and that confusion once produced a wrong diagnosis and an
 unnecessary rewrite.
 
-### What is NOT wired yet, stated plainly
+### Every declared semantic phase executes
 
-- Templates can currently **subtract** phases from the delivering pipeline but
-  cannot **add** an agent phase that has no scheduler implementation. `SCOUT`,
-  `PLAN_ONLY`, `PLAN_BUILD` and `DOCUMENTATION_ONLY` declare `scout`, `plan` and
-  `document` phases; the scheduler has no handler bodies for them yet, so those
-  phases are recorded as absent rather than executed. `FULL_SDLC`,
-  `PLAN_BUILD_TEST`, `BUILD_ONLY` and `BUILD_REVIEW` run end to end.
-- Role resolution is implemented, validated and CLI-inspectable, but the
-  scheduler still runs its AGENT phase through the single existing Claude CLI
-  executor; per-phase model routing is configuration that no second executor
-  consumes yet.
+All six semantic handlers — `scout`, `plan`, `implement`, `repair`, `review`,
+`document` — run a **real fresh external worker** through one shared path in
+`semantic.mjs`. All nine templates execute the phases they declare, and
+`workflow-template-validate` proves it (`every_declared_phase_executable: true`).
+A template that declares an AGENT phase with no registered handler is **rejected
+at validation**, not recorded as absent at run time.
+
+The resolved role is the **execution authority**: it decides the prompt
+template, the context policy, the expected envelope, the write scope and the
+budgets, and the worker cannot widen any of them.
+
+**Read-only means caught, not prevented.** The Claude CLI gives SCH no tool
+sandbox — there is no API that stops a worker writing a file. So a read-only
+role runs with an **empty allow-list** (the prompt authorizes nothing and says
+so), and SCH inspects the repository afterwards: any change at all fails the
+phase as `ROLE_POLICY_VIOLATION`, evidence preserved, nothing reverted. That is
+enforcement after the fact, and it is named as such rather than dressed up as
+isolation.
+
+Completion is typed, so nothing claims a remote it never reached:
+`READ_ONLY_COMPLETED` (scout, security review) · `PLAN_COMPLETED` (plan only) ·
+`AWAITING_DELIVERY` (built and verified, not pushed) · `DELIVERED` (committed,
+pushed and remotely verified) · `NEEDS_DECISION` · `FAILED`.
+
+### What is still NOT wired, stated plainly
+
+- The `repair` handler is registered and validated but shares the builder's call
+  site; there is no separate repair phase in any built-in template yet.
+- Role resolution is the execution authority, but only one executor exists — the
+  Claude CLI. Per-phase model routing is configuration no second executor
+  consumes yet, and the CLI does not accept a reasoning/model argument from SCH.
 - Usage is `UNKNOWN` for every real run, because nothing reports it. That is the
   honest state, not a placeholder to be filled with zeros.
+- The scheduler runs phases in a fixed canonical order; a template chooses WHICH
+  phases run, not the order they run in.
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.

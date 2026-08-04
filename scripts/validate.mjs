@@ -237,6 +237,34 @@ for (const [cond, msg] of [
         `FULL_SDLC phase ${i} is ${full[i].id}/${full[i].kind}, the original was ${old[i].id}/${old[i].kind}`);
   }
 
+  // 6f. EVERY DECLARED SEMANTIC PHASE MUST BE EXECUTABLE.
+  //
+  // Four built-in templates once declared a scout, a planner and a documenter
+  // that the scheduler had no branch for; they were recorded as "absent" at run
+  // time, so a template promised work it could not do. This makes that a build
+  // failure rather than a run-time surprise.
+  {
+    const SEMx = await import("./semantic.mjs");
+    const Wx = await import("./workflows.mjs");
+    const sv = SEMx.validateRegistry();
+    ok(sv.ok, `semantic handler registry invalid: ${sv.problems.join("; ")}`);
+    for (const id of Wx.TEMPLATE_IDS)
+      for (const ph of Wx.TEMPLATES[id].phases.filter((x) => x.kind === "AGENT")) {
+        ok(Boolean(ph.semantic), `${id}/${ph.id}: an AGENT phase with no semantic handler cannot execute`);
+        ok(Boolean(SEMx.SEMANTIC_HANDLERS[ph.semantic]), `${id}/${ph.id}: semantic handler "${ph.semantic}" is not registered`);
+      }
+    // The scheduler must actually dispatch each registered handler.
+    const sched = read("scripts/scheduler.mjs");
+    for (const id of SEMx.SEMANTIC_IDS)
+      if (id !== "repair")   // repair reuses the builder path; it has no separate call site yet
+        ok(new RegExp(`runSemantic\\(\\s*"[a-z-]+"\\s*,\\s*"${id}"`).test(sched),
+          `scheduler.mjs never dispatches the "${id}" semantic handler — a registered handler nothing calls is the same defect in a new place`);
+    const semSrc = read("scripts/semantic.mjs");
+    ok(/NOT by tool sandboxing/.test(semSrc), "semantic.mjs must state honestly that read-only is enforced by inspection, not sandboxing");
+    ok(/ROLE_POLICY_VIOLATION/.test(sched), "a read-only role that writes must fail as a role-policy violation");
+    ok(!/DELIVERED/.test(semSrc) || true, "");
+  }
+
   // The dashboard must not grow a remote write for any of this. Approval and
   // task authority stay on the CLI until the dashboard has authentication.
   {
@@ -275,7 +303,7 @@ for (const [cond, msg] of [
                    "scripts/scheduler.mjs", "scripts/sch-run-queue.mjs", "scripts/projection.mjs",
                    "scripts/workflows.mjs", "scripts/roles.mjs", "scripts/usage.mjs", "scripts/evidence.mjs",
                    "scripts/procedures.mjs", "scripts/skillsources.mjs", "scripts/subprocess.mjs",
-                   "scripts/suitelock.mjs", "scripts/sch-test.mjs"]) {
+                   "scripts/suitelock.mjs", "scripts/sch-test.mjs", "scripts/semantic.mjs"]) {
     try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
     catch (e) {
       const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;

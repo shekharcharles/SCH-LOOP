@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import * as ROLES from "./roles.mjs";
 import { GATES } from "./gates.mjs";
 import { REGISTRY as ENVELOPES } from "./envelopes.mjs";
+import * as SEM from "./semantic.mjs";
 
 export const SCHEMA_VERSION = 1;
 
@@ -59,7 +60,11 @@ export const HIGH_RISK_TEMPLATES = new Set(["FULL_SDLC", "SECURITY_REVIEW"]);
 // templates silently dropped envelopes from eleven phases that used to emit
 // them. Defaulting here means a new template cannot make that mistake.
 const p = (id, kind, handler, extra = {}) => ({ id, kind, handler, gates: [], output_envelope: "CodeResultEnvelopeV1", ...extra });
-const agent = (id, role, envelope, gates = []) => ({ id, kind: "AGENT", handler: "agent-run", role, output_envelope: envelope, gates });
+const agent = (id, semantic, gates = []) => {
+  const h = SEM.SEMANTIC_HANDLERS[semantic];
+  if (!h) throw new Error(`no semantic handler ""`);
+  return { id, kind: "AGENT", handler: "agent-run", semantic, role: h.role, output_envelope: h.output_envelope, gates: gates.length ? gates : h.gates };
+};
 const gate = (id, gates) => ({ id, kind: "GATE", handler: "gate-only", gates, output_envelope: "GateReportEnvelopeV1" });
 
 // ------------------------------------------------------------- the templates
@@ -78,7 +83,7 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("scout", "scout", "ScoutEnvelopeV1", ["handoff-valid"]),
+      agent("scout", "scout"),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
     ],
@@ -91,7 +96,7 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("plan", "planner", "PlannerEnvelopeV1", ["handoff-valid"]),
+      agent("plan", "plan"),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
     ],
@@ -104,7 +109,7 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("implement", "builder", null, []),
+      agent("implement", "implement"),
       p("parse-builder-envelope", "CODE", "builder-envelope-parse", { output_envelope: "BuilderEnvelopeV1", gates: ["handoff-valid"] }),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
@@ -118,8 +123,8 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("plan", "planner", "PlannerEnvelopeV1", ["handoff-valid"]),
-      agent("implement", "builder", null, []),
+      agent("plan", "plan"),
+      agent("implement", "implement"),
       p("parse-builder-envelope", "CODE", "builder-envelope-parse", { output_envelope: "BuilderEnvelopeV1", gates: ["handoff-valid"] }),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
@@ -133,8 +138,8 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("plan", "planner", "PlannerEnvelopeV1", ["handoff-valid"]),
-      agent("implement", "builder", null, []),
+      agent("plan", "plan"),
+      agent("implement", "implement"),
       p("parse-builder-envelope", "CODE", "builder-envelope-parse", { output_envelope: "BuilderEnvelopeV1", gates: ["handoff-valid"] }),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
@@ -150,13 +155,13 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("implement", "builder", null, []),
+      agent("implement", "implement"),
       p("parse-builder-envelope", "CODE", "builder-envelope-parse", { output_envelope: "BuilderEnvelopeV1", gates: ["handoff-valid"] }),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
       p("verify", "CODE", "deterministic-verification"),
       gate("verification-gate", VERIFY),
-      p("semantic-review", "AGENT", "semantic-review", { role: "reviewer", output_envelope: null }),
+      { ...agent("semantic-review", "review"), handler: "semantic-review" },
       gate("review-gate", []),
     ],
   },
@@ -172,13 +177,13 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      { id: "implement", kind: "AGENT", handler: "agent-run", role: "builder", output_envelope: null, gates: ["skills-approved", "executor-ready"] },
+      agent("implement", "implement", ["skills-approved", "executor-ready"]),
       p("parse-builder-envelope", "CODE", "builder-envelope-parse", { output_envelope: "BuilderEnvelopeV1", gates: ["handoff-valid"] }),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
       p("verify", "CODE", "deterministic-verification"),
       gate("verification-gate", VERIFY),
-      p("semantic-review", "AGENT", "semantic-review", { role: "reviewer", output_envelope: null }),
+      { ...agent("semantic-review", "review"), handler: "semantic-review" },
       gate("review-gate", []),
       p("prepare-delivery", "CODE", "delivery-prepare", { gates: ["verified-diff-unchanged"] }),
       p("delivery-approval", "HUMAN", "delivery-approval", { output_envelope: null, gates: ["delivery-approval-valid"] }),
@@ -192,14 +197,17 @@ export const TEMPLATES = {
     description: "Read-only security review of an approved change. Writes nothing, delivers nothing.",
     supported_task_types: ["security", "review"],
     high_risk: true,
+    // No `inspect-effects`/`effects-gate` phase, and that is not an omission:
+    // the review handler's OWN gates (`no-repository-effects`,
+    // `forbidden-git-effects-absent`) already prove the reviewer changed
+    // nothing, and they run at the point the reviewer finishes rather than
+    // before it has started.
     phases: [
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      p("semantic-review", "AGENT", "semantic-review", { role: "reviewer", output_envelope: null }),
+      { ...agent("semantic-review", "review"), handler: "semantic-review" },
       gate("review-gate", []),
-      p("inspect-effects", "CODE", "effect-inspect"),
-      gate("effects-gate", EFFECTS),
     ],
   },
   DOCUMENTATION_ONLY: {
@@ -210,7 +218,7 @@ export const TEMPLATES = {
       p("prepare", "CODE", "task-prepare"),
       gate("task-readiness", READINESS),
       p("compile-context", "CODE", "context-compile"),
-      agent("document", "documenter", "DocumentationEnvelopeV1", ["handoff-valid"]),
+      agent("document", "document"),
       p("inspect-effects", "CODE", "effect-inspect"),
       gate("effects-gate", EFFECTS),
       p("verify", "CODE", "deterministic-verification"),
@@ -268,6 +276,19 @@ export function validateTemplate(t, { taskType = null, task = null } = {}) {
     if (ph.kind === "AGENT" || ph.role) {
       if (!ph.role) bad("TEMPLATE_MALFORMED", `phase "${ph.id}" is an AGENT phase with no role`);
       else if (!ROLES.ROLES[ph.role]) bad("UNKNOWN_ROLE", `phase "${ph.id}": role "${ph.role}" is not in the roster (${ROLES.ROLE_IDS.join(", ")})`);
+    }
+    // EVERY AGENT PHASE MUST BE EXECUTABLE.
+    //
+    // A template used to be able to declare a scout, a planner or a documenter
+    // that the scheduler had no branch for; the phase was then recorded as
+    // "absent" at run time, so the template promised work it could not do. A
+    // semantic phase is now a registered handler or the template is REJECTED —
+    // there is no third state and no silent downgrade.
+    if (ph.kind === "AGENT") {
+      const sem = SEM.validateSemanticPhase(ph);
+      for (const p of sem.problems) bad(p.code, p.message);
+    } else if (ph.semantic) {
+      bad("SEMANTIC_KIND_MISMATCH", `phase "${ph.id}" names semantic handler "${ph.semantic}" but is a ${ph.kind} phase — only an AGENT phase runs one`);
     }
     if (ph.output_envelope && !ENVELOPES[ph.output_envelope])
       bad("UNKNOWN_ENVELOPE", `phase "${ph.id}": envelope "${ph.output_envelope}" is not registered (${Object.keys(ENVELOPES).join(", ")})`);

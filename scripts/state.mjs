@@ -1947,9 +1947,31 @@ const commands = {
       const r = WFx.validateTemplate(t, { taskType: flags["task-type"] ?? null });
       out(r); if (!r.ok) process.exitCode = 1; return;
     }
+    const SEMx = await import("./semantic.mjs");
     const all = WFx.validateAll();
-    out(all); if (!all.ok) process.exitCode = 1;
+    // EXECUTABILITY, not just well-formedness. A template that validates but
+    // declares a phase nothing can run is the exact defect this proves absent.
+    const executable = all.results.map((r) => {
+      const t = WFx.TEMPLATES[r.id];
+      const agents = t.phases.filter((x) => x.kind === "AGENT");
+      return {
+        template_id: r.id, version: t.version, valid: r.ok,
+        phases: t.phases.length, agent_phases: agents.length,
+        semantic_phases: agents.map((x) => ({ phase: x.id, handler: x.semantic ?? null, role: x.role,
+          executable: Boolean(x.semantic && SEMx.SEMANTIC_HANDLERS[x.semantic]),
+          envelope: x.output_envelope ?? null,
+          effect_policy: x.semantic ? SEMx.SEMANTIC_HANDLERS[x.semantic]?.effect_policy ?? null : null })),
+        all_declared_phases_executable: agents.every((x) => x.semantic && SEMx.SEMANTIC_HANDLERS[x.semantic]),
+      };
+    });
+    const gaps = executable.filter((x) => !x.valid || !x.all_declared_phases_executable);
+    out({ ...all, executable,
+      every_declared_phase_executable: gaps.length === 0,
+      gaps: gaps.map((g) => g.template_id),
+      note: "a template that declares a semantic phase with no registered handler is REJECTED, never recorded as absent" });
+    if (!all.ok || gaps.length) process.exitCode = 1;
   },
+  async "semantic-handler-list"() { out((await import("./semantic.mjs")).projection()); },
 
   // ---- agent roles and model profiles -----------------------------------------
   async "role-list"() { out((await import("./roles.mjs")).rosterProjection()); },
@@ -2001,11 +2023,22 @@ const commands = {
     const [S, PHx] = [await import("./scheduler.mjs"), await import("./phases.mjs")];
     const taskId = Number(flags.task ?? pos[0] ?? die("need --task <n>"));
     const t = loadState(id).tasks.find((x) => x.id === taskId);
+    const WFx = await import("./workflows.mjs");
+    const declared = t?.workflow_binding?.template_id ? (WFx.TEMPLATES[t.workflow_binding.template_id]?.phases ?? []) : [];
     const attempts = S.taskPhases(id, taskId).attempts.map((a) => ({
       attempt: a.attempt, scheduler_id: a.scheduler_id, run_id: a.run_id,
       resume_at: a.recovery.resume_at, completed: a.recovery.completed,
+      // DECLARED vs EXECUTED, side by side. A built-in semantic phase that did
+      // not run is a defect, not a footnote, so the trace names both.
+      declared_phases: declared.map((d) => {
+        const ran = PHx.listPhases(a.dir).find((x) => x.phase_id === d.id);
+        return { phase_id: d.id, kind: d.kind, handler: d.handler, semantic: d.semantic ?? null,
+          role: d.role ?? null, executed: Boolean(ran), state: ran?.state ?? "NOT_EXECUTED" };
+      }),
       phases: PHx.listPhases(a.dir).map((p) => ({
         phase_id: p.phase_id, kind: p.kind, role: p.role ?? null,
+        semantic: declared.find((d) => d.id === p.phase_id)?.semantic ?? null,
+        executed: true,
         actor_lane: p.kind === "AGENT" ? "AGENT" : p.kind === "HUMAN" ? "ENGINEER" : p.kind === "GATE" ? "GATE" : "CODE",
         state: p.state, outcome: p.outcome, duration_ms: p.duration_ms,
         envelope_type: p.envelope_type, envelope_hash: p.envelope_hash,
