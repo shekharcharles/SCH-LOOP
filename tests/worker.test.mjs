@@ -313,3 +313,20 @@ test("handoff: the human-readable handoff separates reported, observed and verif
   assert.ok(md.indexOf("I changed everything perfectly") > md.indexOf("UNTRUSTED"), "and it is labelled");
   fx.done();
 });
+
+test("the worker environment carries no git credential helper", () => {
+  const env = EXEC.buildEnv(
+    { ...process.env, GH_TOKEN: "ghp_x", GITHUB_TOKEN: "ghp_y", GIT_ASKPASS: "C:\\askpass.exe",
+      SSH_AUTH_SOCK: "/tmp/agent.sock", SSH_AGENT_PID: "1234" },
+    {},
+  );
+  for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GIT_ASKPASS", "SSH_AUTH_SOCK", "SSH_AGENT_PID"])
+    assert.equal(env[k], undefined, `${k} must never reach a worker`);
+});
+
+test("the worker environment disables the configured credential helper", () => {
+  const env = EXEC.buildEnv(process.env, EXEC.GIT_CREDENTIAL_STRIP);
+  assert.equal(env.GIT_CONFIG_COUNT, "1");
+  assert.equal(env.GIT_CONFIG_KEY_0, "credential.helper");
+  assert.equal(env.GIT_CONFIG_VALUE_0, "");
+});
