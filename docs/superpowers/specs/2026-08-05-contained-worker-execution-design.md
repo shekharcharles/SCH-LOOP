@@ -142,7 +142,7 @@ in the controller are already parameterized by a repository root.
 
 ### The branch-namespace authorization
 
-`delivery.mjs` currently stops with `REMOTE_BRANCH_MISSING`:
+`delivery.mjs:721` currently stops with `UPSTREAM_CHANGED`:
 
 > `"<branch>" does not exist on "<remote>". Commit is created locally and NOT
 > pushed — creating a remote branch is an explicit decision, not something SCH
@@ -158,10 +158,11 @@ delivery:
   branch_namespace: "sch/task-*"
 ```
 
-`REMOTE_BRANCH_MISSING` becomes conditional. If the branch matches the project's
-authorized namespace, the first push may create the remote branch and set
-upstream, and the delivery event records the namespace authorization id that
-permitted it. A branch outside the namespace stops exactly as it does today.
+The `UPSTREAM_CHANGED` stop at `delivery.mjs:721` becomes conditional. If the
+branch matches the project's authorized namespace, the first push may create the
+remote branch and set upstream, and the delivery event records the namespace
+authorization id that permitted it. A branch outside the namespace stops exactly
+as it does today, with the same code and the same message.
 
 The underlying principle — creating a remote branch is an explicit human
 decision — is preserved. Its cost drops from one decision per task to one
@@ -175,6 +176,28 @@ milestone and is not implied by it.
 
 This is a user-visible behavior change and must be documented as one: today's
 delivery advances the working branch, and after this milestone it does not.
+
+### Control state stays in the main repository
+
+`WS.validateWorkspace({ projectId, repoPath })` returns `{ root, dir }` and three
+call sites derive both from it: `runner.mjs:753` and `:984`, `scheduler.mjs:354`,
+`delivery.mjs:288`. Today `root` (where work happens) and `dir` (where `.sch-loop`
+control state lives) are necessarily the same directory.
+
+This milestone **decouples them**:
+
+```
+wsDir     stays in the main repository — evidence, runs, decisions, handoffs
+repoRoot  becomes the worktree — worker cwd, baseline, effect inspection, delivery
+```
+
+Without this, run evidence would be written into `.sch-loop/runs/` *inside a
+disposable worktree* and deleted with it on DELIVERED. Evidence must outlive the
+container it was produced in.
+
+The worktree still contains its own tracked `.sch-loop/` files, inherited from the
+branch. `WS.workerDenied` operates on paths relative to `repoRoot`, so the
+default-deny of control state continues to fire inside the worktree unchanged.
 
 ## 6. Effect inspection
 
@@ -217,8 +240,7 @@ later mistaken for coverage.
   available to it.
 - The main working tree is byte-identical before and after a complete task,
   including delivery.
-- A branch outside the authorized namespace still stops with
-  `REMOTE_BRANCH_MISSING`.
+- A branch outside the authorized namespace still stops with `UPSTREAM_CHANGED`.
 - A branch inside the namespace creates the remote branch on first push, sets
   upstream, and records the authorization id.
 - Attempt 2 of a task sees attempt 1's uncommitted changes.
