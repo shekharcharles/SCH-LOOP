@@ -48,8 +48,64 @@ test("preflight: a PAUSED project may not start work", async () => {
 test("preflight: an ineligible task status is refused", async () => {
   const fx = fixture("pf-status"); initWorkspace(fx);
   const t = addTask(fx);
-  fx.cli("task-set", "--project", fx.P, String(t), "--status", "building");
-  await expectPreflight(fx, t, "TASK_INELIGIBLE", /only a queued or changes task/);
+  // `merged` is AWAITING_DELIVERY: the work is finished and waiting to be
+  // delivered, so starting a worker on it would be running a task twice.
+  fx.cli("task-set", "--project", fx.P, String(t), "--status", "merged", "--tokens", "unknown");
+  await expectPreflight(fx, t, "TASK_INELIGIBLE", /only a ready, claimed or retryable task/);
+  fx.done();
+});
+
+// The counterpart, and the reason the check above had to change: the sequential
+// scheduler CLAIMS a task before it hands it to the runner, and a claimed task
+// reads as "building" to a legacy consumer. The first version of the eligibility
+// check refused exactly that — the runner would not run the task the scheduler
+// had just legitimately claimed for it, so the queue deadlocked on task one.
+test("preflight: a task the scheduler has claimed IS eligible for its worker", async () => {
+  const fx = fixture("pf-claimed"); initWorkspace(fx);
+  const t = addTask(fx);
+  const TR = await import("../scripts/transitions.mjs");
+
+  for (const state of ["CLAIMED", "RUNNING", "RETRYABLE"]) {
+    const s = JSON.parse(readFileSync(join(fx.home, "projects", fx.P, "state.json"), "utf8"));
+    const task = s.tasks.find((x) => x.id === t);
+    task.state = state; task.status = TR.STATE_TO_LEGACY[state];
+    writeFileSync(join(fx.home, "projects", fx.P, "state.json"), JSON.stringify(s, null, 2));
+    const pre = RUN.preflight({ projectId: fx.P, taskId: t });
+    assert.equal(pre.failures.some((f) => f.code === "TASK_INELIGIBLE"), false,
+      `${state} must be eligible: ${pre.failures.map((f) => f.code + " " + f.message).join("; ")}`);
+  }
+
+  // …and the states that mean "not yours to start" still are not.
+  for (const state of ["AWAITING_DELIVERY", "DELIVERING", "DELIVERED", "BLOCKED", "FAILED", "CANCELLED", "BACKLOG"]) {
+    const s = JSON.parse(readFileSync(join(fx.home, "projects", fx.P, "state.json"), "utf8"));
+    const task = s.tasks.find((x) => x.id === t);
+    task.state = state; task.status = TR.STATE_TO_LEGACY[state];
+    writeFileSync(join(fx.home, "projects", fx.P, "state.json"), JSON.stringify(s, null, 2));
+    const pre = RUN.preflight({ projectId: fx.P, taskId: t });
+    assert.ok(pre.failures.some((f) => f.code === "TASK_INELIGIBLE"), `${state} must NOT be eligible`);
+  }
+  fx.done();
+});
+
+// The other half of the same fix: a DELIVERED dependency must satisfy its child.
+// Accepting only the legacy `merged` meant the very first delivered dependency
+// deadlocked its child, so sequential execution could never reach task two.
+test("preflight: a DELIVERED dependency satisfies its child, exactly like merged", async () => {
+  const fx = fixture("pf-dep-delivered"); initWorkspace(fx);
+  const a = addTask(fx, { title: "first" });
+  const b = addTask(fx, { title: "second", deps: String(a) });
+
+  const setDep = (state, legacy) => {
+    const s = JSON.parse(readFileSync(join(fx.home, "projects", fx.P, "state.json"), "utf8"));
+    const dep = s.tasks.find((x) => x.id === a);
+    dep.state = state; dep.status = legacy;
+    writeFileSync(join(fx.home, "projects", fx.P, "state.json"), JSON.stringify(s, null, 2));
+    return RUN.preflight({ projectId: fx.P, taskId: b }).failures.map((f) => f.code);
+  };
+
+  assert.ok(setDep("AWAITING_DELIVERY", "review").includes("DEPENDENCY_INCOMPLETE"), "still in flight: not satisfied");
+  assert.equal(setDep("DELIVERED", "delivered").includes("DEPENDENCY_INCOMPLETE"), false, "on the remote: satisfied");
+  assert.equal(setDep("AWAITING_DELIVERY", "merged").includes("DEPENDENCY_INCOMPLETE"), false, "historical local completion: satisfied");
   fx.done();
 });
 

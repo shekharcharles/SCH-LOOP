@@ -21,6 +21,14 @@ export const EXEC = await import(url(join(ROOT, "scripts", "executor.mjs")));
 export const STATE = await import(url(join(ROOT, "scripts", "state.mjs")));
 export const CAND = await import(url(join(ROOT, "scripts", "candidate.mjs")));
 export const DEL = await import(url(join(ROOT, "scripts", "delivery.mjs")));
+export const TG = await import(url(join(ROOT, "scripts", "taskgraph.mjs")));
+export const TR = await import(url(join(ROOT, "scripts", "transitions.mjs")));
+export const ENV = await import(url(join(ROOT, "scripts", "envelopes.mjs")));
+export const GATE = await import(url(join(ROOT, "scripts", "gates.mjs")));
+export const PH = await import(url(join(ROOT, "scripts", "phases.mjs")));
+export const HG = await import(url(join(ROOT, "scripts", "humangates.mjs")));
+export const PJ = await import(url(join(ROOT, "scripts", "projection.mjs")));
+export const SCHED = await import(url(join(ROOT, "scripts", "scheduler.mjs")));
 
 export const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
@@ -162,6 +170,45 @@ export function approve(fx, runId, extra = {}) {
   return DEL.approveDelivery(fx.P, runId, { approver: "test-operator", why: "fixture", ...extra });
 }
 export const deliver = (fx, runId, extra = {}) => DEL.deliverRun({ projectId: fx.P, runId, ...extra });
+
+// ------------------------------------------------------------- scheduler
+
+// The scheduler starts its own fresh worker per task, so it cannot be handed a
+// pre-built executor object: it must resolve one from the environment the same
+// way production does. This points SCH_CLAUDE_EXECUTABLE at the fake worker and
+// gives it ONE behaviour file per task id, so a two-task queue can make task 1
+// succeed and task 2 fail without either knowing about the other.
+export function fakeQueueEnv(fx, behaviourByTask, extra = {}) {
+  const dir = join(fx.home, "behaviours");
+  mkdirSync(dir, { recursive: true });
+  for (const [taskId, b] of Object.entries(behaviourByTask))
+    writeFileSync(join(dir, `task-${taskId}.json`), JSON.stringify(b, null, 2));
+  return {
+    ...process.env,
+    SCH_CLAUDE_EXECUTABLE: process.execPath,
+    // The dispatcher picks the behaviour from SCH_TASK_ID, which the executor
+    // sets for every worker — so "a fresh process per task" is what is exercised.
+    SCH_CLAUDE_ARGS: [join(ROOT, "tests", "fixtures", "fake-claude-dispatch.mjs"), dir].join(" "),
+    ...extra,
+  };
+}
+
+export const runQueue = (fx, opts = {}) =>
+  SCHED.runQueue({ projectId: fx.P, env: opts.env ?? process.env, ...opts });
+
+// Approve every pending human gate, the way an operator does from the CLI.
+export function approveAllGates(fx, approver = "test-operator") {
+  const decided = [];
+  for (const g of HG.pending(fx.P)) decided.push(HG.decide(fx.P, g.id, { decision: "APPROVED", approver }));
+  return decided;
+}
+
+// A task that is eligible AND has a dependency, with the reason recorded.
+export function addDependentTask(fx, upstream, opts = {}) {
+  const id = addTask(fx, { deps: String(upstream), ...opts });
+  fx.cli("task-set", "--project", fx.P, String(id), "--dep-reason", `${upstream}:DATA_DEPENDENCY:the thing it produces`);
+  return id;
+}
 
 // Record every git argv SCH runs, so a test can assert on what was NOT run.
 export function recordGit() {

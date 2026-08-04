@@ -180,6 +180,29 @@ export function addTask(state, t) {
     // the discovery is paid once — and so the engine can tell which ready tasks
     // sit on the SAME files and could share one subagent's ground truth.
     files: t.files ?? [],
+    // WHY ONE TASK WAITS FOR ANOTHER. `deps` was a bare list of numbers, which
+    // cannot answer the only question that matters before a scheduler executes a
+    // graph: what does this task CONSUME from that one? An edge nobody can
+    // defend serialises work for free, and three of them in a ring deadlock a
+    // queue silently. Optional, so every existing task keeps working — an edge
+    // with no reason is FLAGGED by the false-edge audit, never deleted.
+    //   [{ from: 8, type: "DATA_DEPENDENCY", consumes: "api_contract" }]
+    depMeta: t.depMeta ?? [],
+    // Bounded retries. Absent means the scheduler's defaults apply; nothing here
+    // can create an unlimited one.
+    retryPolicy: t.retryPolicy ?? null,
+    // Which irreversible acts need a person first. Delivery approval is required
+    // by default by the delivery controller itself — this only narrows or names
+    // the others.
+    approvalPolicy: t.approvalPolicy ?? null,
+    // Per-task ceilings the scheduler enforces before it starts an attempt.
+    budgets: t.budgets ?? null,
+    // Which agent role executes and which reviews. Roles are separate from
+    // executors and models on purpose (see scripts/phases.mjs).
+    executorRole: t.executorRole ?? null,
+    verifierRole: t.verifierRole ?? null,
+    // Deliberate exceptions to dependency rules, e.g. allow_cancelled.
+    dependencyPolicy: t.dependencyPolicy ?? null,
     // The task's PATH POLICY and its REQUIRED VERIFICATION. These are the two
     // things the external runner enforces mechanically: a worker may only touch
     // allowedPaths, may never touch forbiddenPaths, and "it works" means these
@@ -1018,6 +1041,22 @@ const commands = {
       die(`"${flags.status}" is set by the delivery controller only — it means committed, pushed and verified on the remote.\n` +
           `  Deliver a VERIFIED run instead: node scripts/sch-deliver-run.mjs --project ${id} --run <RUN-id>\n` +
           `  (for a locally finished task the status you want is "merged")`);
+    // A CANONICAL state is reached by a controlled transition, never by typing
+    // its name. `task-set` speaks the legacy vocabulary and only that.
+    if (flags.status !== undefined && !STATUSES.includes(flags.status))
+      die(`"${flags.status}" is not a task status (${STATUSES.join(", ")}).\n` +
+          `  If you meant a graph state, move it with an EVENT instead — the machine decides whether the move is legal:\n` +
+          `  node scripts/state.mjs task-transition --project ${id} --task ${t.id} --event <release|requeue|block|need_decision|fail|cancel|supersede>`);
+    // WHILE A SCHEDULER OWNS THIS PROJECT, HANDS OFF. The in-session loop and the
+    // queue scheduler both move tasks; both moving the same task at the same time
+    // is how a task gets "merged" out from under a delivery that is mid-push.
+    if (flags.status !== undefined) {
+      const held = await schedulerHolding(id);
+      if (held && !(flags.force === "true"))
+        die(`scheduler ${held.scheduler_id} is running this project (pid ${held.pid}, lease expires ${held.expires_at}).\n` +
+            `  It owns task state while it runs. Stop it first, or pass --force if you are certain it is dead:\n` +
+            `  node scripts/state.mjs scheduler-cancel --project ${id} --scheduler ${held.scheduler_id}`);
+    }
     // HARD GATE (smart): a UI/design task cannot complete unless AT LEAST ONE of
     // the project's chosen design skills was actually invoked (transcript-verified,
     // unfakeable). Only fires on design tasks — backend/recon/etc are never blocked.
@@ -1050,9 +1089,11 @@ const commands = {
       t.notes = `PROCEEDING ON MY OWN CALL: ${flags.assume}\n\nYou can change this any time — answering requeues the task with your decision.\n\n${flags.brief ?? t.brief ?? flags.notes ?? ""}`;
       // set the STATUS itself, not just the flag — this branch returns before
       // the flag-application loop below ever runs
-      t.status = "queued"; t.priority = Math.min(t.priority ?? 3, 2); t.updatedAt = now();
+      const TRx = await import("./transitions.mjs");
+      TRx.stampLegacy(t, "queued", { reason: `proceeding on its own call: ${String(flags.assume).slice(0, 80)}` });
+      t.priority = Math.min(t.priority ?? 3, 2); t.updatedAt = now();
       event(s, `task #${t.id} proceeding on its own call: ${String(flags.assume).slice(0, 60)}`);
-      saveState(id, s); return out({ id: t.id, status: t.status, assumed: flags.assume });
+      saveState(id, s); return out({ id: t.id, status: t.status, state: t.state, assumed: flags.assume });
     }
     if (flags.status === "blocked") {
       // dependency FIRST: a task waiting on another task is not a question at
@@ -1068,7 +1109,20 @@ const commands = {
         askGate(t, flags);   // still blocked ⇒ a person must read it, so it must be readable
       }
     }
-    for (const k of ["status", "branch", "notes", "phase", "target", "priority", "category", "phaseName"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
+    // THE STATUS WRITE GOES THROUGH THE CLOSED MACHINE. It is still the legacy
+    // vocabulary and it still works, but it is now a recorded TRANSITION with an
+    // actor, a state version and — when the machine would have refused the move —
+    // that refusal written down beside it. A hand-driven queue leaves a trail
+    // instead of a mystery.
+    let stamped = null;
+    if (flags.status !== undefined) {
+      const TRx = await import("./transitions.mjs");
+      stamped = TRx.stampLegacy(t, flags.status, { actor: flags.actor ?? "operator", reason: flags.note ?? flags.reason ?? "" });
+      if (!stamped.ok) die(stamped.failure.message);
+      if (stamped.transition)
+        auditLog({ kind: "transition", project: id, task: String(t.id), ...stamped.transition });
+    }
+    for (const k of ["branch", "notes", "phase", "target", "priority", "category", "phaseName"]) if (flags[k] !== undefined) t[k] = (k === "phase" || k === "priority") ? Number(flags[k]) : flags[k];
     // the files this task touches — what locate-first found, so it is never
     // rediscovered and co-located tasks can be batched
     if (flags.files !== undefined) t.files = [...new Set([...(t.files ?? []), ...splitList(flags.files)])];
@@ -1206,11 +1260,44 @@ const commands = {
             `  (the agent reports both on return; pass --tokens unknown if it genuinely did not)`);
       if (String(flags.tokens).toLowerCase() === "unknown") { t.tokens = 0; t.tokensUnmeasured = true; }
     }
+    // --- graph metadata -------------------------------------------------------
+    // WHY this task waits for that one. Written as `--dep-reason "8:DATA_DEPENDENCY:api_contract"`,
+    // repeatable with `|`. Recorded per edge and REPLACED, never merged: a reason
+    // you cannot correct is not a reason.
+    if (flags["dep-reason"] !== undefined) {
+      const TG = await import("./taskgraph.mjs");
+      const parsed = splitList(flags["dep-reason"]).map((spec) => {
+        const [from, type, ...rest] = String(spec).split(":");
+        return { from: Number(from), type: String(type ?? "").toUpperCase(), consumes: rest.join(":").trim(), note: "" };
+      });
+      const badType = parsed.find((r) => r.type && !TG.DEPENDENCY_TYPES.includes(r.type));
+      if (badType) die(`"${badType.type}" is not a dependency type — one of: ${TG.DEPENDENCY_TYPES.join(", ")}`);
+      const badFrom = parsed.find((r) => !Number.isInteger(r.from));
+      if (badFrom) die(`--dep-reason expects "<upstream-task-id>:<TYPE>:<what it consumes>"`);
+      t.depMeta = parsed;
+      // Naming a reason for an edge that does not exist is a typo, not a graph
+      // edit — say so rather than silently recording a reason nothing uses.
+      const orphan = parsed.map((r) => r.from).filter((f) => !(t.deps ?? []).map(Number).includes(f));
+      if (orphan.length) die(`task #${t.id} does not depend on #${orphan.join(", #")} — add the dependency first (--deps), then give it a reason`);
+    }
+    for (const [flag, field] of [["retry-policy", "retryPolicy"], ["approval-policy", "approvalPolicy"],
+                                 ["budgets", "budgets"], ["dependency-policy", "dependencyPolicy"]])
+      if (flags[flag] !== undefined) {
+        try { t[field] = flags[flag] === "" ? null : JSON.parse(flags[flag]); }
+        catch (e) { die(`--${flag} must be JSON: ${e.message}`); }
+      }
+    for (const [flag, field] of [["executor-role", "executorRole"], ["verifier-role", "verifierRole"]])
+      if (flags[flag] !== undefined) {
+        const PHx = await import("./phases.mjs");
+        if (flags[flag] && !PHx.ROLES[flags[flag]]) die(`"${flags[flag]}" is not an agent role — one of: ${Object.keys(PHx.ROLES).join(", ")}`);
+        t[field] = flags[flag] || null;
+      }
+
     // a finished task is no longer what the loop is doing — stale activity is
     // what made the dashboard say "building #96" for minutes after it merged
     if (CLOSED.has(t.status) && s.run?.activity) delete s.run.activity;
     t.updatedAt = now();
-    event(s, `task #${t.id} -> ${t.status}${flags.note ? " (" + flags.note + ")" : ""}`);
+    event(s, `task #${t.id} -> ${t.status}${stamped?.state ? ` [${stamped.state}]` : ""}${flags.note ? " (" + flags.note + ")" : ""}`);
     saveState(id, s); out(t);
   },
   // What the loop is doing RIGHT NOW, including work that is not a task.
@@ -1672,8 +1759,169 @@ const commands = {
     } catch (e) { die(e.message); }
   },
 
+  // ---- the task graph -------------------------------------------------------
+  // Read-only. Validation NEVER edits the graph: a suspected false edge is a
+  // judgement call about work a person planned, and the engine does not quietly
+  // rewrite a plan it merely has an opinion about.
+  async "graph-validate"({ flags }) {
+    const id = pid(flags);
+    const [TG, TR] = [await import("./taskgraph.mjs"), await import("./transitions.mjs")];
+    const r = TG.validateGraph(id, { canonicalState: TR.canonicalState });
+    out(r);
+    if (!r.ok) process.exitCode = 1;
+  },
+  async "graph-show"({ flags }) {
+    const id = pid(flags);
+    const [TG, TR] = [await import("./taskgraph.mjs"), await import("./transitions.mjs")];
+    const g = TG.projectGraph(id, { canonicalState: TR.canonicalState });
+    if (flags.format === "markdown") { console.log(TG.renderTaskQueueMarkdown(g)); return; }
+    out(g);
+  },
+
+  // ---- controlled task transitions -------------------------------------------
+  // An EVENT, never a destination. Naming a destination is how a task ends up
+  // "DELIVERED" because somebody typed it; an event resolves to a destination
+  // this actor is allowed to reach from where the task actually is.
+  async "task-transition"({ flags, pos }) {
+    const id = pid(flags);
+    const TR = await import("./transitions.mjs");
+    const taskId = Number(flags.task ?? pos[0] ?? die("need --task <n>"));
+    const ev = flags.event ?? pos[1] ?? die(`need --event <${Object.keys(TR.EVENTS).join("|")}>`);
+    const r = TR.applyEvent(id, taskId, ev, {
+      actor: flags.actor ?? null, reason: flags.reason ?? flags.note ?? "",
+      expectVersion: flags["expect-version"] === undefined ? null : Number(flags["expect-version"]),
+    });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out({ task: taskId, state: r.state, state_version: r.state_version, transition: r.transition });
+  },
+  async "task-states"({ flags }) {
+    const TR = await import("./transitions.mjs");
+    out(TR.projectStates(pid(flags)));
+  },
+
+  // ---- the sequential scheduler ----------------------------------------------
+  // Reads only. Starting a scheduler is `scripts/sch-run-queue.mjs` — a separate
+  // entry point on purpose, so no status query can start a queue as a side effect.
+  async "scheduler-status"({ flags }) {
+    const S = await import("./scheduler.mjs");
+    out(S.schedulerProjection(pid(flags), { limit: Number(flags.limit ?? 10) }));
+  },
+  async "scheduler-list"({ flags }) {
+    const S = await import("./scheduler.mjs");
+    const p = S.schedulerProjection(pid(flags), { limit: Number(flags.limit ?? 20) });
+    out({ project: p.project, lease: p.lease, schedulers: p.schedulers });
+  },
+  async "scheduler-cancel"({ flags, pos }) {
+    const id = pid(flags); const p = getProject(id);
+    if (!p) die("no such project: " + id);
+    const [WSx, S] = [await import("./workspace.mjs"), await import("./scheduler.mjs")];
+    const schedulerId = flags.scheduler ?? pos[0] ?? die("need --scheduler <SCHED-id>");
+    try {
+      const wsDir = WSx.resolveWorkspaceDir(WSx.repositoryRoot(p.path) ?? p.path, { mustExist: true });
+      const live = S.liveSchedulerLease(wsDir);
+      // Releasing the lease is the cancellation: the scheduler checks it before
+      // every task and stops with SCHEDULER_LEASE_LOST. Nothing is killed, so a
+      // task mid-delivery finishes its transaction rather than being torn in half.
+      const r = S.releaseSchedulerLease(wsDir, schedulerId);
+      const s = loadState(id);
+      event(s, `scheduler ${schedulerId} cancelled by operator${r.released ? "" : ` (${r.reason})`}`);
+      saveState(id, s);
+      out({ scheduler: schedulerId, ...r, was_live: live?.scheduler_id === schedulerId,
+        note: "the lease is released; the scheduler stops before its next task. Nothing was killed mid-delivery." });
+    } catch (e) { die(e.message); }
+  },
+  async "phase-list"({ flags, pos }) {
+    const S = await import("./scheduler.mjs");
+    const taskId = Number(flags.task ?? pos[0] ?? die("need --task <n>"));
+    out(S.taskPhases(pid(flags), taskId, { schedulerId: flags.scheduler ?? null }));
+  },
+  async "gate-report"({ flags, pos }) {
+    const id = pid(flags);
+    const [S, PH] = [await import("./scheduler.mjs"), await import("./phases.mjs")];
+    const taskId = Number(flags.task ?? pos[0] ?? die("need --task <n>"));
+    const wanted = flags.gate ?? null;
+    const rows = [];
+    for (const a of S.taskPhases(id, taskId).attempts)
+      for (const p of PH.listPhases(a.dir))
+        for (const g of p.gate_reports ?? [])
+          if (!wanted || g.gate_id === wanted)
+            rows.push({ scheduler_id: a.scheduler_id, attempt: a.attempt, phase_id: p.phase_id, ...g });
+    out({ project: id, task_id: taskId, gate: wanted, reports: rows });
+  },
+
+  // ---- typed human decisions --------------------------------------------------
+  async "human-gate-list"({ flags }) {
+    const HG = await import("./humangates.mjs");
+    out(flags.all === "true" ? HG.list(pid(flags), { taskId: flags.task ? Number(flags.task) : null })
+                             : HG.projection(pid(flags)));
+  },
+  async "human-gate-show"({ flags, pos }) {
+    const HG = await import("./humangates.mjs");
+    const gateId = flags.gate ?? pos[0] ?? die("need --gate <HG-id>");
+    out(HG.get(pid(flags), gateId) ?? { error: `no human gate ${gateId}` });
+  },
+  async "human-gate-decide"({ flags, pos }) {
+    const id = pid(flags);
+    const HG = await import("./humangates.mjs");
+    const gateId = flags.gate ?? pos[0] ?? die("need --gate <HG-id>");
+    const decision = String(flags.decision ?? "").toUpperCase() || die("need --decision APPROVED|REJECTED");
+    const r = HG.decide(id, gateId, {
+      decision, approver: flags.approver ?? die("need --approver <name> — a decision without an approver is not a decision"),
+      conditions: flags.conditions ?? "", expectProposalHash: flags["expect-hash"] ?? null,
+    });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out({ gate: r.gate.id, status: r.gate.status, approver: r.gate.approver, decided_at: r.gate.decided_at,
+      next: decision === "APPROVED" ? `resume the queue: node scripts/sch-run-queue.mjs --project ${id}` : "the queue stays stopped" });
+  },
+  // A human gate raised outside the scheduler — the CLI equivalent of blocking a
+  // task, but typed and bound instead of prose in a notes field.
+  async "human-gate-open"({ flags }) {
+    const id = pid(flags);
+    const HG = await import("./humangates.mjs");
+    const r = HG.create(id, {
+      gateType: String(flags.type ?? "").toUpperCase() || die(`need --type <${(await import("./humangates.mjs")).GATE_TYPES.join("|")}>`),
+      question: flags.question ?? die("need --question — the whole question, as the operator will read it"),
+      options: splitList(flags.options ?? ""), recommended: flags.recommended ?? "",
+      taskId: flags.task ? Number(flags.task) : null, requestedBy: flags.by ?? "operator",
+    });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out({ gate: r.gate.id, status: r.gate.status, existing: Boolean(r.existing) });
+  },
+
+  // ---- the SQLite operational projection ---------------------------------------
+  // A PROJECTION, not the authority. Safe to delete; rebuilt from state.
+  async "projection-status"({ flags }) {
+    const id = pid(flags);
+    const [PJ, TG, TR, HG] = [await import("./projection.mjs"), await import("./taskgraph.mjs"),
+                              await import("./transitions.mjs"), await import("./humangates.mjs")];
+    if (flags.rebuild === "true") {
+      PJ.reset(id);
+      const db = PJ.open(id);
+      const p = getProject(id);
+      PJ.upsertProject(db, { project_id: id, name: p?.name, domain: p?.domain, execution_mode: null });
+      PJ.upsertGraph(db, id, TG.projectGraph(id, { canonicalState: TR.canonicalState }));
+      PJ.upsertHumanGates(db, id, HG.list(id));
+      for (const r of (loadState(id).runs ?? [])) PJ.upsertRunReference(db, id, r);
+      db.close();
+    }
+    out(PJ.dashboardProjection(id, { limit: Number(flags.limit ?? 20) }));
+  },
+
   help() { out("commands: " + Object.keys(commands).join(", ")); },
 };
+
+// Is a scheduler currently holding this project? Used to refuse a hand-driven
+// status write while the queue owns the task states. Returns null if there is no
+// workspace, no lease, or the holder is gone.
+async function schedulerHolding(projectId) {
+  try {
+    const p = getProject(projectId);
+    if (!p?.path) return null;
+    const [WSx, S] = [await import("./workspace.mjs"), await import("./scheduler.mjs")];
+    const wsDir = WSx.resolveWorkspaceDir(WSx.repositoryRoot(p.path) ?? p.path, { mustExist: true });
+    return S.liveSchedulerLease(wsDir);
+  } catch { return null; }
+}
 
 // Actions that change state or make a scope decision — logged to the audit
 // trail. Pure reads (list/get/find/stats/help) are not, to keep the log signal.
@@ -1682,13 +1930,14 @@ const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-f
   "finding-add", "finding-set", "inbox-add", "inbox-mark",
   "coverage-add", "coverage-set", "session-set", "session-fail",
   "skill-discover", "skill-trust", "profile-set", "workspace-init", "run-cancel",
-  "delivery-approve", "delivery-cancel", "handoff-promote"]);
+  "delivery-approve", "delivery-cancel", "handoff-promote",
+  "task-transition", "scheduler-cancel", "human-gate-decide", "human-gate-open"]);
 
 // Commands that mutate state must hold the write lock for the whole
 // read-modify-write, or concurrent writers (parallel waves + dashboard) clobber
 // each other. Pure reads run without a lock.
 const MUTATING = new Set([...AUDITED, "init", "skills-set", "task-answer", "retest-new",
-  "lock-acquire", "lock-release", "event-add", "project-remove"]);
+  "lock-acquire", "lock-release", "event-add", "project-remove", "projection-status"]);
 
 if (process.argv[1] && process.argv[1].endsWith("state.mjs")) {
   const [cmd, ...rest] = process.argv.slice(2);

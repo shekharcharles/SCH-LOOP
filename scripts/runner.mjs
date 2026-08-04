@@ -387,7 +387,16 @@ export function runVerification(commands, { cwd, runDirPath, timeoutMs = DEFAULT
     // stored array, quoted here so a value with a space reads unambiguously.
     const display = displayCommand(v);
     const at = v.cwd && v.cwd !== "." ? join(cwd, v.cwd) : cwd;
-    const limit = Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : timeoutMs;
+    // A DEFAULT MUST NOT OUTRANK AN EXPLICIT INSTRUCTION.
+    //
+    // `task-set --verify` stamps every command with the 10-minute default, so
+    // `Number(v.timeout_ms) > 0` was always true and `SCH_VERIFY_TIMEOUT_MS` was
+    // dead configuration for every task created that way. A run that asked for a
+    // 2-second ceiling waited ten minutes and looked, convincingly, like a hang.
+    //
+    // The caller's limit is a CEILING: a task may ask for less time than the
+    // operator allows, never more.
+    const limit = Math.min(Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : timeoutMs, timeoutMs);
     const t0 = Date.now();
     let stdout = "", stderr = "", code = null, signal = null, timedOut = false, truncated = false, spawnError = null;
     try {
@@ -637,7 +646,7 @@ const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; 
 
 // Everything that must hold before a worker is started. Collects ALL failures
 // rather than stopping at the first — the operator should see the whole list.
-export function preflight({ projectId, taskId, env = process.env, executor = null, runId = null }) {
+export function preflight({ projectId, taskId, env = process.env, executor = null, runId = null, allowDirtyPaths = null }) {
   const failures = [];
   const bad = (code, message) => failures.push({ code, message });
   const ctx = { project: null, task: null, state: null, repoRoot: null, wsDir: null, baselineRepo: null, policy: null, skills: null };
@@ -663,9 +672,22 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
   if (!task) bad("TASK_INELIGIBLE", `no task #${taskId} in project "${projectId}"`);
   ctx.task = task ?? null;
   if (task) {
-    if (!["queued", "changes"].includes(task.status))
-      bad("TASK_INELIGIBLE", `task #${taskId} is "${task.status}" — only a queued or changes task is eligible and pre-approved for a run`);
-    const unmet = (task.deps ?? []).filter((d) => state.tasks.find((x) => x.id === Number(d))?.status !== "merged");
+    // Eligibility speaks BOTH vocabularies. A task the scheduler has claimed
+    // reads "building" to a legacy consumer, and the first version of this check
+    // refused exactly that — the runner would not run a task the scheduler had
+    // just legitimately claimed for it. The canonical state decides when there
+    // is one; the legacy status decides for everything planned before there was.
+    const ELIGIBLE_STATES = ["READY", "CLAIMED", "RUNNING", "RETRYABLE"];
+    const canonical = task.state && ELIGIBLE_STATES.concat(["BACKLOG", "VERIFYING", "AWAITING_DELIVERY", "DELIVERING", "DELIVERED", "NEEDS_DECISION", "BLOCKED", "FAILED", "CANCELLED", "SUPERSEDED"]).includes(task.state) ? task.state : null;
+    const eligible = canonical ? ELIGIBLE_STATES.includes(canonical) : ["queued", "changes"].includes(task.status);
+    if (!eligible)
+      bad("TASK_INELIGIBLE", `task #${taskId} is "${canonical ?? task.status}" — only a ready, claimed or retryable task is eligible and pre-approved for a run`);
+    // A dependency is complete when its work is LOCALLY finished ("merged", the
+    // in-session loop's word) or ON THE REMOTE ("delivered"). Accepting only
+    // "merged" meant the very first delivered dependency deadlocked its child:
+    // sequential execution could never get past task two.
+    const DONE = new Set(["merged", "delivered"]);
+    const unmet = (task.deps ?? []).filter((d) => !DONE.has(state.tasks.find((x) => x.id === Number(d))?.status));
     if (unmet.length) bad("DEPENDENCY_INCOMPLETE", `task #${taskId} depends on #${unmet.join(", #")}, which ${unmet.length > 1 ? "are" : "is"} not complete`);
   }
 
@@ -717,8 +739,27 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
     // and must be clean like any other file: exempting the whole `.sch-loop/`
     // tree, as the first version did, meant an uncommitted spec change sailed
     // straight past the cleanliness gate it exists to catch.
-    const dirty = snap.status_entries.filter((e) => !WS.isRuntimePath(e.path));
+    // A REPAIR STARTS FROM THE BROKEN CHANGE, not from a clean tree.
+    //
+    // The clean-tree gate exists so a run's effects are attributable — anything
+    // dirty afterwards is the worker's. A second attempt at the SAME task
+    // breaks that only if the leftovers are somebody else's: the previous
+    // attempt's own in-policy paths are exactly what the repair is supposed to
+    // fix, and refusing them made every retry impossible while the alternative
+    // — discarding a worker's unapproved work to get a clean tree — is the one
+    // thing this engine must never do.
+    //
+    // The caller names them explicitly; nothing is inferred, and a path that is
+    // not on the list is still a dirty tree.
+    const carried = new Set((allowDirtyPaths ?? []).map((p) => String(p).replace(/\\/g, "/")));
+    const dirty = snap.status_entries.filter((e) => !WS.isRuntimePath(e.path) && !carried.has(e.path.replace(/\\/g, "/")));
     if (dirty.length) bad("REPOSITORY_DIRTY", `the working tree is not clean:\n${clamp(dirty.map((e) => `${e.x}${e.y} ${e.path}`).join("\n"), 1000)}`);
+    // Carried paths are still held to the task's path policy: "the previous
+    // attempt left it" is not authorization for a path the task may not touch.
+    for (const p of carried) {
+      const cls = classifyPath(ctx.repoRoot, p, ctx.policy ?? { allowed: [], forbidden: [], controlCategory: null });
+      if (cls.verdict !== "ALLOWED") bad(cls.code ?? "PATH_SCOPE_VIOLATION", `a previous attempt left "${p}" in the working tree and this task may not touch it (${cls.why})`);
+    }
     if (!snap.index_clean) bad("REPOSITORY_DIRTY", "the index is not clean — staged changes must be resolved before a run");
     const ops = inProgressOperations(ctx.repoRoot);
     if (ops.length) bad("REPOSITORY_DIRTY", `a ${ops.join(" and ")} is in progress — finish or abort it before a run`);
@@ -819,7 +860,7 @@ ${verification ? li(verification.results, (r) => `\`${r.display}\` -> **${r.resu
 
 // ---------------------------------------------------------------- the runner
 
-export async function runTask({ projectId, taskId, env = process.env, executor = null, attempt = 1, onEvent = null }) {
+export async function runTask({ projectId, taskId, env = process.env, executor = null, attempt = 1, onEvent = null, allowDirtyPaths = null }) {
   const runId = newRunId();
   const identity = { run_id: runId, project_id: projectId, task_id: String(taskId), attempt, started_at: now() };
   const started = Date.now();
@@ -877,7 +918,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
 
   // ---- preflight
   ev("run.preflight_started");
-  const pre = preflight({ projectId, taskId, env, executor, runId });
+  const pre = preflight({ projectId, taskId, env, executor, runId, allowDirtyPaths });
   const prep = pre.preparePromise ? await pre.preparePromise : { ok: true, problems: [] };
   const preFailures = [...pre.failures, ...(prep.ok ? [] : prep.problems)];
   write("preflight.json", { checked_at: now(), ok: preFailures.length === 0, failures: preFailures });

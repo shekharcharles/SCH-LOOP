@@ -35,7 +35,11 @@ export const INIT_DIRS = ["handoffs", "runs", "locks"];
 
 // Runtime directories: ignored by default. Raw prompts, stdout/stderr and
 // artifacts may contain anything, so they never leave the machine by accident.
-export const RUNTIME_DIRS = ["runs", "artifacts", "logs", "cache", "locks", "tmp"];
+// `scheduler/` holds one directory per scheduler run: its record, its event log,
+// and one directory per task attempt with that attempt's phase records. Runtime
+// by the same argument as `runs/` — it references worker evidence and is
+// rebuildable, so it is ignored rather than committed into the customer's repo.
+export const RUNTIME_DIRS = ["runs", "artifacts", "logs", "cache", "locks", "tmp", "scheduler"];
 
 // Durable project record: allowed (not forced) to be tracked in git.
 export const TRACKED_PATHS = [

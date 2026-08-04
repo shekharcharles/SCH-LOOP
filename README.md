@@ -139,6 +139,33 @@ scripts/runner.mjs        The supervised single-task orchestrator: preflight, le
                           inspection, deterministic verification, outcome, run events.
 scripts/sch-run-task.mjs  CLI for one supervised run: --project <id> --task <n>. One task,
                           one attempt, then stop. Never stages, commits or pushes.
+scripts/taskgraph.mjs     The project task graph: typed dependency reasons, the false-edge
+                          audit, hidden dependencies (shared paths / control files / schema),
+                          cycle + self + duplicate detection, readiness with its blockers.
+scripts/transitions.mjs   The CLOSED task-state machine: 14 states, one authorised actor per
+                          edge, expected-version (optimistic) concurrency, the documented
+                          legacy↔canonical map, and the audit record of every move.
+scripts/envelopes.mjs     The typed envelope registry (7 types) that crosses every phase
+                          boundary: exactly one block, identity-checked, bounded, enum-checked,
+                          with an adapter for the previous milestone's worker handoff.
+scripts/gates.mjs         The named gate registry. Every gate returns a REPORT — what it
+                          checked, whether each item passed, its evidence, a stable hash.
+                          FACTUAL gates are overridable by nobody; POLICY gates by a person.
+scripts/phases.mjs        The phase engine: HUMAN / AGENT / CODE / GATE, the default-fail
+                          lifecycle (PENDING→RUNNING→EXECUTED→REPORTED→GATED→ACCEPTED),
+                          per-phase persistence + restart recovery, and the agent-role roster.
+scripts/humangates.mjs    Typed human decisions (12 kinds) bound to project/task/run/attempt/
+                          phase/state-version/proposal hash/diff hash, with expiry and
+                          automatic invalidation when the thing being approved moves.
+scripts/scheduler.mjs     The SEQUENTIAL graph scheduler: project lease, graph validation,
+                          one ready task at a time, the 16-phase task workflow, bounded
+                          retries with compact repair context, delivery through the existing
+                          controller, typed stop reasons, deterministic project completion.
+scripts/sch-run-queue.mjs CLI for the queue: --project <id> [--max-tasks --max-duration-ms
+                          --phase --stop-after-task --dry-run]. One task at a time, then stop.
+scripts/projection.mjs    The SQLite operational PROJECTION (node:sqlite, no dependency) for
+                          the dashboard: migrations, WAL, idempotent event projection,
+                          bounded text, rebuildable. Never the authority.
 scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project control,
                           answer box, skill picker, filter; fluid, no flicker. Port 4600.
 scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
@@ -215,6 +242,22 @@ delivery-status --run <RUN-id> | delivery-list | delivery-cancel --run <RUN-id>
 delivery-approve --run <RUN-id> --approver <name> [--message "..."] [--reject true]
 sch-run-task.mjs --project <id> --task <n> [--preflight-only]   (one supervised run)
 sch-deliver-run.mjs --project <id> --run <RUN-id> [--dry-run]   (one Git delivery)
+graph-validate | graph-show [--format markdown]      (the task graph + false-edge audit)
+task-set --dep-reason "8:DATA_DEPENDENCY:api_contract"     (why this task waits for that one)
+task-set --retry-policy '{"max_attempts":3,"max_repairs_per_attempt":1}'
+task-set --approval-policy '{...}' | --budgets '{...}' | --dependency-policy '{"allow_cancelled":true}'
+task-set --executor-role builder | --verifier-role reviewer
+task-transition --task <n> --event <release|requeue|block|need_decision|fail|cancel|supersede>
+                [--expect-version <v>]               (the CLOSED state machine; never a destination)
+task-states                                          (canonical state of every task)
+scheduler-status | scheduler-list | scheduler-cancel --scheduler <SCHED-id>
+phase-list --task <n> | gate-report --task <n> [--gate <id>]
+human-gate-list [--all true] | human-gate-show --gate <id>
+human-gate-open --type <TYPE> --question "..." [--task <n>]
+human-gate-decide --gate <id> --decision APPROVED|REJECTED --approver <name>
+projection-status [--rebuild true]                   (the SQLite operational projection)
+sch-run-queue.mjs --project <id> [--max-tasks n --max-duration-ms n --phase n
+                 --stop-after-task n --dry-run --quiet]        (the sequential queue)
 finding-add | finding-list | finding-set | chains   (offensive)
 retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
 provenance --ref <auth-ref>                          (who shared which asset, when, how)
@@ -261,16 +304,22 @@ Unified `/SCH` routing contract · skill discovery + trust records · project
 capability profiles · deterministic task→skill recommendation · execution-mode
 configuration and validation · dashboard-readable capability state
 (`/api/capabilities`) · the in-session loop (`/sch-run`) that has always existed ·
-the **supervised external single-task runner** below.
+the **supervised external single-task runner** · the **fail-closed Git delivery
+controller** · the **sequential graph scheduler** below: a first-class task graph
+with typed dependency reasons, a closed task-state machine, an SSSF-style phase
+engine with typed envelopes and named gates, bounded retries, typed human
+decision gates, a SQLite operational projection and deterministic project
+completion.
 
 ### Planned, and NOT implemented
 
-Sequential queue continuation · automatic retry and repair · an independent
-semantic reviewer · dashboard authentication · a full SCH MCP · automatic
-knowledge ingestion · parallel Git worktrees · graph fan-out and joins ·
-distributed workers · SQLite / event-sourced operational state. The runner is
-**one task, one attempt, then stop**; the delivery controller is **one run, one
-commit, then stop**. Neither continues to anything else.
+Parallel execution in Git worktrees · fan-out / fan-in and integration joins ·
+path-ownership leases · OS-level worker sandboxing · authenticated dashboard
+writes · a full SCH MCP · automatic knowledge ingestion · distributed workers ·
+Temporal (evaluation only) · migrating state authority into SQLite. The queue
+scheduler runs **one task at a time**, in the current working tree, and stops at
+a defined terminal condition. Nothing here is unattended-safe yet: see
+[Worker containment](#worker-containment-what-is-not-true-yet).
 
 ## 🧪 Supervised external single-task runner
 
@@ -427,6 +476,200 @@ with append-only, fail-closed events and a read-only dashboard projection at
 `/api/deliveries`. **Delivery and approval are operator authority and stay on the
 CLI: they must not be exposed remotely until the dashboard has authentication,
 which it does not have.**
+
+## 🧮 Sequential graph scheduler
+
+```bash
+node scripts/state.mjs graph-validate  --project <id>     # structure + false-edge audit
+node scripts/state.mjs graph-show      --project <id> [--format markdown]
+node scripts/sch-run-queue.mjs         --project <id>     # run the queue, then stop
+node scripts/sch-run-queue.mjs         --project <id> --max-tasks 3 --dry-run
+node scripts/state.mjs scheduler-status --project <id>
+node scripts/state.mjs human-gate-list  --project <id>
+node scripts/state.mjs human-gate-decide --project <id> --gate <HG-id> \
+     --decision APPROVED --approver <you>
+```
+
+The architectural invariant, and everything below is a consequence of it:
+
+```text
+Code owns the graph.
+Agents own bounded semantic phases.
+Typed envelopes cross phase boundaries.
+Named gates define acceptance.
+```
+
+The model does not choose what runs next, does not decide whether a phase
+passed, does not count its own retries, cannot authorise its own delivery and
+cannot declare a project finished. It plans and implements inside one approved
+task and hands back one typed envelope, which is then graded against evidence
+SCH gathered itself.
+
+**The task graph.** `deps` is still a list of task ids, and it now carries a
+REASON: `--dep-reason "8:DATA_DEPENDENCY:api_contract"`, one of `DATA_DEPENDENCY`,
+`SCHEMA_DEPENDENCY`, `FILE_CONFLICT`, `APPROVAL_DEPENDENCY`,
+`ENVIRONMENT_DEPENDENCY`, `INTEGRATION_DEPENDENCY`, `ORDERING_POLICY`.
+`graph-validate` refuses self-dependencies, duplicates, missing tasks, cycles,
+dependencies on cancelled tasks (unless `dependencyPolicy.allow_cancelled` says
+so) and unknown reason types. Separately it **audits** every edge — *does the
+downstream task consume an actual output, resource, schema, approval or protected
+ordering requirement?* — and an edge nobody can defend is reported as
+`FALSE_EDGE_SUSPECTED` and **never deleted**: it is a plan a person wrote.
+**Hidden dependencies** are computed, not stored: two tasks whose path policies
+overlap, or which share a control file (`package.json`, lockfiles, `tsconfig`,
+`Dockerfile`…), a schema/migration prefix or an SCH control category are ordered
+whether or not anyone said so — they block readiness while the other task is in
+flight, and are shown as `hidden_edges` rather than written into the graph.
+
+**Closed task states.** `BACKLOG READY CLAIMED RUNNING VERIFYING RETRYABLE
+AWAITING_DELIVERY DELIVERING NEEDS_DECISION BLOCKED FAILED DELIVERED CANCELLED
+SUPERSEDED`. Each edge names exactly one authorised actor — scheduler, runner,
+verifier, delivery, retry, human-gate, operator — and **a model is not on that
+list at all**. Every move records previous state, new state, actor, reason,
+project, task, run, attempt, state version, timestamp and causation, and an
+`--expect-version` mismatch is refused so a stale process cannot overwrite newer
+state. Historical statuses keep working through a documented map: `queued→READY`,
+`building→RUNNING`, `review→VERIFYING`, `changes→RETRYABLE`,
+**`merged→AWAITING_DELIVERY`** (it meant *finished locally, never pushed* — calling
+it DELIVERED would claim a remote it never reached), `delivered→DELIVERED`,
+`blocked→NEEDS_DECISION`, `stuck→FAILED`, `superseded→SUPERSEDED`. Nothing
+historical is rewritten: a task with no canonical state is *read* through the map
+and gains one the first time something legitimately moves it.
+`task-set --status` still speaks the legacy vocabulary, but it now goes through
+the transition service — it refuses a canonical state name, refuses
+`delivered`, and records what it did (including, when the closed machine would
+have refused the move, that refusal beside it).
+
+**Phases.** Sixteen of them per task, each `HUMAN`, `AGENT`, `CODE` or `GATE`:
+
+```text
+prepare CODE · task-readiness GATE · compile-context CODE · implement AGENT
+parse-builder-envelope CODE · inspect-effects CODE · effects-gate GATE
+verify CODE · verification-gate GATE · semantic-review AGENT · review-gate GATE
+prepare-delivery CODE · delivery-approval HUMAN · deliver CODE
+remote-verification GATE · complete-task CODE
+```
+
+Every phase begins **unaccepted** and moves `PENDING → RUNNING → EXECUTED →
+REPORTED → GATED → ACCEPTED`. `EXECUTED` means the process returned — that is all
+a zero exit code has ever meant. `REPORTED` needs a valid, typed,
+identity-checked envelope; `GATED` needs every required gate to have actually
+run; `ACCEPTED` needs every one of them to have passed. A phase cannot skip a
+checkpoint or move backwards, and each one is persisted, so a scheduler that
+died between two phases is told exactly where it was instead of guessing.
+Deterministic work is a `CODE` phase — an agent is never used for something a
+function can do.
+
+**Typed envelopes.** `PlannerEnvelopeV1 BuilderEnvelopeV1 ReviewerEnvelopeV1
+DecisionRequestEnvelopeV1 CodeResultEnvelopeV1 GateReportEnvelopeV1
+DeliveryEnvelopeV1`, sharing one base. Exactly one block, a known schema and
+type, the right project/task/run/phase/attempt, bounded strings and arrays,
+checked enums, artifact references that cannot absolutise or escape, and **no
+field nothing validates** — an unvalidated field is where an instruction hides.
+The previous milestone's worker handoff is adapted into `BuilderEnvelopeV1`, so
+a worker built against the old contract still works. The invariant throughout:
+
+```text
+Envelope claims are not system evidence.
+```
+
+**Named gates.** `project-workspace-valid · task-ready · dependency-graph-valid ·
+skills-approved · executor-ready · prompt-budget-valid · handoff-valid ·
+worker-effects-contained · changed-paths-allowed · forbidden-git-effects-absent ·
+required-verification-passed · secret-scan-passed · verified-diff-unchanged ·
+delivery-approval-valid · outgoing-commit-safe · remote-commit-present ·
+task-completion-valid · project-completion-valid`. Each returns a report: every
+item checked, whether it passed, its evidence, and a stable `evidence_hash` — never
+a bare boolean. A gate with no evidence to read **fails**; it never quietly
+skips. `FACTUAL` gates state something about the repository or the remote and are
+overridable by **nobody** — not an agent, not the operator, because the way past
+"a secret is present" is to remove the secret. `POLICY` gates may be overridden
+by a person, on the record, with a reason.
+
+**Retries are bounded and classified.** `AGENT_TIMEOUT`, `PROCESS_TRANSIENT`, a
+transient process failure, and a verification/lint/format failure *within the
+task's repair budget* are retryable. `PATH_SCOPE_VIOLATION`, `SECRET_DETECTED`,
+`FORBIDDEN_GIT_EFFECT`, `VERIFIED_DIFF_CHANGED`, `UNRELATED_OUTGOING_COMMITS`,
+`REMOTE_CHANGED`, `POLICY_VIOLATION` and anything requiring a schema, dependency
+or public-API decision are not — those are resolved by changing the world.
+An unclassified code fails closed. A retry is a **new attempt in a fresh
+process**; the previous attempt's directory is never overwritten, and the change
+it left in the working tree is carried forward and named explicitly rather than
+discarded — SCH does not throw away a worker's unapproved work to manufacture a
+clean tree. A repair receives only: the task, its criteria, its path policy, the
+previous attempt's summary, the failed gate reports, the relevant command output
+and the current diff summary — recorded, counted, and capped. Never a transcript,
+never every previous run, never the whole learning file.
+
+**Human gates.** `ARCHITECTURE_DECISION AUTHORIZATION_POLICY DEPENDENCY_CHANGE
+SCHEMA_CHANGE MIGRATION_CHANGE PUBLIC_API_BREAK SCOPE_EXPANSION
+DESTRUCTIVE_ACTION UNRELATED_FAILURE AMBIGUOUS_EVIDENCE BUDGET_INCREASE
+DELIVERY_APPROVAL`. A decision binds to project, task, run, attempt, phase, state
+version, proposal hash and — where the repository is involved — diff hash, with
+an expiry and a named approver. Change the proposal or the diff and it becomes
+`INVALIDATED`. The queue **stops** while one is pending and resumes when it is
+answered, continuing the attempt that was parked rather than running its worker a
+second time. The same answer signs the delivery transaction, so the operator is
+never asked twice in two vocabularies. Deciding is CLI-only; the dashboard shows
+them and prints the command.
+
+**Stop conditions**, all typed: `PROJECT_COMPLETED PHASE_COMPLETED NO_READY_TASK
+NEEDS_DECISION BLOCKED FAILED CANCELLED MAX_TASKS_REACHED MAX_DURATION_REACHED
+PROJECT_BUDGET_EXCEEDED CONSECUTIVE_FAILURE_LIMIT SCHEDULER_LEASE_LOST
+POLICY_VIOLATION STOP_AFTER_TASK DRY_RUN`. "Nothing is ready" is further split
+into `PROJECT_COMPLETE`, `GRAPH_DEADLOCK`, `BLOCKED_DEPENDENCIES`,
+`AWAITING_APPROVAL` and `INVALID_GRAPH` — a finished project and a deadlock must
+never look the same. **Completion is a gate, not an inference:** every required
+task delivered/cancelled/superseded, no unresolved human gate, no blocked
+required task, no active run/delivery/scheduler lease, and graph validation
+passing — each clause reported with its evidence.
+
+**Every task still** uses a fresh worker process, produces its own independent
+verification, binds delivery to the verified candidate, requires the configured
+approvals, pushes only through the delivery controller above, and becomes
+`DELIVERED` only after that controller has proved the commit on the remote with
+its own fetch. One task at a time; the next is claimed only once the previous
+one's commit is actually on the remote.
+
+**Observability.** Versioned scheduler events (`scheduler.*`) with event id,
+timestamp, project, scheduler run, task, attempt, phase, actor, causation,
+correlation and a **bounded** payload — worker output stays on disk and is
+referenced. A SQLite operational **projection** (`node:sqlite`, no dependency)
+under `SCH_HOME/projects/<id>/ops.db` — migrations, WAL, idempotent event
+projection, bounded text, indexes — feeds read-only dashboard APIs
+(`/api/task-graph`, `/api/scheduler`, `/api/phases`, `/api/gates`,
+`/api/human-gates`, `/api/completion`, `/api/operations`, `/api/workflow`). It is
+a projection, never the authority: delete it and `projection-status --rebuild
+true` re-derives it from SCH state. Per-phase accounting is in **characters and
+bytes** and says so — nothing here has a tokenizer, and a number labelled
+"tokens" that came from dividing characters by four is not a measurement.
+
+**Legacy `/sch-run`.** The in-session prompt-driven loop still exists and still
+works, and it is now explicitly the *legacy* path. It cannot set controller-only
+states, cannot name a canonical state, and — while a scheduler holds the
+project's lease — cannot change task status at all (`task-set` refuses and names
+the scheduler). Its status writes go through the same transition service and are
+recorded. Use `/sch-run` for supervised in-session work; use
+`sch-run-queue.mjs` when the queue should execute itself.
+
+### Worker containment: what is not true yet
+
+Stated plainly, because a false claim here is worse than a missing feature:
+
+- **Workers are not OS-sandboxed.** They run as your user, in your repository,
+  with your PATH. The environment is allowlisted, `SCH_HOME` is withheld, the
+  process is timed out and tree-killed, `.sch-loop/` is default-denied and every
+  effect is inspected afterwards — but none of that is a sandbox.
+- **Post-run effect inspection cannot see everything.** It compares the
+  repository before and after. A write outside the repository, a network call, or
+  a background process that outlives the run is not visible to it.
+- **Git credentials remain reachable.** A malicious worker running as you could
+  use your configured credential helper directly. SCH refuses to push except
+  through the delivery controller; it cannot stop the operating system.
+- **Therefore: fully unattended operation is not supported.** Run the queue
+  where you can see it, keep delivery approval on, and treat every task's path
+  policy as the real boundary. **OS-level worker containment is the critical
+  next milestone.**
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.

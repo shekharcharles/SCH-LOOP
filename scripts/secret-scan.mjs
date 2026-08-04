@@ -5,6 +5,11 @@
 //
 //   node <SCH_HOME>/scripts/secret-scan.mjs            # scans `git diff --cached`
 //   node <SCH_HOME>/scripts/secret-scan.mjs --all      # scans whole working tree
+//   node <SCH_HOME>/scripts/secret-scan.mjs --paths a b # scans exactly these files
+//
+// `--paths` is what the scheduler's secret gate uses: after a worker finishes,
+// its change is UNSTAGED by design, so neither the staged diff nor "the whole
+// tree" is the right question — the question is "are these changed files clean".
 //
 // exit 0 = clean (safe to commit) · exit 1 = BLOCKED (findings printed)
 
@@ -12,7 +17,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const arg = process.argv.slice(2);
-const ALL = arg.includes("--all");
+const pathsAt = arg.indexOf("--paths");
+// everything after --paths, minus any further flags
+const EXPLICIT = pathsAt === -1 ? null : arg.slice(pathsAt + 1).filter((a) => !a.startsWith("--"));
+const ALL = arg.includes("--all") || (EXPLICIT !== null);
 // git with a fixed arg array — no shell, so filenames can't inject.
 const git = (...a) => { try { return execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return ""; } };
 
@@ -52,7 +60,8 @@ const scanLine = (file, text) => {
 // A staged DELETION of a blocked file is the fix, not the offence — it is exactly
 // how a tracked CLAUDE.md gets untracked. Blocking it made the gate unescapable:
 // the only commit that could remove the file was the one commit it refused.
-const staged = ALL ? git("ls-files").split("\n").map((s) => ["A", s.trim()])
+const staged = EXPLICIT ? EXPLICIT.map((s) => ["A", s.trim()])
+  : ALL ? git("ls-files").split("\n").map((s) => ["A", s.trim()])
   : git("diff", "--cached", "--name-status").split("\n").map((l) => {
       const [st, ...rest] = l.split(/\t/);
       return [(st || "").trim()[0] || "", rest.join("\t").trim()];
