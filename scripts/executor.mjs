@@ -49,6 +49,18 @@ export const ENV_ALLOW = [
   "NODE_NO_WARNINGS",
 ];
 
+// A worker must not be able to authenticate to a remote. `credential.helper` is
+// `manager` on this operator's machine, which means the Windows Credential
+// Manager vault is one `git push` away from any process running as them.
+//
+// This is set on the ENVIRONMENT, never in the worktree's git config: the
+// delivery controller runs in that same worktree and still has to push.
+export const GIT_CREDENTIAL_STRIP = Object.freeze({
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "credential.helper",
+  GIT_CONFIG_VALUE_0: "",
+});
+
 // Values that must never reach an artifact, a log or a diagnostic even though
 // they are legitimately passed to the child.
 const SECRET_NAMES = /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)$/i;
@@ -210,6 +222,7 @@ export class ClaudeCliExecutor extends AgentExecutor {
     }
 
     const env = buildEnv(this.parentEnv, {
+      ...GIT_CREDENTIAL_STRIP,
       SCH_RUN_ID: identity.run_id, SCH_PROJECT_ID: identity.project_id, SCH_TASK_ID: identity.task_id,
       // Which attempt this is. A repair worker that cannot tell it is a repair
       // has no way to read the failure evidence it was given differently from
