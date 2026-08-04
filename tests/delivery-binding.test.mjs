@@ -285,10 +285,15 @@ test("guardrails: the forbidden git argv shapes are refused outright", () => {
   no(["reset", "--hard", "HEAD~1"], /reset --hard/);
   for (const cmd of ["rebase", "cherry-pick", "revert", "filter-branch", "merge", "clean", "stash"])
     no([cmd, "whatever"], /never run automatically/);
+  no(["worktree", "move", "a", "b"], /add, remove, list or prune/);
+  no(["worktree", "lock", "a"], /add, remove, list or prune/);
+  no(["worktree"], /add, remove, list or prune/);
   // and the shapes the controller actually needs are allowed
   for (const args of [["add", "--", "src/a.js"], ["commit", "--file", "-"], ["push", "origin", "refs/heads/main:refs/heads/main"],
                       ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
-                      ["status", "--porcelain=v2", "-z"], ["rev-parse", "HEAD"], ["restore", "--staged", "--", "src/a.js"]])
+                      ["status", "--porcelain=v2", "-z"], ["rev-parse", "HEAD"], ["restore", "--staged", "--", "src/a.js"],
+                      ["worktree", "add", "/tmp/x", "-b", "sch/task-1", "HEAD"], ["worktree", "remove", "--force", "/tmp/x"],
+                      ["worktree", "list"], ["worktree", "prune"]])
     assert.equal(CAND.assertSafeGitArgs(args), true, args.join(" "));
 });
 
