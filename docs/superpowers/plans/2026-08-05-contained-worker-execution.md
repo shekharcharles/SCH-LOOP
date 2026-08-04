@@ -717,15 +717,26 @@ Use the file's existing `req`, `mutateProjectState`, `audit` and `randomUUID` eq
 
 Register the command in `sch-commands` so the `/SCH` router and the dashboard cannot drift from it, matching how the neighbouring delivery commands are registered.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Document the command so `validate` stays green**
+
+`scripts/validate.mjs` checks the README's CLI reference against the real command table, so a new command with no README line fails the build. Add the line in this task, beside the other `delivery-*` entries in the README's "Full CLI reference" block:
+
+```
+delivery-branch-namespace --project <id> [--set "sch/task-*" --approver <you>] [--revoke true]
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `node --test tests/delivery-remote.test.mjs`
-Expected: PASS. Then `npm run validate` — `validate.mjs` checks README accuracy and command tables, so it will flag the new command until Task 7 documents it. That failure is expected here and is fixed in Task 7.
+Expected: PASS.
 
-- [ ] **Step 5: Commit**
+Run: `npm run validate`
+Expected: PASS. If it still fails on the command table, the command is registered under a different name than the README line — make them match rather than loosening the check.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/state.mjs tests/delivery-remote.test.mjs
+git add scripts/state.mjs scripts/worktree.mjs tests/delivery-remote.test.mjs README.md
 git commit -m "feat(delivery): authorize a branch namespace once per project, not one gate per task"
 ```
 
@@ -1029,11 +1040,7 @@ Still NOT true, and each is asserted as a known gap in `tests/containment.test.m
 
 Update `SCH-LOOP.md`'s corresponding paragraph — currently "**Workers are still not OS-sandboxed**, post-run inspection cannot see writes outside the repository..." — to match, and add the worktree and namespace facts.
 
-Add to the README CLI reference block, beside the other `delivery-*` lines:
-
-```
-delivery-branch-namespace --project <id> [--set "sch/task-*" --approver <you>] [--revoke true]
-```
+The README's CLI reference line for `delivery-branch-namespace` was already added in Task 5 — do not add it twice.
 
 Create `docs/adr/0004-contained-worker-execution.md` following the shape of the three existing ADRs: the decision (disposable worktree, credentials stripped, namespace authorization), the alternatives rejected (Docker, a second Windows user, WSL2 — with the reason each was deferred, copied from the spec's section 1), and the consequences (commits land on task branches, `main` no longer advances on its own, integration is a later milestone).
 
