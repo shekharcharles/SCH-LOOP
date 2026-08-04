@@ -96,6 +96,18 @@ test("workflows: FULL_SDLC is phase-for-phase the workflow that existed before t
   for (let i = 0; i < before.length; i++) {
     assert.equal(now[i].id, before[i].id, `phase ${i}`);
     assert.equal(now[i].kind, before[i].kind, now[i].id);
+    if (now[i].id === "semantic-review") {
+      // The ONE deliberate difference, and it is the point of this correction:
+      // the reviewer used to be a stub that ran nothing, so it carried no gates
+      // and produced no envelope. It now executes a real read-only worker, so it
+      // has both. Gaining gates on a phase that previously did nothing is not a
+      // migration break — running nothing was.
+      assert.equal(before[i].output_schema ?? null, null, "the old reviewer produced no envelope");
+      assert.equal(now[i].output_envelope, "ReviewerEnvelopeV1");
+      assert.equal(now[i].semantic, "review");
+      assert.ok((now[i].gates ?? []).includes("no-repository-effects"), "the reviewer is now held to read-only");
+      continue;
+    }
     assert.deepEqual(now[i].gates ?? [], before[i].gates ?? [], now[i].id);
     // every phase that produced evidence must still produce it
     assert.equal(now[i].output_envelope ?? null, before[i].output_schema ?? null, `${now[i].id} envelope`);

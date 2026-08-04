@@ -216,6 +216,11 @@ export class ClaudeCliExecutor extends AgentExecutor {
       // the original task — and a scheduler cannot prove "a fresh process per
       // attempt" without something in the child that names the attempt.
       SCH_ATTEMPT: identity.attempt,
+      // Which semantic phase this worker is. The worker does not act on it — SCH
+      // decides everything — but a test fixture needs to tell a scout run from a
+      // builder run, and a run record that names its phase is easier to read.
+      SCH_PHASE: identity.phase_id,
+      SCH_SEMANTIC: identity.semantic,
     });
 
     const out = sink(this.maxOutputBytes), err = sink(this.maxOutputBytes);

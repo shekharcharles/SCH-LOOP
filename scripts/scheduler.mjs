@@ -41,6 +41,7 @@ import * as WF from "./workflows.mjs";
 import * as ROLES from "./roles.mjs";
 import * as USAGE from "./usage.mjs";
 import * as EV from "./evidence.mjs";
+import * as SEM from "./semantic.mjs";
 import { loadState, saveState, getProject, auditLog, event as stateEvent } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
@@ -546,7 +547,7 @@ export async function runQueue({
       // A workflow that never intended to deliver finished successfully. It is
       // not a failure and it does not reset the queue — the task is parked at
       // AWAITING_DELIVERY and the scheduler moves on to the next ready task.
-      if (outcome.state === "VERIFIED" || outcome.state === "COMPLETED") {
+      if (["VERIFIED","COMPLETED","AWAITING_DELIVERY","READ_ONLY_COMPLETED","PLAN_COMPLETED"].includes(outcome.state)) {
         record.consecutive_failures = 0;
         record.tasks_completed_without_delivery = (record.tasks_completed_without_delivery ?? 0) + 1;
         save();
@@ -692,14 +693,26 @@ async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedu
     // A non-delivering template finished its work. The task is NOT delivered and
     // must not be treated as such — it stops at AWAITING_DELIVERY (or wherever
     // its workflow ended) and the operator decides what happens next.
-    if (result.outcome === "VERIFIED" || result.outcome === "COMPLETED") {
-      // Park it honestly. The work is done and verified; it is NOT delivered,
-      // and AWAITING_DELIVERY is exactly that state. Leaving it RUNNING would
-      // make a finished task look like an abandoned one.
+    if (["VERIFIED","COMPLETED","AWAITING_DELIVERY","READ_ONLY_COMPLETED","PLAN_COMPLETED"].includes(result.outcome)) {
+      // Park it honestly, and the two cases are genuinely different.
+      //
+      // A workflow that WROTE something is awaiting delivery: there is a change,
+      // and a person or a later workflow decides whether it ships.
+      //
+      // A READ-ONLY workflow produced information and changed nothing. Calling
+      // that "awaiting delivery" would imply a diff that does not exist, and
+      // leaving it READY would make the scheduler pick it forever. It is a
+      // decision point — the operator chooses what to do with the findings.
+      const readOnly = ["READ_ONLY_COMPLETED", "PLAN_COMPLETED"].includes(result.outcome);
       const cur = TR.canonicalState(loadState(projectId).tasks.find((t) => t.id === Number(taskId)));
-      if (cur === "RUNNING") TR.transition(projectId, taskId, { to: "VERIFYING", actor: "runner", reason: `workflow ${result.workflow?.template_id} completed`, runId: result.run_id, attempt });
-      TR.transition(projectId, taskId, { to: "AWAITING_DELIVERY", actor: "verifier", runId: result.run_id, attempt,
-        reason: `workflow ${result.workflow?.template_id ?? "(unknown)"} has no delivery phase — verified, not pushed` });
+      if (readOnly) {
+        TR.transition(projectId, taskId, { to: "NEEDS_DECISION", actor: "scheduler", runId: result.run_id, attempt,
+          reason: `workflow ${result.workflow?.template_id ?? "(unknown)"} completed READ-ONLY: it produced findings and changed nothing. Choose the next workflow for this task.` });
+      } else {
+        if (cur === "RUNNING") TR.transition(projectId, taskId, { to: "VERIFYING", actor: "runner", reason: `workflow ${result.workflow?.template_id} completed`, runId: result.run_id, attempt });
+        TR.transition(projectId, taskId, { to: "AWAITING_DELIVERY", actor: "verifier", runId: result.run_id, attempt,
+          reason: `workflow ${result.workflow?.template_id ?? "(unknown)"} has no delivery phase — the change is verified, not pushed` });
+      }
       emit("scheduler.task_awaiting_delivery", { workflow: result.workflow, outcome: result.outcome,
         note: "the selected workflow contains no delivery phase; nothing was pushed" }, { taskId, attempt });
       return { task_id: taskId, state: result.outcome, attempts: attempts.length, commit: null,
@@ -766,10 +779,12 @@ function lastAttemptRecord(wsDir, taskId, currentAttempt) {
 
 // ------------------------------------------------------------- one attempt
 
+const SEM_REVIEW_REQUIRED = new Set(["BUILD_REVIEW", "SECURITY_REVIEW"]);
+
 async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project, schedulerId, aDir, env, executor, emit, db, budgets, record, previousAttempt, repairsUsed, resume = false, workflowSelection = null, workflowId = null }) {
   const startedAt = now();
   const ctx = { project_id: projectId, task_id: taskId, repo_root: repoRoot, ws_dir: wsDir };
-  let runId = null, runRec = null, commit = null;
+  let runId = null, runRec = null, commit = null, planArtifact = null;
 
   // A RESUMED attempt does not run its worker again. The change it produced is
   // already in the working tree and its evidence is already on disk; re-running
@@ -781,7 +796,17 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
     ? (() => { try { return JSON.parse(readFileSync(join(aDir, "attempt.json"), "utf8")).run_id; } catch { return null; } })()
     : null;
 
-  const identity = () => ({ project_id: projectId, task_id: String(taskId), run_id: runId, attempt });
+  // The run that the CURRENT phase is executing. It is not always `runId`: a
+  // read-only phase (a reviewer) has its own run, while `runId` stays bound to
+  // the writing run the delivery pipeline will use. The phase engine validates
+  // the envelope AFTER the work returns, so this is a getter — reading it at
+  // call time would validate the reviewer's envelope against the builder's run
+  // and reject it as an identity mismatch.
+  let phaseRunId = null;
+  const identity = () => ({
+    project_id: projectId, task_id: String(taskId), attempt,
+    get run_id() { return phaseRunId ?? runId; },
+  });
 
   // Everything downstream reads the run's own artifacts, never the runner's
   // return value: the artifacts survive a restart and the return value does not.
@@ -827,8 +852,12 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   };
   const done = [];
   const skipped = [];
-  const runOne = async (defId, work) => {
-    const def = phaseOf(defId);
+  // `defOverride` exists for exactly one case: a semantic phase the PROJECT has
+  // switched off. It is still recorded — it is not absent — but it must not be
+  // held to the agent's envelope and gates, because no agent ran. Overriding the
+  // definition for that call is honest; faking a reviewer envelope would not be.
+  const runOne = async (defId, work, defOverride = null) => {
+    const def = defOverride ?? phaseOf(defId);
     record.current_phase = defId;
     emit("scheduler.phase_started", { kind: def.kind, role: def.role ?? null,
       workflow_template: wf.ok ? wf.template_id : null, workflow_template_version: wf.ok ? wf.template_version : null },
@@ -843,6 +872,152 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
         { gate_id: g.gate_id, gate_version: g.gate_version, kind: g.kind, outcome: g.outcome, evidence_hash: g.evidence_hash },
         { taskId, attempt, phaseId: defId });
     return rec;
+  };
+
+  // ONE PATH FOR EVERY SEMANTIC PHASE.
+  //
+  // scout, plan, implement, repair, review and document all run through here.
+  // The differences between them are DATA in semantic.mjs — role, effect policy,
+  // envelope, gates — not six divergent code paths that drift apart.
+  //
+  // The resolved role is the execution authority: it decides the prompt
+  // template, the context policy, the expected envelope, the write scope and
+  // the budgets, and the worker cannot widen any of them. Where the Claude CLI
+  // offers no technical enforcement (there is no tool sandbox), authority is
+  // enforced by an empty write policy plus post-run effect inspection plus a
+  // factual gate — never by claiming an isolation that does not exist.
+  const runSemantic = async (defId, semanticId, { planEnvelope = null, extraCtx = {} } = {}) => {
+    const handler = SEM.SEMANTIC_HANDLERS[semanticId];
+    // READ THE PRIOR RECORD BEFORE DISPATCHING. `runPhase` persists a fresh
+    // PENDING record the moment it starts, so asking inside the work function
+    // reads the record it just overwrote — which silently defeated this whole
+    // short-circuit and started a second worker over a dirty tree.
+    const already = resume ? PH.readPhase(aDir, defId) : null;
+    return runOne(defId, async () => {
+      const task = ctx.task;
+
+      // CLAIMED → RUNNING happens whether or not a worker is about to start: a
+      // resumed attempt is running again, and leaving the task CLAIMED makes
+      // every later transition illegal as a skip.
+      if (TR.canonicalState(loadState(projectId).tasks.find((t) => t.id === Number(taskId))) === "CLAIMED")
+        TR.transition(projectId, taskId, { to: "RUNNING", actor: "runner", attempt,
+          reason: already?.state === "ACCEPTED" ? `attempt ${attempt} resumed at ${defId}` : `${semanticId} phase starting a fresh worker` });
+
+      // RESUMING DOES NOT RE-RUN A WORKER.
+      //
+      // An attempt parked for a human decision is continued, not restarted: its
+      // change is already in the working tree and its evidence is already on
+      // disk. Starting a second process over that tree is how a resume turns
+      // into a collision.
+      if (already?.state === "ACCEPTED") {
+        const meta = (() => { try { return JSON.parse(readFileSync(join(aDir, "attempt.json"), "utf8")); } catch { return null; } })();
+        if (meta?.run_id && handler.writes_allowed) {
+          runId = meta.run_id;
+          const read = RUN.readRun(projectId, runId);
+          adoptRun(read); ctx.run = read.run;
+          ctx.effects = read.effects;
+          ctx.effects_artifact = join(read.dir, "git-effects.json");
+          ctx.preflight_switch = true;
+        }
+        // Restore the envelope this phase already produced, so a downstream
+        // phase that depends on it (the builder's plan) still has it.
+        if (already.envelope) {
+          const restored = { ok: true, envelope: already.envelope, envelope_type: already.envelope_type, hash: already.envelope_hash };
+          ctx.semantic_envelope = restored;
+          ctx[`${semanticId}_envelope`] = restored;
+        }
+        return { ok: true, notes: `resumed ${semanticId} — the worker was not started again` };
+      }
+      // 1. Resolve the ROLE. An unavailable executor or model profile fails the
+      //    phase here, before a process is started.
+      const resolved = ROLES.resolve(handler.role, { task, project, skills: [] });
+      if (!resolved.ok) return { ok: false, state: "FAILED", failure: resolved.failure };
+      const roleConfig = { ...resolved.config, semantic_handler: semanticId, phase_execution_id: `PEX-${randomBytes(6).toString("hex").toUpperCase()}` };
+
+      // 2. Narrow the write policy to what this handler may touch. A read-only
+      //    handler gets an EMPTY allow-list — no authorization whatsoever.
+      const eff = SEM.effectivePolicy(semanticId, task);
+      if (!eff.ok) return { ok: false, state: "FAILED", failure: eff.failure };
+      ctx.effective_policy = eff.policy;
+      ctx.role_config = roleConfig;
+      ctx.semantic_handler = semanticId;
+      Object.assign(ctx, extraCtx);
+
+      // 3. Run a FRESH external process. Every semantic phase gets its own
+      //    worker; none of them share a session.
+      // What is ALREADY in the working tree when this phase starts.
+      //   * a retry carries the previous attempt's change forward;
+      //   * a phase that runs AFTER a writer in the same attempt — a reviewer, a
+      //     documenter — must run against that change, because reading the diff
+      //     is the entire job. Demanding a clean tree there would make a
+      //     reviewer impossible.
+      const carried = [...new Set([
+        ...(attempt > 1 ? (previousAttempt?.effects?.paths ?? []).map((x) => x.path) : []),
+        ...((ctx.effects?.paths ?? []).map((x) => x.path)),
+      ])];
+      const rec = await RUN.runTask({
+        projectId, taskId, env, executor, attempt,
+        allowDirtyPaths: carried.length ? carried : null,
+        roleConfig, policyOverride: eff.policy, planEnvelope, semanticHandler: semanticId,
+        expectEnvelope: handler.output_envelope,
+        workflow: wf.ok ? { template_id: wf.template_id, template_version: wf.template_version } : null,
+      });
+      phaseRunId = rec.run_id;
+      const read = RUN.readRun(projectId, rec.run_id);
+      // The last semantic phase to run owns the run-derived context. `implement`
+      // additionally becomes the run the delivery pipeline binds to.
+      if (handler.writes_allowed || !runId) { runId = rec.run_id; adoptRun(read); ctx.run = rec; }
+      ctx.effects = read.effects;
+      ctx.effects_artifact = join(read.dir, "git-effects.json");
+      ctx.preflight_failures = read.preflight?.failures ?? [];
+      try { if (db) PROJ.upsertRunReference(db, projectId, { run_id: rec.run_id, task_id: taskId, attempt, outcome: rec.outcome, failure_code: rec.failure?.code ?? null, dir: rec.run_dir, at: rec.ended_at }); } catch {}
+
+      const accounting = {
+        prompt_characters: read.prompt_manifest?.total_characters ?? 0,
+        output_bytes: (read.worker?.stdout?.bytes_total ?? 0) + (read.worker?.stderr?.bytes_total ?? 0),
+        executor: read.worker?.executable ?? null, model: roleConfig.model_profile,
+      };
+
+      // 4. Did the process even run? A preflight or executor failure is this
+      //    phase's failure, not something for a downstream gate to discover.
+      const preWorker = !read.worker || (read.preflight?.failures ?? []).length > 0;
+      if (rec.outcome !== "VERIFIED" && preWorker)
+        return { ok: false, accounting, state: rec.outcome === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED",
+          failure: rec.failure ?? { code: "AGENT_PROCESS_FAILURE", message: `the ${semanticId} worker never started` } };
+      if (rec.outcome === "CANCELLED") return { ok: false, accounting, state: "CANCELLED", failure: rec.failure };
+
+      // 5. THE ROLE-POLICY CHECK. A read-only role that changed anything has
+      //    violated its role, and that is a distinct failure from a path-scope
+      //    violation: nothing was authorized at all. Evidence is preserved and
+      //    NOTHING is reverted — discarding a worker's unapproved work to make
+      //    the tree look clean is the one thing this engine must never do.
+      if (!handler.writes_allowed) {
+        const changed = (read.effects?.paths ?? []).length;
+        const gitFx = (read.effects?.git_effects ?? []).length;
+        if (changed || gitFx)
+          return { ok: false, accounting, state: "FAILED", failure: { code: "ROLE_POLICY_VIOLATION",
+            message: `role "${handler.role}" is read-only and has no write authorization, but the ${semanticId} phase changed ${changed} path(s)` +
+              (gitFx ? ` and produced ${gitFx} git effect(s)` : "") +
+              `. The evidence is preserved and nothing was reverted — inspect ${read.dir} and decide.` } };
+      }
+
+      // 6. The envelope. Handlers that declare one must produce a valid one; the
+      //    builder's is parsed by the following CODE phase, as it always was.
+      if (handler.output_envelope) {
+        if (!read.handoff)
+          return { ok: false, accounting, state: "FAILED", failure: { code: "AGENT_PROTOCOL_ERROR", message: `the ${semanticId} worker produced no handoff to read as ${handler.output_envelope}` } };
+        // The worker speaks one handoff protocol; the REGISTRY decides what it
+        // means in this phase. Builder-shaped fields do not travel into a scout
+        // envelope — they are dropped, not smuggled through as stray fields.
+        const validated = ENV.adaptHandoffTo(handler.output_envelope, read.handoff,
+          { project_id: projectId, task_id: String(taskId), run_id: rec.run_id, phase_id: defId });
+        if (!validated.ok) return { ok: false, accounting, state: "FAILED", failure: validated.failure };
+        ctx.semantic_envelope = validated;
+        ctx[`${semanticId}_envelope`] = validated;
+        return { ok: true, accounting, envelope: validated.envelope, notes: `${semanticId} produced ${handler.output_envelope}` };
+      }
+      return { ok: true, accounting, notes: `run ${rec.run_id} ended ${rec.outcome}` };
+    });
   };
 
   // A phase the SELECTED WORKFLOW does not contain. Recorded, not silent: a
@@ -913,75 +1088,55 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   });
   if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
 
+  // ------------------------------------------------------------------ scout
+  //
+  // Read-only. Runs a real fresh worker, produces a ScoutEnvelopeV1, and any
+  // repository change it makes fails the phase as a role-policy violation.
+  if (inWorkflow("scout")) {
+    p = await runSemantic("scout", "scout");
+    if (p.state !== "ACCEPTED")
+      return stopWith(p, p.failure?.code === "ROLE_POLICY_VIOLATION" ? "NEEDS_DECISION" : (p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED"), p.failure);
+  }
+
+  // ------------------------------------------------------------------- plan
+  //
+  // Read-only. Its validated envelope becomes an IMMUTABLE artifact that the
+  // builder later receives as typed fields — never as a conversation.
+  if (inWorkflow("plan")) {
+    p = await runSemantic("plan", "plan", { extraCtx: { scout_envelope: ctx.scout_envelope ?? null } });
+    if (p.state !== "ACCEPTED")
+      return stopWith(p, p.failure?.code === "ROLE_POLICY_VIOLATION" ? "NEEDS_DECISION" : (p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED"), p.failure);
+    // Persist the plan beside the attempt, immutably. A retry writes a new
+    // attempt directory, so the original plan evidence is never overwritten.
+    if (ctx.plan_envelope) {
+      planArtifact = { hash: ctx.plan_envelope.hash, ...ctx.plan_envelope.envelope, phase_execution_id: ctx.role_config?.phase_execution_id ?? null };
+      try { WS.writeAtomic(join(aDir, "plan-envelope.json"), JSON.stringify(planArtifact, null, 2)); } catch {}
+      emit("scheduler.envelope_accepted", { type: "PlannerEnvelopeV1", hash: planArtifact.hash, artifact: "plan-envelope.json" }, { taskId, attempt, phaseId: "plan" });
+    }
+  }
+
+  // --------------------------------------------------------------- document
+  if (inWorkflow("document")) {
+    p = await runSemantic("document", "document");
+    if (p.state !== "ACCEPTED") return stopWith(p, p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED", p.failure);
+  }
+
   // ------------------------------------------------------------- implement
   //
   // The fresh external worker. `runTask` owns the process, the timeout, the
   // effect inspection and the verification — the scheduler adds nothing to it
   // and re-implements none of it.
-  p = await runOne("implement", async () => {
-    // CLAIMED → RUNNING is the runner's move, and it happens whether or not a
-    // worker is about to start: a resumed attempt is running again, and leaving
-    // the task CLAIMED would make every later transition illegal as a skip.
-    const start = TR.transition(projectId, taskId, {
-      to: "RUNNING", actor: "runner", attempt,
-      reason: resumedRunId ? `attempt ${attempt} resumed — the worker is not started again` : `attempt ${attempt} starting a fresh worker`,
-    });
-    if (!start.ok && TR.canonicalState(loadState(projectId).tasks.find((t) => t.id === Number(taskId))) !== "RUNNING")
-      return { ok: false, state: "FAILED", failure: start.failure };
-    // Resuming: adopt the run this attempt already produced instead of starting
-    // a second worker over the same working tree.
-    if (resumedRunId) {
-      runId = resumedRunId;
-      const read = RUN.readRun(projectId, runId);
-      adoptRun(read);
-      ctx.run = read.run;
-      return { ok: true, notes: `resumed run ${runId} — the worker was not started again` };
-    }
-    // A repair starts from the broken change. The previous attempt's paths are
-    // named explicitly so the runner's clean-tree gate can tell "the last
-    // attempt left this" from "somebody else was working here" — and nothing is
-    // ever discarded to manufacture a clean tree.
-    // …and so does an attempt that was interrupted before its worker's evidence
-    // was accepted: its half-finished change is in the tree too.
-    const ownPartial = resume
-      ? (() => { try { return JSON.parse(readFileSync(join(aDir, "attempt.json"), "utf8")).effects?.paths ?? []; } catch { return []; } })()
-      : [];
-    const carried = [...new Set([
-      ...(attempt > 1 ? (previousAttempt?.effects?.paths ?? []).map((x) => x.path) : []),
-      ...ownPartial.map((x) => x.path),
-    ])];
-    const rec = await RUN.runTask({ projectId, taskId, env, executor, attempt, allowDirtyPaths: carried });
-    runId = rec.run_id; runRec = rec;
-    ctx.run = rec;
-    const read = RUN.readRun(projectId, runId);
-    adoptRun(read);
-    try { if (db) PROJ.upsertRunReference(db, projectId, { run_id: runId, task_id: taskId, attempt, outcome: rec.outcome, failure_code: rec.failure?.code ?? null, dir: rec.run_dir, at: rec.ended_at }); } catch {}
-
-    const accounting = {
-      prompt_characters: read.prompt_manifest?.total_characters ?? 0,
-      skill_excerpt_characters: (read.prompt_manifest?.skills ?? []).length ? (read.prompt_manifest.sections.find((s) => s.name === "skills")?.characters ?? 0) : 0,
-      output_bytes: (read.worker?.stdout?.bytes ?? 0) + (read.worker?.stderr?.bytes ?? 0),
-      compacted_sections: read.prompt_manifest?.compacted ?? [],
-      omitted_sections: (read.prompt_manifest?.sections ?? []).filter((s) => !s.included).map((s) => s.name),
-      executor: read.worker?.executable ?? null, model: null,
-    };
-
-    // A run that never reached the worker (preflight, executor, lease) is an
-    // implement-phase failure. A run that DID reach it is handed downstream so
-    // the gate that actually noticed the problem is the one that records it.
-    const preWorker = !read.worker || rec.failure?.code === "LEASE_CONFLICT" || (read.preflight?.failures ?? []).length > 0;
-    if (rec.outcome !== "VERIFIED" && preWorker)
-      return { ok: false, state: rec.outcome === "NEEDS_DECISION" ? "NEEDS_DECISION" : rec.outcome === "CANCELLED" ? "CANCELLED" : "FAILED",
-        failure: rec.failure ?? { code: "AGENT_PROCESS_FAILURE", message: "the worker never started" }, accounting };
-    if (rec.outcome === "CANCELLED")
-      return { ok: false, state: "CANCELLED", failure: rec.failure, accounting };
-    return { ok: true, accounting, notes: `run ${runId} ended ${rec.outcome}` };
-  });
-  if (p.state !== "ACCEPTED")
-    return stopWith(p, p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : p.state === "CANCELLED" ? "CANCELLED" : "FAILED", p.failure);
+  // The builder. Same shared semantic path as every other AGENT phase — the
+  // role is resolved, the write policy is the task's, and the plan (when a
+  // planner ran) arrives as typed fields, not as a conversation.
+  if (inWorkflow("implement")) {
+    p = await runSemantic("implement", "implement", { planEnvelope: planArtifact });
+    if (p.state !== "ACCEPTED")
+      return stopWith(p, p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : p.state === "CANCELLED" ? "CANCELLED" : "FAILED", p.failure);
+  }
 
   // ------------------------------------------------- parse builder envelope
-  p = await runOne("parse-builder-envelope", async () => {
+  p = await maybe("parse-builder-envelope", async () => {
     if (!ctx.handoff)
       return { ok: false, state: "FAILED", failure: { code: "AGENT_PROTOCOL_ERROR", message: `run ${runId} produced no handoff to read as an envelope` } };
     return { ok: true, envelope: ctx.handoff };     // the legacy adapter turns it into BuilderEnvelopeV1
@@ -990,13 +1145,13 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   ctx.builder_envelope = p.envelope;
 
   // ------------------------------------------------------------- effects
-  p = await runOne("inspect-effects", async () => ({ ok: true,
+  p = await maybe("inspect-effects", async () => ({ ok: true,
     envelope: envFor("inspect-effects", "SUCCESS",
       `${(ctx.effects?.paths ?? []).length} path(s) changed, ${(ctx.effects?.rejected_paths ?? []).length} out of policy, ${(ctx.effects?.git_effects ?? []).length} forbidden git effect(s)`,
       { result: { counts: ctx.effects?.counts ?? null, claim_comparison: ctx.effects?.claim_comparison ?? null } }) }));
   if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
 
-  p = await runOne("effects-gate", async () => ({ ok: true,
+  p = await maybe("effects-gate", async () => ({ ok: true,
     envelope: envFor("effects-gate", "SUCCESS", "worker effects evaluated against the task's path policy", { outcome: "PASS", gates: [] }) }));
   if (p.state !== "ACCEPTED") {
     const worst = (ctx.effects?.git_effects ?? []).length ? "FORBIDDEN_GIT_EFFECT"
@@ -1021,7 +1176,10 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   }
   // The worker said BLOCKED or FAILED. Green tests do not overrule that: it is
   // telling us it did not do the task.
-  if (ctx.builder_envelope?.status !== "SUCCESS")
+  // Only a workflow that HAS a builder can be contradicted by one. A scout or a
+  // planner never produces a builder envelope, and treating its absence as a
+  // disagreement made every read-only workflow stop as AMBIGUOUS_EVIDENCE.
+  if (inWorkflow("parse-builder-envelope") && ctx.builder_envelope?.status !== "SUCCESS")
     return stopWith(p, "NEEDS_DECISION", { code: "AMBIGUOUS_EVIDENCE",
       message: `verification passed but the worker reported ${ctx.builder_envelope?.status}: ${clamp(ctx.builder_envelope?.summary, 400)}` });
 
@@ -1031,26 +1189,61 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   // deterministic verification is a code review is exactly the claim this
   // milestone refuses to make.
   const reviewEnabled = project?.semanticReview === true || project?.semanticReview === "true";
-  p = await maybe("semantic-review", async () => {
-    if (!reviewEnabled) {
-      ctx.semantic_review = { status: "NOT_CONFIGURED", note: "this project has no independent semantic reviewer; deterministic verification is not a code review" };
-      return { ok: true, notes: "semantic_review: NOT_CONFIGURED" };
+  // A REAL, READ-ONLY, INDEPENDENT REVIEWER.
+  //
+  // It runs in its own fresh process and receives the actual diff, the changed
+  // paths, the deterministic verification summary, the plan (when there was one)
+  // and the compact gate evidence — never the builder's reasoning, because a
+  // reviewer that reads the builder's rationale is agreeing with it rather than
+  // reviewing it. It cannot write, deliver, stage, commit, push or move the task.
+  if (inWorkflow("semantic-review")) {
+    if (!reviewEnabled && !SEM_REVIEW_REQUIRED.has(wf.template_id)) {
+      // Recorded explicitly. Deterministic verification is NOT a code review,
+      // and a workflow that skipped review must say so rather than imply one.
+      // NOT the same as "absent". The reviewer is fully executable; this
+      // PROJECT has not enabled it. That is a configuration decision and it is
+      // RECORDED as one — a phase that quietly disappears is exactly the
+      // reporting failure this milestone exists to remove.
+      ctx.semantic_review = { status: "NOT_CONFIGURED", note: "this project has not enabled an independent semantic reviewer; deterministic verification is not a code review" };
+      p = await runOne("semantic-review", async () => ({ ok: true,
+        notes: "semantic_review: NOT_CONFIGURED — the reviewer is executable but this project has not enabled it" }),
+        { ...phaseOf("semantic-review"), output_schema: null, output_envelope: null, gates: [] });
+    } else {
+      p = await runSemantic("semantic-review", "review", {
+        extraCtx: {
+          review_inputs: {
+            acceptance_criteria: ctx.task?.ac ?? [],
+            changed_paths: (ctx.effects?.paths ?? []).map((x) => x.path),
+            verification: ctx.verification ? EV.compactVerification(ctx.verification, { runDir: ctx.run?.run_dir ?? null }) : null,
+            plan_hash: planArtifact?.hash ?? null,
+            gate_evidence: done.flatMap((x) => (x.gate_reports ?? []).map((g) => ({ gate_id: g.gate_id, outcome: g.outcome }))),
+          },
+        },
+      });
+      const env = ctx.review_envelope?.envelope ?? ctx.semantic_envelope?.envelope ?? null;
+      const outcome = env?.outcome ?? (env?.status === "NEEDS_DECISION" ? "NEEDS_DECISION" : env ? "APPROVE" : "INCONCLUSIVE");
+      ctx.semantic_review = { status: outcome, summary: clamp(env?.summary, 400),
+        must_fix: env?.must_fix ?? [], findings: env?.findings ?? [] };
     }
-    // The reviewer is a separate ROLE in a separate fresh process, read-only,
-    // and it receives the diff and the deterministic evidence — never the
-    // builder's reasoning, which is what it is supposed to be independent of.
-    const role = PH.resolveRole("reviewer");
-    if (!role.ok) return { ok: false, state: "FAILED", failure: role.failure };
-    ctx.semantic_review = { status: "INCONCLUSIVE", note: "an independent reviewer is configured but no reviewer executor is wired in this milestone" };
-    return { ok: true, notes: "semantic review requested" };
-  });
-  if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
+    if (p.state !== "ACCEPTED")
+      return stopWith(p, p.failure?.code === "ROLE_POLICY_VIOLATION" ? "NEEDS_DECISION" : (p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED"), p.failure);
+  }
 
   p = await maybe("review-gate", async () => ({ ok: true,
     envelope: envFor("review-gate", "SUCCESS", `semantic review: ${ctx.semantic_review?.status ?? "NOT_CONFIGURED"}`, { outcome: "PASS", gates: [] }) }));
   if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
-  if (reviewEnabled && ctx.semantic_review?.status === "CHANGES_REQUIRED")
-    return stopWith(p, "FAILED", { code: "VERIFICATION_FAILURE", message: "the independent reviewer requires changes" });
+  // The reviewer's VERDICT, which it may return but never enforce. It cannot
+  // override a deterministic gate that already failed — by this point every
+  // factual gate has passed, so the reviewer is adding judgement, not replacing
+  // evidence.
+  const verdict = ctx.semantic_review?.status ?? null;
+  if (verdict === "CHANGES_REQUIRED")
+    return stopWith(p, "REVISION_REQUIRED", { code: "SEMANTIC_REVISION_REQUIRED",
+      message: `the independent reviewer requires changes: ${clamp(ctx.semantic_review?.summary, 300)}` +
+        (ctx.semantic_review?.must_fix?.length ? ` — must fix: ${ctx.semantic_review.must_fix.slice(0, 5).join("; ")}` : "") });
+  if (verdict === "NEEDS_DECISION")
+    return stopWith(p, "NEEDS_DECISION", { code: "AMBIGUOUS_EVIDENCE",
+      message: `the independent reviewer could not decide and referred it to a person: ${clamp(ctx.semantic_review?.summary, 300)}` });
 
   // ------------------------------------------------------ prepare delivery
   p = await maybe("prepare-delivery", async () => {
@@ -1238,10 +1431,18 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   // reaching its end has NOT delivered, and saying DELIVERED here would be the
   // single most damaging lie this engine could tell — the scheduler would move
   // to the next task believing the previous one was on the remote.
+  // COMPLETION SEMANTICS. Six distinct outcomes, because "done" means six
+  // different things and calling a read-only scout DELIVERED would claim a
+  // remote commit that does not exist.
   const delivered = inWorkflow("complete-task") && Boolean(commit);
   const verified = inWorkflow("verification-gate");
+  const wroteAnything = wf.ok && wf.template.phases.some((x) => x.semantic && SEM.SEMANTIC_HANDLERS[x.semantic]?.writes_allowed);
+  const planned = inWorkflow("plan") && !wroteAnything;
+  const outcome = delivered ? "DELIVERED"
+    : !wroteAnything ? (planned ? "PLAN_COMPLETED" : "READ_ONLY_COMPLETED")
+    : verified ? "AWAITING_DELIVERY" : "AWAITING_DELIVERY";
   return {
-    outcome: delivered ? "DELIVERED" : verified ? "VERIFIED" : "COMPLETED",
+    outcome,
     failure: null, run_id: runId, attempt, commit: delivered ? commit : null,
     workflow: wf.ok ? { template_id: wf.template_id, template_version: wf.template_version, selected_by: wf.selected_by } : null,
     phases: done.map((x) => ({ phase_id: x.phase_id, state: x.state })),

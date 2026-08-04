@@ -284,6 +284,57 @@ export function adaptLegacyHandoff(handoff, identity) {
   return { ...v, adapted: true };
 }
 
+// Adapt one worker handoff into the envelope type a SEMANTIC PHASE declares.
+//
+// The worker speaks one handoff protocol; the registry decides what it means in
+// a given phase. A scout's handoff is not a builder's, so the builder-shaped
+// fields are DROPPED rather than carried across and rejected as stray — but only
+// fields the target type actually declares are kept, so nothing unvalidated
+// survives the conversion.
+export function adaptHandoffTo(type, handoff, identity) {
+  const def = REGISTRY[type];
+  if (!def) return fail("ENVELOPE_TYPE_UNKNOWN", `unknown envelope_type "${type}"`);
+  if (!isLegacyHandoff(handoff)) return fail("ENVELOPE_TYPE_UNKNOWN", "not a worker handoff");
+  const status = LEGACY_STATUS[String(handoff.worker_status)];
+  if (!status) return fail("ENVELOPE_STATUS_INVALID", `worker_status "${handoff.worker_status}" has no envelope status`);
+  if (!def.statuses.includes(status))
+    return fail("ENVELOPE_STATUS_INVALID", `${type} does not accept status ${status} (${def.statuses.join(", ")})`);
+
+  const arr = (v) => (Array.isArray(v) ? v.slice(0, LIMITS.array).map((x) => String(x).slice(0, LIMITS.string)) : []);
+  const str = (v) => String(v ?? "").slice(0, LIMITS.string);
+
+  const env = {
+    schema_version: SCHEMA_VERSION, envelope_type: type,
+    project_id: String(identity.project_id), task_id: String(identity.task_id),
+    run_id: String(identity.run_id), phase_id: String(identity.phase_id),
+    status, summary: str(handoff.summary || "(no summary)").slice(0, LIMITS.summary) || "(no summary)",
+    artifacts: [], claims: { adapted_from: "worker-handoff", worker_status: String(handoff.worker_status) },
+    notes_for_next_phase: str(handoff.recommended_next_action ?? ""),
+    candidate_learnings: arr(handoff.candidate_lessons).slice(0, LIMITS.learnings),
+  };
+
+  // Fill only what the TARGET type declares, from the handoff fields that mean
+  // the same thing. Anything the type does not declare simply does not travel.
+  for (const [k, spec] of Object.entries(def.extra ?? {})) {
+    const v = handoff[k];
+    if (v !== undefined) { env[k] = Array.isArray(spec) ? str(v) : spec === "string" ? str(v) : spec === "string[]" ? arr(v) : v; continue; }
+    if (Array.isArray(spec)) env[k] = spec[0];                       // an enum needs a value
+    else if (spec === "string[]") env[k] = [];
+    else if (spec === "string") env[k] = "";
+  }
+  // A reviewer that said nothing about its verdict has not approved anything.
+  if (type === "ReviewerEnvelopeV1" && handoff.outcome === undefined)
+    env.outcome = status === "SUCCESS" ? "APPROVE" : status === "NEEDS_DECISION" ? "NEEDS_DECISION" : "INCONCLUSIVE";
+  // A plan with no steps is not a plan; carry the worker's decisions across so
+  // the plan gate has something real to judge.
+  if (type === "PlannerEnvelopeV1" && !(env.plan_steps ?? []).length)
+    env.plan_steps = arr(handoff.decisions).length ? arr(handoff.decisions) : arr(handoff.commands_reported);
+
+  const v = validate(env, identity, { type });
+  if (!v.ok) return v;
+  return { ...v, adapted: true };
+}
+
 // --------------------------------------------------------------- construction
 
 // Envelopes SCH itself produces for CODE and GATE phases. Built here so every
