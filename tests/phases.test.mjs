@@ -27,6 +27,12 @@ const env = (over = {}) => ({
 test("envelopes: every registered type validates in its own phase", () => {
   const cases = {
     PlannerEnvelopeV1: { plan_steps: ["one", "two"], open_questions: [] },
+    // The roles added by the software-factory milestone each produce their own
+    // type: a scout cannot report changed files, and a repairer answers a
+    // different question from a builder.
+    ScoutEnvelopeV1: { locations: ["src/auth"], entry_points: [], observations: [], open_questions: [] },
+    RepairEnvelopeV1: { addressed_checks: ["unit"], files_reported_changed: ["src/a.js"], root_cause: "off-by-one", remaining_concerns: [] },
+    DocumentationEnvelopeV1: { files_reported_changed: ["README.md"], sections_written: ["Usage"], claims_verified: [] },
     BuilderEnvelopeV1: { files_reported_changed: ["src/a.js"], commands_reported: [] },
     ReviewerEnvelopeV1: { outcome: "APPROVE", findings: [], must_fix: [] },
     DecisionRequestEnvelopeV1: { gate_type: "SCHEMA_CHANGE", question: "which?", options: ["a", "b"], recommended: "a" },

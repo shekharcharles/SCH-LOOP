@@ -57,9 +57,28 @@ export const REGISTRY = {
     kind: "AGENT", statuses: AGENT_STATUSES,
     extra: { plan_steps: "string[]", open_questions: "string[]" },
   },
+  // A scout reports WHERE, never what it changed — it has no write authority, so
+  // an envelope claiming changed files from a scout is a contradiction the
+  // registry refuses to represent.
+  ScoutEnvelopeV1: {
+    kind: "AGENT", statuses: AGENT_STATUSES,
+    extra: { locations: "string[]", entry_points: "string[]", observations: "string[]", open_questions: "string[]" },
+  },
   BuilderEnvelopeV1: {
     kind: "AGENT", statuses: AGENT_STATUSES,
     extra: { files_reported_changed: "string[]", commands_reported: "string[]", tests_reported: "string[]", decisions: "string[]", issues: "string[]", recommended_next_action: "string" },
+  },
+  // A repairer answers one question: what was broken, and what was done about
+  // it. `addressed_checks` names the failing checks it believes it fixed — a
+  // claim, compared afterwards against the re-run, never trusted.
+  RepairEnvelopeV1: {
+    kind: "AGENT", statuses: AGENT_STATUSES,
+    extra: { addressed_checks: "string[]", files_reported_changed: "string[]", root_cause: "string",
+             remaining_concerns: "string[]", recommended_next_action: "string" },
+  },
+  DocumentationEnvelopeV1: {
+    kind: "AGENT", statuses: AGENT_STATUSES,
+    extra: { files_reported_changed: "string[]", sections_written: "string[]", claims_verified: "string[]" },
   },
   ReviewerEnvelopeV1: {
     kind: "AGENT", statuses: AGENT_STATUSES,

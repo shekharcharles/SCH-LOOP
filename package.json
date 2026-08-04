@@ -9,6 +9,9 @@
   },
   "scripts": {
     "test": "node --test test.mjs \"tests/*.test.mjs\"",
+    "test:suite": "node scripts/sch-test.mjs",
+    "test:focused": "node scripts/sch-test.mjs --focused",
+    "test:status": "node scripts/sch-test.mjs --status",
     "validate": "node scripts/validate.mjs",
     "check": "npm run validate && npm test && npm run doctor",
     "dashboard": "node scripts/dashboard.mjs",

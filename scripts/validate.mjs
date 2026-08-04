@@ -169,6 +169,74 @@ for (const [cond, msg] of [
     [!/from ["']better-sqlite3["']|require\(["']better-sqlite3/.test(projection), "the projection must use node:sqlite, not a dependency"],
   ]) ok(cond, msg);
 
+  // 6e. the software-factory runtime. Same principle: the claims the README
+  // makes about templates, roles, usage, evidence and external skills are
+  // enforced here, because each one is a boundary a refactor could quietly remove.
+  const workflows = read("scripts/workflows.mjs");
+  const rolesSrc = read("scripts/roles.mjs");
+  const usageSrc = read("scripts/usage.mjs");
+  const evidenceSrc = read("scripts/evidence.mjs");
+  const sourcesSrc = read("scripts/skillsources.mjs");
+  const subprocessSrc = read("scripts/subprocess.mjs");
+  const proceduresSrc = read("scripts/procedures.mjs");
+  for (const [cond, msg] of [
+    // a template is data over a CLOSED registry, never a module path
+    [/UNKNOWN_HANDLER/.test(workflows), "workflows.mjs must refuse a handler that is not in the closed registry"],
+    [/TEMPLATE_CANNOT_GRANT_AUTHORITY/.test(workflows), "a workflow template must never be able to grant tools or write scope"],
+    [!/\bimport\s*\(\s*[^"')]*(ph|phase|handler)/.test(workflows), "workflows.mjs must not dynamically import a module named by data"],
+    // role, executor, provider, model and authority are separate
+    [/skills are content, never authority/.test(rolesSrc), "roles.mjs must state and enforce that a skill grants no authority"],
+    [/PROVIDER_FALLBACK_FORBIDDEN/.test(rolesSrc), "a cross-provider fallback must never be implicit"],
+    [/READ_ONLY_ROLES/.test(rolesSrc), "read-only roles must be enforced, not documented"],
+    [/EXECUTOR_UNAVAILABLE|MODEL_PROFILE_UNAVAILABLE/.test(rolesSrc), "an unavailable executor or model profile must fail closed"],
+    // unknown is not zero
+    [/UNKNOWN IS NOT ZERO/.test(usageSrc), "usage.mjs must state the unknown-is-not-zero rule it enforces"],
+    [/unknown_usage_phases/.test(usageSrc), "aggregation must count unknown phases rather than sum them as zero"],
+    [!/input_per_mtok:\s*\d/.test(usageSrc), "no unverified price may be hardcoded — rates are operator-configured and dated"],
+    [/pricing_table_version/.test(usageSrc), "every cost record must carry the pricing table version that produced it"],
+    // passing logs never reach a prompt
+    [/passing_excerpt_characters:\s*0/.test(evidenceSrc), "a passing check must contribute ZERO log characters"],
+    [/failing_stdout_characters/.test(evidenceSrc) && /failing_stderr_characters/.test(evidenceSrc), "failing excerpts must be bounded"],
+    [/sanitizeArgs/.test(evidenceSrc), "an argument vector must be sanitized before it reaches a prompt or a projection"],
+    // external skills are governed, not trusted
+    [/SOURCE_PIN_REQUIRED/.test(sourcesSrc), "an external source must be pinned to a full commit, never a branch"],
+    [/auto_update:\s*false/.test(sourcesSrc), "external sources must never auto-update"],
+    [/SOURCE_URL_HAS_CREDENTIALS/.test(sourcesSrc), "a credential-bearing source URL must be refused"],
+    [/SOURCE_SYMLINK_REFUSED/.test(sourcesSrc) && /SOURCE_PATH_ESCAPE/.test(sourcesSrc), "symlink and traversal escapes must be refused"],
+    [/ROLE_SCOPE_REQUIRED/.test(sourcesSrc), "skill approval must be role-scoped, defaulting to nothing"],
+    [/NEVER_ELIGIBLE/.test(sourcesSrc), "push, scheduling and worktree skills must never be eligible for a worker role"],
+    [/a quality PASS.*NOT approval|not approval, and it grants no trust/i.test(sourcesSrc), "a quality pass must not be presentable as approval"],
+    // one process implementation
+    [/export function killTree/.test(subprocessSrc), "the process-tree kill must live in exactly one place"],
+    [/effectiveTimeout/.test(subprocessSrc), "timeout precedence must be the minimum of every bound"],
+    [!/execFileSync\([^)]*timeout/.test(read("scripts/runner.mjs")), "verification must not use a second, weaker timeout implementation"],
+    [read("scripts/runner.mjs").includes("subprocess.mjs"), "runner.mjs must run verification on the shared bounded subprocess"],
+    // procedures are guidance, not authority
+    [/AUTHORITY_CLAIMS/.test(proceduresSrc), "a procedure that claims authority must fail validation"],
+  ]) ok(cond, msg);
+
+  // The registries must be internally consistent — a roster that grants a
+  // reviewer write access, or a template naming a gate that does not exist,
+  // fails the build rather than the run.
+  {
+    const [W, R, PR] = [await import("./workflows.mjs"), await import("./roles.mjs"), await import("./procedures.mjs")];
+    const tv = W.validateAll();
+    ok(tv.ok, `workflow templates invalid: ${tv.results.filter((r) => !r.ok).map((r) => `${r.id}: ${r.problems[0]?.message}`).join("; ")}`);
+    const rv = R.validateRoster();
+    ok(rv.ok, `role roster invalid: ${rv.problems.join("; ")}`);
+    const pv = PR.validateRegistry();
+    ok(pv.ok, `procedure registry invalid: ${pv.problems.join("; ")}`);
+    // FULL_SDLC is the migration contract: it must remain phase-for-phase what
+    // the scheduler ran before templates existed, or every existing project
+    // silently changes behaviour.
+    const S = await import("./scheduler.mjs");
+    const full = W.TEMPLATES.FULL_SDLC.phases, old = S.TASK_WORKFLOW;
+    ok(full.length === old.length, `FULL_SDLC has ${full.length} phases; the original workflow had ${old.length}`);
+    for (let i = 0; i < Math.min(full.length, old.length); i++)
+      ok(full[i].id === old[i].id && full[i].kind === old[i].kind,
+        `FULL_SDLC phase ${i} is ${full[i].id}/${full[i].kind}, the original was ${old[i].id}/${old[i].kind}`);
+  }
+
   // The dashboard must not grow a remote write for any of this. Approval and
   // task authority stay on the CLI until the dashboard has authentication.
   {
@@ -204,7 +272,10 @@ for (const [cond, msg] of [
                    "scripts/delivery.mjs", "scripts/sch-deliver-run.mjs",
                    "scripts/taskgraph.mjs", "scripts/transitions.mjs", "scripts/envelopes.mjs",
                    "scripts/gates.mjs", "scripts/phases.mjs", "scripts/humangates.mjs",
-                   "scripts/scheduler.mjs", "scripts/sch-run-queue.mjs", "scripts/projection.mjs"]) {
+                   "scripts/scheduler.mjs", "scripts/sch-run-queue.mjs", "scripts/projection.mjs",
+                   "scripts/workflows.mjs", "scripts/roles.mjs", "scripts/usage.mjs", "scripts/evidence.mjs",
+                   "scripts/procedures.mjs", "scripts/skillsources.mjs", "scripts/subprocess.mjs",
+                   "scripts/suitelock.mjs", "scripts/sch-test.mjs"]) {
     try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
     catch (e) {
       const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;

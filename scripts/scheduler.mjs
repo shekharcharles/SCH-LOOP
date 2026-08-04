@@ -37,7 +37,11 @@ import * as PH from "./phases.mjs";
 import * as ENV from "./envelopes.mjs";
 import * as HG from "./humangates.mjs";
 import * as PROJ from "./projection.mjs";
-import { loadState, getProject, auditLog } from "./state.mjs";
+import * as WF from "./workflows.mjs";
+import * as ROLES from "./roles.mjs";
+import * as USAGE from "./usage.mjs";
+import * as EV from "./evidence.mjs";
+import { loadState, saveState, getProject, auditLog, event as stateEvent } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
 
@@ -539,6 +543,17 @@ export async function runQueue({
         continue;                                    // and only now is the next task selectable
       }
 
+      // A workflow that never intended to deliver finished successfully. It is
+      // not a failure and it does not reset the queue — the task is parked at
+      // AWAITING_DELIVERY and the scheduler moves on to the next ready task.
+      if (outcome.state === "VERIFIED" || outcome.state === "COMPLETED") {
+        record.consecutive_failures = 0;
+        record.tasks_completed_without_delivery = (record.tasks_completed_without_delivery ?? 0) + 1;
+        save();
+        if (stopAfterTask !== null && Number(stopAfterTask) === Number(task.id)) return finish("STOP_AFTER_TASK");
+        continue;
+      }
+
       record.consecutive_failures += 1; save();
       if (outcome.state === "NEEDS_DECISION") return finish("NEEDS_DECISION", outcome.failure);
       if (outcome.state === "BLOCKED") return finish("BLOCKED", outcome.failure);
@@ -585,6 +600,36 @@ export function diagnoseNoReady(state, pick, validation) {
   return { kind: "BLOCKED_DEPENDENCIES", detail: first ? `#${first.task.id}: ${first.r.blockers.map((b) => b.detail).join("; ")}` : "no task satisfies its dependencies" };
 }
 
+// The exact template a task ran under, written onto the task itself. Two
+// reasons it lives here and not only in the attempt record: a historical task
+// must stay readable after a template is revised, and an approval bound to a
+// template version has to be invalidatable when that version moves.
+function recordWorkflowOnTask(projectId, taskId, { workflowId, wf }) {
+  try {
+    const s = loadState(projectId);
+    const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
+    if (!t) return;
+    const prev = t.workflow_binding ?? null;
+    // A template that CHANGED under an unfinished task invalidates any approval
+    // that was given against the old one. Silently continuing on the new version
+    // would mean the operator approved a workflow that no longer exists.
+    const changed = prev && (prev.template_id !== wf.template_id || prev.template_version !== wf.template_version || prev.template_hash !== wf.template_hash);
+    t.workflow_id = workflowId;
+    t.workflow_binding = {
+      workflow_id: workflowId, template_id: wf.template_id, template_version: wf.template_version,
+      template_hash: wf.template_hash, selected_by: wf.selected_by, high_risk: wf.high_risk, bound_at: now(),
+      previous: changed ? prev : (prev ?? null),
+      invalidated_approvals: changed || undefined,
+    };
+    if (changed) {
+      t.workflowApprovals = [];
+      stateEvent(s, `task #${taskId} workflow changed ${prev.template_id}@${prev.template_version} → ${wf.template_id}@${wf.template_version}; template-bound approvals invalidated`);
+    }
+    t.updatedAt = now();
+    saveState(projectId, s);
+  } catch { /* the attempt record carries the binding too */ }
+}
+
 // -------------------------------------------------------- one task, one graph
 
 async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedulerId, dir, env, executor, emit, db, budgets, record }) {
@@ -593,6 +638,22 @@ async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedu
   const retryPolicy = task0?.retryPolicy ?? {};
   const maxAttempts = Math.max(1, Number(retryPolicy.max_attempts ?? task0?.budgets?.max_attempts ?? 3));
   const backoff = Array.isArray(retryPolicy.backoff_seconds) ? retryPolicy.backoff_seconds : [0, 0, 0];
+
+  // WHICH WORKFLOW, decided once per task and recorded on it. Selection happens
+  // BEFORE any phase runs, so an unknown template or an unsupported task type
+  // stops the task instead of half-running it.
+  const wf = WF.selectTemplate({ task: task0, project });
+  if (!wf.ok) {
+    emit("scheduler.task_failed", { failure: wf.failure.code, message: clamp(wf.failure.message, 300), selected_by: wf.selected_by }, { taskId });
+    TR.transition(projectId, taskId, { to: "FAILED", actor: "scheduler", reason: clamp(`workflow selection: ${wf.failure.message}`, 400) });
+    return { task_id: taskId, state: "FAILED", attempts: 0, failure: wf.failure, attempt_records: [] };
+  }
+  // WORKFLOW IDENTITY. Stable across restarts and retries: the attempt changes,
+  // the workflow does not, which is what makes a resumed run the same run.
+  const workflowId = task0?.workflow_id ?? ("WF-" + new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14) + "-" + randomBytes(4).toString("hex").toUpperCase());
+  recordWorkflowOnTask(projectId, taskId, { workflowId, wf });
+  emit("scheduler.task_started", { workflow_id: workflowId, template: wf.template_id, template_version: wf.template_version,
+    selected_by: wf.selected_by, high_risk: wf.high_risk, phases: wf.template.phases.length }, { taskId });
 
   const attempts = [];
   let repairsUsed = 0;
@@ -617,6 +678,7 @@ async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedu
       projectId, taskId, attempt, wsDir, repoRoot, project, schedulerId, aDir,
       env, executor, emit, db, budgets, record, resume: open.resume,
       previousAttempt: attempts[attempts.length - 1] ?? lastAttemptRecord(wsDir, taskId, attempt), repairsUsed,
+      workflowSelection: wf, workflowId,
     });
     attempts.push(result);
     try { if (db) PROJ.upsertAttempt(db, { project_id: projectId, task_id: taskId, attempt, scheduler_id: schedulerId,
@@ -625,7 +687,24 @@ async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedu
       prompt_characters: result.prompt_characters ?? null, started_at: result.started_at, ended_at: result.ended_at, dir: aDir }); } catch {}
 
     if (result.outcome === "DELIVERED")
-      return { task_id: taskId, state: "DELIVERED", attempts: attempts.length, commit: result.commit, run_id: result.run_id, failure: null, attempt_records: attempts };
+      return { task_id: taskId, state: "DELIVERED", attempts: attempts.length, commit: result.commit, run_id: result.run_id, failure: null, workflow: result.workflow ?? null, attempt_records: attempts };
+
+    // A non-delivering template finished its work. The task is NOT delivered and
+    // must not be treated as such — it stops at AWAITING_DELIVERY (or wherever
+    // its workflow ended) and the operator decides what happens next.
+    if (result.outcome === "VERIFIED" || result.outcome === "COMPLETED") {
+      // Park it honestly. The work is done and verified; it is NOT delivered,
+      // and AWAITING_DELIVERY is exactly that state. Leaving it RUNNING would
+      // make a finished task look like an abandoned one.
+      const cur = TR.canonicalState(loadState(projectId).tasks.find((t) => t.id === Number(taskId)));
+      if (cur === "RUNNING") TR.transition(projectId, taskId, { to: "VERIFYING", actor: "runner", reason: `workflow ${result.workflow?.template_id} completed`, runId: result.run_id, attempt });
+      TR.transition(projectId, taskId, { to: "AWAITING_DELIVERY", actor: "verifier", runId: result.run_id, attempt,
+        reason: `workflow ${result.workflow?.template_id ?? "(unknown)"} has no delivery phase — verified, not pushed` });
+      emit("scheduler.task_awaiting_delivery", { workflow: result.workflow, outcome: result.outcome,
+        note: "the selected workflow contains no delivery phase; nothing was pushed" }, { taskId, attempt });
+      return { task_id: taskId, state: result.outcome, attempts: attempts.length, commit: null,
+        run_id: result.run_id, failure: null, workflow: result.workflow ?? null, attempt_records: attempts };
+    }
 
     const cls = result.classification ?? classifyFailure(result.failure?.code, { task: task0, attempt, repairsUsed });
     if (["VERIFICATION_FAILURE", "LINT_FAILURE", "FORMAT_FAILURE"].includes(result.failure?.code)) repairsUsed += 1;
@@ -687,7 +766,7 @@ function lastAttemptRecord(wsDir, taskId, currentAttempt) {
 
 // ------------------------------------------------------------- one attempt
 
-async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project, schedulerId, aDir, env, executor, emit, db, budgets, record, previousAttempt, repairsUsed, resume = false }) {
+async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project, schedulerId, aDir, env, executor, emit, db, budgets, record, previousAttempt, repairsUsed, resume = false, workflowSelection = null, workflowId = null }) {
   const startedAt = now();
   const ctx = { project_id: projectId, task_id: taskId, repo_root: repoRoot, ws_dir: wsDir };
   let runId = null, runRec = null, commit = null;
@@ -727,15 +806,34 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
     } catch { /* the run directory is the durable record */ }
   };
 
+  // THE SELECTED WORKFLOW decides which phases exist for this task. A template
+  // that omits `semantic-review` genuinely does not run it — the phase is not
+  // skipped at runtime, it is absent from the plan, and `skipped()` records that
+  // it was never part of this workflow rather than leaving a silent hole.
+  const wf = workflowSelection ?? WF.selectTemplate({ task: ctx.taskForSelection ?? null, project });
+  const phaseIds = new Set((wf.ok ? wf.template.phases : TASK_WORKFLOW).map((x) => x.id));
+  const inWorkflow = (id) => phaseIds.has(id);
+
   // Every phase result goes through the engine, which owns the lifecycle and the
   // persistence. The scheduler only says WHAT the phase does.
-  const phaseOf = (defId) => TASK_WORKFLOW.find((p) => p.id === defId);
+  const activePhases = wf.ok ? wf.template.phases : TASK_WORKFLOW;
+  // A template says `output_envelope` (the envelope registry's word); the phase
+  // engine says `output_schema` (its own). One vocabulary crosses that boundary
+  // and it is normalized HERE rather than by making one of the two lie.
+  const phaseOf = (defId) => {
+    const raw = activePhases.find((p) => p.id === defId) ?? TASK_WORKFLOW.find((p) => p.id === defId);
+    if (!raw) return raw;
+    return { ...raw, output_schema: raw.output_schema ?? raw.output_envelope ?? null };
+  };
   const done = [];
+  const skipped = [];
   const runOne = async (defId, work) => {
     const def = phaseOf(defId);
     record.current_phase = defId;
-    emit("scheduler.phase_started", { kind: def.kind, role: def.role ?? null }, { taskId, attempt, phaseId: defId });
-    const rec = await PH.runPhase(def, { attemptDir: aDir, identity: identity(), ctx, index: TASK_WORKFLOW.indexOf(def), work });
+    emit("scheduler.phase_started", { kind: def.kind, role: def.role ?? null,
+      workflow_template: wf.ok ? wf.template_id : null, workflow_template_version: wf.ok ? wf.template_version : null },
+      { taskId, attempt, phaseId: defId });
+    const rec = await PH.runPhase(def, { attemptDir: aDir, identity: identity(), ctx, index: activePhases.indexOf(def), work });
     done.push(rec);
     try { if (db) PROJ.upsertPhase(db, projectId, { ...rec, task_id: taskId, attempt }); } catch {}
     emit("scheduler.phase_executed", { state: rec.state, outcome: rec.outcome, failure: rec.failure?.code ?? null, duration_ms: rec.duration_ms }, { taskId, attempt, phaseId: defId });
@@ -746,6 +844,19 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
         { taskId, attempt, phaseId: defId });
     return rec;
   };
+
+  // A phase the SELECTED WORKFLOW does not contain. Recorded, not silent: a
+  // reader of the trace must be able to tell "this workflow has no delivery
+  // phase" from "delivery was meant to happen and did not".
+  const ACCEPTED_SKIP = { state: "ACCEPTED", outcome: "NOT_IN_WORKFLOW", skipped: true, failure: null, gate_reports: [] };
+  const skip = (defId, why) => {
+    skipped.push({ phase_id: defId, reason: why });
+    emit("scheduler.phase_executed", { state: "SKIPPED", outcome: "NOT_IN_WORKFLOW", reason: why }, { taskId, attempt, phaseId: defId });
+    return ACCEPTED_SKIP;
+  };
+  // Run a phase only if the selected template contains it.
+  const maybe = async (defId, work) =>
+    (inWorkflow(defId) ? runOne(defId, work) : skip(defId, `template ${wf.ok ? wf.template_id : "(fallback)"} does not include this phase`));
 
   // What a NEXT attempt is allowed to know about this one: the failure, the
   // gate reports that produced it, the command output, and the paths currently
@@ -895,13 +1006,13 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   }
 
   // ------------------------------------------------------------ verification
-  p = await runOne("verify", async () => ({ ok: true,
+  p = await maybe("verify", async () => ({ ok: true,
     envelope: envFor("verify", ctx.verification?.all_passed ? "SUCCESS" : "FAILED",
       ctx.verification ? `${ctx.verification.passed}/${ctx.verification.total} required command(s) passed` : "no verification was recorded",
       { result: { passed: ctx.verification?.passed ?? 0, failed: ctx.verification?.failed ?? 0 } }) }));
   if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
 
-  p = await runOne("verification-gate", async () => ({ ok: true,
+  p = await maybe("verification-gate", async () => ({ ok: true,
     envelope: envFor("verification-gate", "SUCCESS", "deterministic verification evaluated", { outcome: "PASS", gates: [] }) }));
   if (p.state !== "ACCEPTED") {
     const code = !ctx.verification?.all_passed ? (ctx.verification?.failure?.code ?? "VERIFICATION_FAILURE")
@@ -920,7 +1031,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   // deterministic verification is a code review is exactly the claim this
   // milestone refuses to make.
   const reviewEnabled = project?.semanticReview === true || project?.semanticReview === "true";
-  p = await runOne("semantic-review", async () => {
+  p = await maybe("semantic-review", async () => {
     if (!reviewEnabled) {
       ctx.semantic_review = { status: "NOT_CONFIGURED", note: "this project has no independent semantic reviewer; deterministic verification is not a code review" };
       return { ok: true, notes: "semantic_review: NOT_CONFIGURED" };
@@ -935,14 +1046,14 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   });
   if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
 
-  p = await runOne("review-gate", async () => ({ ok: true,
+  p = await maybe("review-gate", async () => ({ ok: true,
     envelope: envFor("review-gate", "SUCCESS", `semantic review: ${ctx.semantic_review?.status ?? "NOT_CONFIGURED"}`, { outcome: "PASS", gates: [] }) }));
   if (p.state !== "ACCEPTED") return stopWith(p, "FAILED");
   if (reviewEnabled && ctx.semantic_review?.status === "CHANGES_REQUIRED")
     return stopWith(p, "FAILED", { code: "VERIFICATION_FAILURE", message: "the independent reviewer requires changes" });
 
   // ------------------------------------------------------ prepare delivery
-  p = await runOne("prepare-delivery", async () => {
+  p = await maybe("prepare-delivery", async () => {
     if (!ctx.candidate)
       return { ok: false, state: "FAILED", failure: { code: "RUN_NOT_DELIVERY_ELIGIBLE", message: `run ${runId} recorded no delivery candidate` } };
     // Recomputed with EXACTLY the inputs the delivery controller will use, or
@@ -978,7 +1089,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   // A HUMAN phase. It starts no agent and decides nothing itself: it runs the
   // delivery controller far enough to write down exactly what it intends, then
   // reads whether a person has signed that intention.
-  p = await runOne("delivery-approval", async () => {
+  p = await maybe("delivery-approval", async () => {
     // DELIVERING is entered BEFORE the controller is called, not after. The
     // controller may run all the way to a pushed commit in one call when no
     // approval is required, and marking the task DELIVERING afterwards would
@@ -1071,7 +1182,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   if (p.state !== "ACCEPTED") return stopWith(p, p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED", p.failure);
 
   // ---------------------------------------------------------------- deliver
-  p = await runOne("deliver", async () => {
+  p = await maybe("deliver", async () => {
     // The task is already DELIVERING (entered before the controller was first
     // called). If the approval phase completed the push, this is a no-op that
     // re-reads the transaction; otherwise the controller runs to completion now.
@@ -1096,12 +1207,12 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   if (p.state !== "ACCEPTED") return stopWith(p, p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : "FAILED", p.failure);
 
   // -------------------------------------------------- remote verification
-  p = await runOne("remote-verification", async () => ({ ok: true,
+  p = await maybe("remote-verification", async () => ({ ok: true,
     envelope: envFor("remote-verification", "SUCCESS", "remote delivery evaluated independently", { outcome: "PASS", gates: [] }) }));
   if (p.state !== "ACCEPTED") return stopWith(p, "NEEDS_DECISION", { code: "REMOTE_CHANGED", message: p.failure?.message ?? "the remote does not confirm the delivery" });
 
   // ------------------------------------------------------------- complete
-  p = await runOne("complete-task", async () => {
+  p = await maybe("complete-task", async () => {
     // The delivery controller already set the legacy `delivered` through
     // markDelivered — the only path that may, and only after it proved the
     // commit on the remote. The canonical state follows THAT fact; the
@@ -1123,10 +1234,21 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
   });
   if (p.state !== "ACCEPTED") return stopWith(p, "NEEDS_DECISION", { code: "INTERNAL_STATE_CONFLICT", message: p.failure?.message ?? "the task is not properly completed" });
 
-  return { outcome: "DELIVERED", failure: null, run_id: runId, attempt, commit,
+  // WHAT THE WORKFLOW ACTUALLY ACHIEVED. A template with no delivery phase
+  // reaching its end has NOT delivered, and saying DELIVERED here would be the
+  // single most damaging lie this engine could tell — the scheduler would move
+  // to the next task believing the previous one was on the remote.
+  const delivered = inWorkflow("complete-task") && Boolean(commit);
+  const verified = inWorkflow("verification-gate");
+  return {
+    outcome: delivered ? "DELIVERED" : verified ? "VERIFIED" : "COMPLETED",
+    failure: null, run_id: runId, attempt, commit: delivered ? commit : null,
+    workflow: wf.ok ? { template_id: wf.template_id, template_version: wf.template_version, selected_by: wf.selected_by } : null,
     phases: done.map((x) => ({ phase_id: x.phase_id, state: x.state })),
+    skipped_phases: skipped,
     prompt_characters: ctx.prompt_manifest?.total_characters ?? null,
-    started_at: startedAt, ended_at: now() };
+    started_at: startedAt, ended_at: now(),
+  };
 }
 
 // ------------------------------------------------------------- projections

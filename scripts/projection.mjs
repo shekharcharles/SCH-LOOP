@@ -24,7 +24,7 @@ import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const root = () => process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)), "..");
 export const dbPath = (projectId) => join(root(), "projects", projectId, "ops.db");
@@ -132,6 +132,120 @@ const MIGRATIONS = [
   `
   ALTER TABLE projects ADD COLUMN complete INTEGER DEFAULT 0;
   ALTER TABLE projects ADD COLUMN completion TEXT;
+  `,
+  // 4 — the software-factory runtime: workflows, roles, models, prompts, usage,
+  //     procedures and external skill governance. Additive only: every existing
+  //     row stays readable, and nothing here drops a column.
+  `
+  CREATE TABLE IF NOT EXISTS workflow_templates (
+    template_id TEXT NOT NULL, version INTEGER NOT NULL, hash TEXT, description TEXT,
+    supported_task_types TEXT, high_risk INTEGER DEFAULT 0, phase_count INTEGER,
+    delivers INTEGER DEFAULT 0, phases TEXT, recorded_at TEXT,
+    PRIMARY KEY (template_id, version)
+  );
+  CREATE TABLE IF NOT EXISTS workflow_executions (
+    workflow_id TEXT PRIMARY KEY, project_id TEXT, task_id INTEGER,
+    template_id TEXT, template_version INTEGER, template_hash TEXT, selected_by TEXT,
+    high_risk INTEGER DEFAULT 0, outcome TEXT, scheduler_id TEXT,
+    started_at TEXT, ended_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS role_profiles (
+    role_id TEXT NOT NULL, version INTEGER NOT NULL, hash TEXT, purpose TEXT,
+    model_profile TEXT, tools TEXT, write_scope TEXT, read_only INTEGER DEFAULT 0,
+    output_envelope TEXT, recorded_at TEXT,
+    PRIMARY KEY (role_id, version)
+  );
+  CREATE TABLE IF NOT EXISTS model_profiles (
+    profile_id TEXT NOT NULL, version INTEGER NOT NULL, executor TEXT, provider TEXT,
+    reasoning TEXT, available INTEGER DEFAULT 1, unavailable_reason TEXT,
+    fallback_profiles TEXT, max_prompt_characters INTEGER, recorded_at TEXT,
+    PRIMARY KEY (profile_id, version)
+  );
+  CREATE TABLE IF NOT EXISTS phase_agent_config (
+    project_id TEXT NOT NULL, task_id INTEGER NOT NULL, attempt INTEGER NOT NULL, phase_id TEXT NOT NULL,
+    phase_execution_id TEXT, actor_kind TEXT, role_id TEXT, role_version INTEGER,
+    executor_id TEXT, provider TEXT, model_profile TEXT, resolved_model TEXT, reasoning TEXT,
+    tools TEXT, write_scope_summary TEXT, selected_skills TEXT, fallback_used INTEGER DEFAULT 0,
+    recorded_at TEXT,
+    PRIMARY KEY (project_id, task_id, attempt, phase_id)
+  );
+  CREATE TABLE IF NOT EXISTS prompt_manifests (
+    prompt_hash TEXT PRIMARY KEY, project_id TEXT, task_id INTEGER, attempt INTEGER, phase_id TEXT,
+    system_prompt_hash TEXT, user_prompt_hash TEXT, prompt_template TEXT,
+    total_characters INTEGER, system_characters INTEGER, user_characters INTEGER,
+    sections TEXT, compacted TEXT, omitted TEXT, skills TEXT, procedures TEXT,
+    redacted INTEGER DEFAULT 0, task_state_version INTEGER, generated_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS context_manifests (
+    project_id TEXT NOT NULL, task_id INTEGER NOT NULL, attempt INTEGER NOT NULL, phase_id TEXT NOT NULL,
+    inputs TEXT, omitted TEXT, compacted TEXT, skills TEXT, procedures TEXT, generated_at TEXT,
+    PRIMARY KEY (project_id, task_id, attempt, phase_id)
+  );
+  CREATE TABLE IF NOT EXISTS usage_records (
+    project_id TEXT NOT NULL, task_id INTEGER NOT NULL, attempt INTEGER NOT NULL, phase_id TEXT NOT NULL,
+    role_id TEXT, workflow_id TEXT, usage_status TEXT, cost_status TEXT,
+    provider TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER,
+    cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+    duration_ms INTEGER, process_duration_ms INTEGER, output_bytes INTEGER,
+    prompt_characters INTEGER, phase_outcome TEXT, unknown_reason TEXT, recorded_at TEXT,
+    PRIMARY KEY (project_id, task_id, attempt, phase_id)
+  );
+  CREATE TABLE IF NOT EXISTS cost_records (
+    project_id TEXT NOT NULL, task_id INTEGER NOT NULL, attempt INTEGER NOT NULL, phase_id TEXT NOT NULL,
+    cost_status TEXT, estimated_cost_usd REAL, reported_cost_usd REAL,
+    pricing_table_version TEXT, recorded_at TEXT,
+    PRIMARY KEY (project_id, task_id, attempt, phase_id)
+  );
+  CREATE TABLE IF NOT EXISTS procedure_versions (
+    procedure_id TEXT NOT NULL, version INTEGER NOT NULL, hash TEXT,
+    capabilities TEXT, characters INTEGER, recorded_at TEXT,
+    PRIMARY KEY (procedure_id, version)
+  );
+  CREATE TABLE IF NOT EXISTS external_skill_sources (
+    source_id TEXT PRIMARY KEY, repository TEXT, pinned_commit TEXT, synced_commit TEXT,
+    license TEXT, license_status TEXT, enabled INTEGER DEFAULT 1, auto_update INTEGER DEFAULT 0,
+    source_hash TEXT, synced_at TEXT, recorded_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS external_skills (
+    source_id TEXT NOT NULL, skill_id TEXT NOT NULL, path TEXT, content_hash TEXT,
+    source_commit TEXT, trust TEXT, risk_level TEXT, quality TEXT,
+    capabilities TEXT, scripts INTEGER, hooks INTEGER, executables INTEGER,
+    network_references INTEGER, git_capabilities TEXT, changed_since_review INTEGER DEFAULT 0,
+    reviewed_at TEXT, recorded_at TEXT,
+    PRIMARY KEY (source_id, skill_id)
+  );
+  CREATE TABLE IF NOT EXISTS skill_reviews (
+    source_id TEXT NOT NULL, skill_id TEXT NOT NULL, reviewer TEXT, content_hash TEXT,
+    source_commit TEXT, risk_level TEXT, quality TEXT, notes TEXT, at TEXT,
+    PRIMARY KEY (source_id, skill_id, content_hash)
+  );
+  CREATE TABLE IF NOT EXISTS skill_approvals (
+    source_id TEXT NOT NULL, skill_id TEXT NOT NULL, content_hash TEXT, source_commit TEXT,
+    eligible_roles TEXT, forbidden_roles TEXT, approver TEXT, why TEXT, at TEXT,
+    PRIMARY KEY (source_id, skill_id)
+  );
+  CREATE TABLE IF NOT EXISTS skill_conflicts (
+    source_id TEXT NOT NULL, skill_id TEXT NOT NULL, kind TEXT NOT NULL, conflicts_with TEXT,
+    detail TEXT, severity TEXT, recorded_at TEXT,
+    PRIMARY KEY (source_id, skill_id, kind, conflicts_with)
+  );
+  CREATE TABLE IF NOT EXISTS verification_processes (
+    project_id TEXT NOT NULL, task_id INTEGER NOT NULL, attempt INTEGER NOT NULL, check_id TEXT NOT NULL,
+    executable TEXT, args TEXT, outcome TEXT, exit_code INTEGER, timed_out INTEGER DEFAULT 0,
+    duration_ms INTEGER, timeout_ms INTEGER, timeout_decided_by TEXT,
+    cleanup_method TEXT, cleanup_ok INTEGER, output_bytes INTEGER, evidence_hash TEXT, recorded_at TEXT,
+    PRIMARY KEY (project_id, task_id, attempt, check_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_wfexec_project_task ON workflow_executions(project_id, task_id);
+  CREATE INDEX IF NOT EXISTS idx_wfexec_template ON workflow_executions(template_id, template_version);
+  CREATE INDEX IF NOT EXISTS idx_usage_project_role ON usage_records(project_id, role_id);
+  CREATE INDEX IF NOT EXISTS idx_usage_workflow ON usage_records(workflow_id);
+  CREATE INDEX IF NOT EXISTS idx_agentcfg_role ON phase_agent_config(project_id, role_id);
+  CREATE INDEX IF NOT EXISTS idx_agentcfg_model ON phase_agent_config(model_profile);
+  CREATE INDEX IF NOT EXISTS idx_extskill_source ON external_skills(source_id, trust);
+  CREATE INDEX IF NOT EXISTS idx_extskill_risk ON external_skills(risk_level);
+  CREATE INDEX IF NOT EXISTS idx_vproc_project_task ON verification_processes(project_id, task_id);
+  CREATE INDEX IF NOT EXISTS idx_prompt_task ON prompt_manifests(project_id, task_id, attempt);
   `,
 ];
 
@@ -323,6 +437,145 @@ export function projectEvent(db, ev) {
       ev.attempt ?? null, ev.phase_id ?? null, ev.type, clamp(ev.actor, 80),
       ev.causation ?? null, ev.correlation ?? null, j(ev.payload), ev.timestamp ?? now()));
   return { inserted: r.changes === 1 };
+}
+
+// ----------------------------------------------- the software-factory runtime
+
+// The registries themselves, so a HISTORICAL execution stays readable after a
+// template or role is revised. Without this, "task 12 ran FULL_SDLC@1" becomes
+// unanswerable the moment version 2 exists.
+export function seedRegistries(db, { templates = null, roles = null, procedures = null } = {}) {
+  tx(db, () => {
+    if (templates) {
+      const s = db.prepare(`INSERT INTO workflow_templates (template_id, version, hash, description, supported_task_types,
+        high_risk, phase_count, delivers, phases, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(template_id, version) DO UPDATE SET hash=excluded.hash, phases=excluded.phases, recorded_at=excluded.recorded_at`);
+      for (const t of templates.templates)
+        s.run(t.template_id, t.version, t.hash, clamp(t.description, 500), j(t.supported_task_types),
+          t.high_risk ? 1 : 0, t.phase_count, t.delivers ? 1 : 0, j(t.phases), now());
+    }
+    if (roles) {
+      const r = db.prepare(`INSERT INTO role_profiles (role_id, version, hash, purpose, model_profile, tools,
+        write_scope, read_only, output_envelope, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(role_id, version) DO UPDATE SET hash=excluded.hash, recorded_at=excluded.recorded_at`);
+      for (const x of roles.roles)
+        r.run(x.role_id, x.version, x.hash, clamp(x.purpose, 500), x.model_profile, j(x.tools),
+          clamp(x.write_scope, 500), x.read_only ? 1 : 0, x.output_envelope, now());
+      const m = db.prepare(`INSERT INTO model_profiles (profile_id, version, executor, provider, reasoning,
+        available, unavailable_reason, fallback_profiles, max_prompt_characters, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(profile_id, version) DO UPDATE SET available=excluded.available, recorded_at=excluded.recorded_at`);
+      for (const x of roles.model_profiles)
+        m.run(x.id, x.version, x.executor, x.provider, x.reasoning, x.available ? 1 : 0,
+          clamp(x.unavailable_reason, 400), j(x.fallback_profiles), x.max_prompt_characters, now());
+    }
+    if (procedures) {
+      const p = db.prepare(`INSERT INTO procedure_versions (procedure_id, version, hash, capabilities, characters, recorded_at)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(procedure_id, version) DO UPDATE SET hash=excluded.hash, recorded_at=excluded.recorded_at`);
+      for (const x of procedures.procedures) p.run(x.id, x.version, x.hash, j(x.capabilities), x.characters, now());
+    }
+  });
+}
+
+export function upsertWorkflowExecution(db, w) {
+  tx(db, () => db.prepare(`INSERT INTO workflow_executions (workflow_id, project_id, task_id, template_id,
+    template_version, template_hash, selected_by, high_risk, outcome, scheduler_id, started_at, ended_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET
+    outcome=excluded.outcome, ended_at=excluded.ended_at`)
+    .run(w.workflow_id, w.project_id, Number(w.task_id), w.template_id, w.template_version, w.template_hash,
+      clamp(w.selected_by, 120), w.high_risk ? 1 : 0, w.outcome ?? null, w.scheduler_id ?? null,
+      w.started_at ?? now(), w.ended_at ?? null));
+}
+
+// The resolved agent configuration for one phase. NO SECRETS: every field comes
+// from the role/profile registries, never from the environment.
+export function upsertAgentConfig(db, projectId, { taskId, attempt, phaseId, phaseExecutionId, config }) {
+  tx(db, () => db.prepare(`INSERT INTO phase_agent_config (project_id, task_id, attempt, phase_id, phase_execution_id,
+    actor_kind, role_id, role_version, executor_id, provider, model_profile, resolved_model, reasoning,
+    tools, write_scope_summary, selected_skills, fallback_used, recorded_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id, task_id, attempt, phase_id) DO UPDATE SET
+    resolved_model=excluded.resolved_model, recorded_at=excluded.recorded_at`)
+    .run(projectId, Number(taskId), Number(attempt), phaseId, phaseExecutionId ?? null,
+      config.actor_kind ?? "AGENT", config.role_id, config.role_version, config.executor_id, config.provider,
+      config.model_profile, config.resolved_model ?? null, config.reasoning,
+      j(config.tools), clamp(config.write_scope_summary, 500), j(config.selected_skills),
+      config.fallback_used ? 1 : 0, now()));
+}
+
+// HASHES AND SIZES ONLY. The prompt bodies stay on disk, local to the machine
+// that ran them — an unauthenticated dashboard must never be able to read one.
+export function upsertPromptManifest(db, projectId, { taskId, attempt, phaseId, manifest, contextManifest = null }) {
+  tx(db, () => {
+    db.prepare(`INSERT INTO prompt_manifests (prompt_hash, project_id, task_id, attempt, phase_id,
+      system_prompt_hash, user_prompt_hash, prompt_template, total_characters, system_characters, user_characters,
+      sections, compacted, omitted, skills, procedures, redacted, task_state_version, generated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(prompt_hash) DO NOTHING`)
+      .run(manifest.prompt_hash, projectId, Number(taskId), Number(attempt), phaseId,
+        manifest.system_prompt_hash ?? null, manifest.user_prompt_hash ?? null, manifest.prompt_template ?? null,
+        manifest.total_characters ?? null, manifest.system_characters ?? null, manifest.user_characters ?? null,
+        j(manifest.sections), j(manifest.compacted), j((manifest.sections ?? []).filter((s) => !s.included).map((s) => s.name)),
+        j(manifest.skills), j(manifest.procedures), manifest.redacted ? 1 : 0,
+        manifest.task_state_version ?? null, manifest.generated_at ?? now());
+    if (contextManifest)
+      db.prepare(`INSERT INTO context_manifests (project_id, task_id, attempt, phase_id, inputs, omitted, compacted, skills, procedures, generated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id, task_id, attempt, phase_id) DO UPDATE SET inputs=excluded.inputs, generated_at=excluded.generated_at`)
+        .run(projectId, Number(taskId), Number(attempt), phaseId, j(contextManifest.inputs), j(contextManifest.omitted),
+          j(contextManifest.compacted), j(contextManifest.skills), j(contextManifest.procedures), contextManifest.generated_at ?? now());
+  });
+}
+
+export function upsertUsage(db, projectId, { taskId, attempt, phaseId, roleId = null, workflowId = null, phaseOutcome = null, usage }) {
+  tx(db, () => {
+    db.prepare(`INSERT INTO usage_records (project_id, task_id, attempt, phase_id, role_id, workflow_id,
+      usage_status, cost_status, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+      duration_ms, process_duration_ms, output_bytes, prompt_characters, phase_outcome, unknown_reason, recorded_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id, task_id, attempt, phase_id) DO UPDATE SET
+      usage_status=excluded.usage_status, cost_status=excluded.cost_status, phase_outcome=excluded.phase_outcome, recorded_at=excluded.recorded_at`)
+      .run(projectId, Number(taskId), Number(attempt), phaseId, roleId, workflowId,
+        usage.usage_status, usage.cost_status, usage.provider, usage.model,
+        usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens,
+        usage.duration_ms ?? 0, usage.process_duration_ms, usage.output_bytes ?? 0,
+        usage.characters?.prompt ?? null, phaseOutcome, clamp(usage.unknown_reason, 400), now());
+    db.prepare(`INSERT INTO cost_records (project_id, task_id, attempt, phase_id, cost_status,
+      estimated_cost_usd, reported_cost_usd, pricing_table_version, recorded_at)
+      VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id, task_id, attempt, phase_id) DO UPDATE SET
+      cost_status=excluded.cost_status, recorded_at=excluded.recorded_at`)
+      .run(projectId, Number(taskId), Number(attempt), phaseId, usage.cost_status,
+        usage.estimated_cost_usd, usage.reported_cost_usd, usage.pricing_table_version, now());
+  });
+}
+
+export function upsertVerificationProcess(db, projectId, { taskId, attempt, result }) {
+  tx(db, () => db.prepare(`INSERT INTO verification_processes (project_id, task_id, attempt, check_id,
+    executable, args, outcome, exit_code, timed_out, duration_ms, timeout_ms, timeout_decided_by,
+    cleanup_method, cleanup_ok, output_bytes, evidence_hash, recorded_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id, task_id, attempt, check_id) DO UPDATE SET
+    outcome=excluded.outcome, exit_code=excluded.exit_code, recorded_at=excluded.recorded_at`)
+    .run(projectId, Number(taskId), Number(attempt), result.id ?? "(unnamed)",
+      result.executable ?? null, j(result.args), result.result ?? result.outcome ?? null, result.exit_code ?? null,
+      result.timed_out ? 1 : 0, result.duration_ms ?? null, result.timeout_ms ?? null, result.timeout_decided_by ?? null,
+      result.cleanup?.method ?? null, result.cleanup ? (result.cleanup.ok ? 1 : 0) : null,
+      result.output_bytes ?? null, result.evidence_hash ?? null, now()));
+}
+
+export function upsertExternalSkills(db, proj) {
+  tx(db, () => {
+    const s = db.prepare(`INSERT INTO external_skill_sources (source_id, repository, pinned_commit, synced_commit,
+      license, license_status, enabled, auto_update, source_hash, synced_at, recorded_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET
+      pinned_commit=excluded.pinned_commit, synced_commit=excluded.synced_commit, enabled=excluded.enabled, recorded_at=excluded.recorded_at`);
+    for (const x of proj.sources)
+      s.run(x.id, clamp(x.repository, 500), x.pinned_commit, x.synced_commit, x.license, x.license_status,
+        x.enabled ? 1 : 0, x.auto_update ? 1 : 0, x.source_hash, x.synced_at, now());
+    const k = db.prepare(`INSERT INTO external_skills (source_id, skill_id, path, content_hash, source_commit,
+      trust, risk_level, quality, capabilities, scripts, hooks, executables, network_references,
+      git_capabilities, changed_since_review, reviewed_at, recorded_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_id, skill_id) DO UPDATE SET
+      trust=excluded.trust, content_hash=excluded.content_hash, risk_level=excluded.risk_level, recorded_at=excluded.recorded_at`);
+    for (const x of proj.skills)
+      k.run(x.source_id, x.skill_id, clamp(x.path, 400), x.content_hash, x.source_commit, x.trust,
+        x.risk_level, x.quality, j(x.capabilities), x.scripts ?? 0, x.hooks ?? 0, 0, 0,
+        j(x.git_capabilities ?? []), x.changed_since_review ? 1 : 0, null, now());
+  });
 }
 
 // ------------------------------------------------------------------- reads

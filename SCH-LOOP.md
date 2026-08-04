@@ -70,6 +70,26 @@ the exact proposal and diff. Read-only dashboard APIs: `/api/task-graph`,
 `/api/scheduler`, `/api/phases`, `/api/gates`, `/api/human-gates`,
 `/api/completion`, `/api/operations`.
 
+**Workflows, roles and governed external skills:** nine versioned templates
+(`workflow-template-list`) selected by task override → task-type policy →
+project default → system default (`FULL_SDLC`, which preserves the pipeline that
+already existed). A template is DATA over a CLOSED handler registry: it names a
+handler id, never a module, and it can never grant a tool or widen a write
+scope. Six versioned roles (`scout planner builder repairer reviewer
+documenter`) separate role, executor, provider, model profile, tools and write
+scope; a skill widens none of them, an unavailable executor or model fails
+preflight, and provider fallback is never implicit. Every AGENT phase persists
+system/user prompts, a prompt manifest, a context manifest, an agent config and
+a usage record — **raw prompts are local-only and no dashboard API exposes
+one**. Usage is `UNKNOWN` where nothing reported it, never zero, and pricing
+tables ship no unverified rates. Passing checks contribute ZERO log characters
+to a prompt; failing ones contribute bounded, classified excerpts. External
+skill sources are pinned to a full commit, synced only by an operator, never
+auto-updated or auto-trusted, and approved per ROLE against a content hash —
+push, deploy and scheduling skills are never eligible for a worker.
+`node scripts/sch-test.mjs` runs the suite under a lease so two full suites can
+never overlap.
+
 **`/sch-run` is the LEGACY in-session path.** Never run it and the queue against
 one project at once: while a scheduler holds the lease, `task-set --status` is
 refused in code and names the scheduler. **Workers are still not OS-sandboxed**,

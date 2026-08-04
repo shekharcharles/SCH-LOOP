@@ -16,11 +16,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync,
          unlinkSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { runProcess, effectiveTimeout } from "./subprocess.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import { join, basename } from "node:path";
 import * as WS from "./workspace.mjs";
 import * as SK from "./skills.mjs";
 import { computeCandidate } from "./candidate.mjs";
+import * as PROC from "./procedures.mjs";
+import * as USAGE from "./usage.mjs";
 import { ClaudeCliExecutor, buildEnv, redactEnv, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
 import { getProject, loadState, saveState, auditLog, event as stateEvent } from "./state.mjs";
 
@@ -378,7 +381,21 @@ export function checkVerificationCommand(v) {
 
 // Deterministic execution of SCH's OWN commands. The worker's report of what it
 // ran is evidence of nothing; this is the process result.
-export function runVerification(commands, { cwd, runDirPath, timeoutMs = DEFAULT_VERIFY_TIMEOUT_MS, maxBytes = DEFAULT_MAX_OUTPUT_BYTES, env = process.env }) {
+// Runs on the ONE bounded subprocess implementation (scripts/subprocess.mjs),
+// the same one the executor uses for workers. There is no second cleanup path:
+// a verification command is arbitrary project code — `npm test` spawning four
+// workers — and killing only the direct child leaves four survivors holding the
+// pipes this function would then wait on forever.
+//
+// TIMEOUT PRECEDENCE is delegated to `effectiveTimeout`, which takes the MINIMUM
+// of every bound. That matters because `task-set --verify` stamps a 10-minute
+// default onto every command, and the old comparison let that default outrank an
+// explicit 2-second operator ceiling.
+export async function runVerification(commands, {
+  cwd, runDirPath, timeoutMs = DEFAULT_VERIFY_TIMEOUT_MS, maxBytes = DEFAULT_MAX_OUTPUT_BYTES,
+  env = process.env, phaseRemainingMs = null, taskRemainingMs = null, schedulerRemainingMs = null,
+  isCancelled = () => false,
+} = {}) {
   const childEnv = buildEnv(env, {});
   const results = [];
   for (const [i, v] of commands.entries()) {
@@ -387,40 +404,30 @@ export function runVerification(commands, { cwd, runDirPath, timeoutMs = DEFAULT
     // stored array, quoted here so a value with a space reads unambiguously.
     const display = displayCommand(v);
     const at = v.cwd && v.cwd !== "." ? join(cwd, v.cwd) : cwd;
-    // A DEFAULT MUST NOT OUTRANK AN EXPLICIT INSTRUCTION.
-    //
-    // `task-set --verify` stamps every command with the 10-minute default, so
-    // `Number(v.timeout_ms) > 0` was always true and `SCH_VERIFY_TIMEOUT_MS` was
-    // dead configuration for every task created that way. A run that asked for a
-    // 2-second ceiling waited ten minutes and looked, convincingly, like a hang.
-    //
-    // The caller's limit is a CEILING: a task may ask for less time than the
-    // operator allows, never more.
-    const limit = Math.min(Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : timeoutMs, timeoutMs);
-    const t0 = Date.now();
-    let stdout = "", stderr = "", code = null, signal = null, timedOut = false, truncated = false, spawnError = null;
-    try {
-      stdout = execFileSync(v.exe, v.args ?? [], {
-        cwd: at, env: childEnv, timeout: limit, maxBuffer: maxBytes,
-        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
-      });
-      code = 0;
-    } catch (e) {
-      stdout = e.stdout ? String(e.stdout) : "";
-      stderr = e.stderr ? String(e.stderr) : "";
-      code = typeof e.status === "number" ? e.status : null;
-      signal = e.signal ?? null;
-      timedOut = e.code === "ETIMEDOUT" || (signal === "SIGTERM" && Date.now() - t0 >= limit);
-      truncated = e.code === "ENOBUFS";
-      if (e.code === "ENOENT") spawnError = `executable not found: ${v.exe}`;
-    }
-    const ended = Date.now();
-    const result = spawnError ? "ERROR" : timedOut ? "TIMEOUT" : code === 0 ? "PASSED" : "FAILED";
+    const bound = effectiveTimeout({
+      command: Number(v.timeout_ms) > 0 ? Number(v.timeout_ms) : null,
+      phaseRemaining: phaseRemainingMs, taskRemaining: taskRemainingMs,
+      schedulerRemaining: schedulerRemainingMs, operatorCeiling: timeoutMs,
+      fallback: DEFAULT_VERIFY_TIMEOUT_MS,
+    });
+    const proc = await runProcess({
+      id, exe: v.exe, args: v.args ?? [], cwd: at, env: childEnv,
+      timeoutMs: bound.effective_ms, maxBytes, isCancelled,
+    });
+    const result = proc.spawn_error ? "ERROR" : proc.timed_out ? "TIMEOUT" : proc.cancelled ? "CANCELLED" : proc.exit_code === 0 ? "PASSED" : "FAILED";
     const rec = {
-      id, executable: v.exe, args: v.args ?? [], display, cwd: at, timeout_ms: limit,
-      started_at: new Date(t0).toISOString(), ended_at: new Date(ended).toISOString(), duration_ms: ended - t0,
-      exit_code: code, signal, timed_out: timedOut, truncated, spawn_error: spawnError, result,
-      stdout: clamp(stdout, 20000), stderr: clamp(stderr, 20000),
+      id, executable: v.exe, args: v.args ?? [], display, cwd: at,
+      timeout_ms: bound.effective_ms, timeout_decided_by: bound.decided_by, timeout_considered: bound.considered,
+      started_at: proc.started_at, ended_at: proc.ended_at, duration_ms: proc.duration_ms,
+      exit_code: proc.exit_code, signal: proc.signal, timed_out: proc.timed_out, cancelled: proc.cancelled,
+      truncated: proc.stdout_evidence.truncated || proc.stderr_evidence.truncated,
+      spawn_error: proc.spawn_error, result,
+      stdout: clamp(proc.stdout, 20000), stderr: clamp(proc.stderr, 20000),
+      output_bytes: proc.output_bytes,
+      // Present only when SCH had to kill something, and it says HOW. A
+      // verification that could not be cleaned up is an operator's problem, and
+      // silence about it is how orphans accumulate.
+      cleanup: proc.cleanup,
     };
     results.push(rec);
     if (runDirPath) {
@@ -580,7 +587,7 @@ const MANDATORY = new Set(["safety-kernel", "task", "acceptance-criteria", "allo
 // Compaction order: the least load-bearing context goes first.
 const COMPACT_ORDER = ["knowledge", "previous-handoff", "dependencies", "skills"];
 
-export function compilePrompt({ identity, task, policy, skills, dependencies = [], previousHandoff = null, knowledge = [], maxChars = DEFAULT_PROMPT_MAX_CHARS }) {
+export function compilePrompt({ identity, task, policy, skills, dependencies = [], previousHandoff = null, knowledge = [], maxChars = DEFAULT_PROMPT_MAX_CHARS, procedures = [], promptTemplate = "worker@1", workflow = null, role = null, taskStateVersion = null, redactionApplied = false }) {
   const list = (xs) => (xs?.length ? xs.map((x) => `- ${x}`).join("\n") : "- (none recorded)");
   const sections = [
     { name: "safety-kernel", text: SAFETY_KERNEL },
@@ -625,6 +632,16 @@ export function compilePrompt({ identity, task, policy, skills, dependencies = [
     return { ok: false, failure: { code: "POLICY_VIOLATION", message: `prompt is ${size()} characters after compaction, over the ${maxChars} limit` } };
 
   const text = [...included.values()].join("\n\n---\n\n");
+
+  // SYSTEM AND USER ARE DIFFERENT THINGS, and separating them is not cosmetic.
+  // The safety kernel is what SCH asserts; everything else is what this task
+  // happens to be. Persisting them apart means an operator can diff the rules
+  // across runs without the task text moving underneath, and a reviewer can see
+  // at a glance whether the kernel was intact.
+  const systemNames = ["safety-kernel"];
+  const systemPrompt = systemNames.filter((n) => included.has(n)).map((n) => included.get(n)).join("\n\n---\n\n");
+  const userPrompt = [...included].filter(([n]) => !systemNames.includes(n)).map(([, t]) => t).join("\n\n---\n\n");
+
   const manifest = {
     schema_version: SCHEMA_VERSION, limit_characters: maxChars,
     // Characters, not tokens: without a tokenizer a token count would be a
@@ -635,9 +652,60 @@ export function compilePrompt({ identity, task, policy, skills, dependencies = [
       ...omitted.map((o) => ({ name: o.name, characters: 0, included: false, reason: o.reason })),
     ],
     compacted, total_characters: text.length,
+    system_characters: systemPrompt.length, user_characters: userPrompt.length,
     skills: skills.map((s) => ({ skill_id: s.skill_id, bucket: s.bucket, reason: s.reason, content_hash: s.content_hash, trust: s.trust })),
+    procedures: (procedures ?? []).map((p) => ({ id: p.id, version: p.version, hash: p.hash, characters: p.characters })),
+    prompt_template: promptTemplate,
+    workflow: workflow ?? null,
+    role: role ?? null,
+    // The identity this prompt was compiled FOR. A prompt that names a different
+    // task than the phase executing it is a stale artifact, and this is how that
+    // is noticed instead of shipped.
+    identity: { project_id: identity.project_id, task_id: String(identity.task_id), run_id: identity.run_id, attempt: identity.attempt ?? null },
+    task_state_version: taskStateVersion ?? null,
+    // Hashes, so the dashboard can prove two runs used the same prompt WITHOUT
+    // ever transmitting the prompt.
+    prompt_hash: sha256(text), system_prompt_hash: sha256(systemPrompt), user_prompt_hash: sha256(userPrompt),
+    redacted: redactionApplied,
+    generated_at: now(),
   };
-  return { ok: true, text, manifest };
+
+  // The CONTEXT manifest: metadata and a hash per input, never the input. It
+  // answers "what was this agent actually shown" without being a second copy of
+  // the prompt.
+  const contextManifest = {
+    schema_version: SCHEMA_VERSION, unit: "characters",
+    inputs: [...included].map(([name, t]) => ({ name, characters: t.length, hash: sha256(t), included: true, mandatory: MANDATORY.has(name) })),
+    omitted: omitted.map((o) => ({ name: o.name, reason: o.reason })),
+    compacted: compacted.map((c) => ({ name: c.name, from: c.from, to: c.to, dropped: Boolean(c.dropped) })),
+    skills: skills.map((s) => ({ skill_id: s.skill_id, content_hash: s.content_hash, trust: s.trust, excerpt_characters: (s.excerpt ?? "").length })),
+    procedures: (procedures ?? []).map((p) => ({ id: p.id, version: p.version, hash: p.hash })),
+    generated_at: now(),
+  };
+
+  return { ok: true, text, system: systemPrompt, user: userPrompt, manifest, contextManifest };
+}
+
+const sha256 = (s) => createHash("sha256").update(String(s ?? "")).digest("hex");
+
+// Values that must never be written into a prompt artifact, even though the
+// process legitimately received them. Applied to the COMPILED text, so a secret
+// that arrived through a task note or a skill excerpt is caught too.
+const REDACTIONS = [
+  [/\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[redacted-credential]"],
+  [/(:\/\/)[^/@\s]+:[^@/\s]+@/g, "$1[redacted]@"],
+  [/\b((?:api[_-]?key|secret|password|token|bearer)\s*[:=]\s*)['"]?[A-Za-z0-9._\-]{12,}['"]?/gi, "$1[redacted]"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[redacted-private-key]"],
+];
+
+export function redactPrompt(text) {
+  let out = String(text ?? ""), applied = [];
+  for (const [re, rep] of REDACTIONS) {
+    const before = out;
+    out = out.replace(re, rep);
+    if (out !== before) applied.push(String(re).slice(0, 40));
+  }
+  return { text: out, redacted: applied.length > 0, patterns_applied: applied.length };
 }
 
 // ---------------------------------------------------------------- preflight
@@ -860,7 +928,7 @@ ${verification ? li(verification.results, (r) => `\`${r.display}\` -> **${r.resu
 
 // ---------------------------------------------------------------- the runner
 
-export async function runTask({ projectId, taskId, env = process.env, executor = null, attempt = 1, onEvent = null, allowDirtyPaths = null }) {
+export async function runTask({ projectId, taskId, env = process.env, executor = null, attempt = 1, onEvent = null, allowDirtyPaths = null, roleConfig = null, workflow = null }) {
   const runId = newRunId();
   const identity = { run_id: runId, project_id: projectId, task_id: String(taskId), attempt, started_at: now() };
   const started = Date.now();
@@ -966,13 +1034,31 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       return dep ? `#${dep.id} ${dep.title} (${dep.status})` : `#${d} (unknown)`;
     });
     const previous = previousHandoff(wsDir, taskId, runId);
+    const procs = PROC.load(PROC.proceduresFor("agent-run", { role: roleConfig?.role_id ?? null }));
     const compiled = compilePrompt({
       identity, task, policy, skills: skills.selected, dependencies: deps,
       previousHandoff: previous, knowledge: task.graphContext ?? [], maxChars: promptMax,
+      procedures: procs.procedures,
+      promptTemplate: roleConfig?.prompt_template ?? "worker@1",
+      workflow: workflow ?? null, role: roleConfig ? { id: roleConfig.role_id, version: roleConfig.role_version, hash: roleConfig.role_hash } : null,
+      taskStateVersion: task.stateVersion ?? null,
     });
     if (!compiled.ok) return finish(outcomeFor(compiled.failure.code), compiled.failure);
-    write("prompt.txt", compiled.text);
+
+    // REDACT BEFORE PERSISTING. A credential that reached the compiled prompt
+    // through a task note or a skill excerpt must not be written to disk in an
+    // artifact that outlives the run — the worker still receives the live text,
+    // but the record of it does not carry the secret.
+    const redSys = redactPrompt(compiled.system), redUser = redactPrompt(compiled.user);
+    compiled.manifest.redacted = redSys.redacted || redUser.redacted;
+    write("system-prompt.txt", redSys.text);
+    write("user-prompt.txt", redUser.text);
+    write("prompt.txt", compiled.text);                 // the exact text the worker got, local-only
     write("prompt-manifest.json", compiled.manifest);
+    write("context-manifest.json", compiled.contextManifest);
+    // The resolved agent configuration, exactly as it will run. Secrets are
+    // absent by construction: nothing here is read from the environment.
+    if (roleConfig) write("agent-config.json", roleConfig);
 
     // ---- worker
     const cancelFile = join(runPath, "CANCEL");
@@ -992,6 +1078,25 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       environment_names: Object.keys(redactEnv(buildEnv(env, { SCH_RUN_ID: runId }))).sort(),
     });
     ev("run.worker_output_recorded", { stdout: worker.stdout_evidence, stderr: worker.stderr_evidence });
+
+    // USAGE. The Claude CLI reports no token counts to SCH, so this record is
+    // honestly UNKNOWN rather than a plausible-looking zero — and the character
+    // counts it DOES have are recorded beside the token fields, labelled as
+    // characters, never divided by four and called tokens.
+    const usage = USAGE.buildUsage({
+      provider: roleConfig?.provider ?? null, model: roleConfig?.resolved_model ?? roleConfig?.model ?? null,
+      reported: worker.usage ?? null,
+      characters: {
+        prompt: compiled.manifest.total_characters,
+        system_prompt: compiled.manifest.system_characters,
+        user_prompt: compiled.manifest.user_characters,
+        output: (worker.stdout ?? "").length,
+      },
+      durationMs: worker.duration_ms ?? 0, processDurationMs: worker.duration_ms ?? null,
+      outputBytes: (worker.stdout_evidence?.bytes_total ?? 0) + (worker.stderr_evidence?.bytes_total ?? 0),
+      project: proj,
+    });
+    write("usage.json", usage);
 
     // Even a failed worker gets its effects inspected: a process that timed out
     // may still have left half a change in the tree, and hiding that is worse
@@ -1049,7 +1154,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
 
     // ---- verification (SCH's commands, SCH's process results)
     ev("run.verification_started", { commands: policy.verify.map(displayCommand) });
-    const verification = runVerification(policy.verify, {
+    const verification = await runVerification(policy.verify, {
       cwd: repoRoot, runDirPath: runPath, env,
       timeoutMs: num(env.SCH_VERIFY_TIMEOUT_MS, DEFAULT_VERIFY_TIMEOUT_MS),
       maxBytes: num(env.SCH_MAX_OUTPUT_BYTES, DEFAULT_MAX_OUTPUT_BYTES),
@@ -1233,6 +1338,7 @@ export function readRun(projectId, runId) {
     dir, run: load("run.json"), baseline: load("baseline.json"), handoff: load("handoff.json"),
     effects: load("git-effects.json"), verification: load("verification.json"),
     prompt_manifest: load("prompt-manifest.json"), preflight: load("preflight.json"),
+    context_manifest: load("context-manifest.json"), agent_config: load("agent-config.json"), usage: load("usage.json"),
     // The binding the delivery controller checks the working tree against.
     // Absent on runs that predate it — those are simply not deliverable.
     candidate: load("delivery-candidate.json"),
