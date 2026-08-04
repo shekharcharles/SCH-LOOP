@@ -211,6 +211,11 @@ export class ClaudeCliExecutor extends AgentExecutor {
 
     const env = buildEnv(this.parentEnv, {
       SCH_RUN_ID: identity.run_id, SCH_PROJECT_ID: identity.project_id, SCH_TASK_ID: identity.task_id,
+      // Which attempt this is. A repair worker that cannot tell it is a repair
+      // has no way to read the failure evidence it was given differently from
+      // the original task — and a scheduler cannot prove "a fresh process per
+      // attempt" without something in the child that names the attempt.
+      SCH_ATTEMPT: identity.attempt,
     });
 
     const out = sink(this.maxOutputBytes), err = sink(this.maxOutputBytes);

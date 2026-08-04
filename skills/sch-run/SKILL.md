@@ -3,7 +3,26 @@ name: sch-run
 description: The SCH Loop engine, one project per loop. One pass fully completes one task per its pack — build/execute, validate, review with fresh context, complete (merge or log finding), grow the queue, and deliver when done. Enforces the offensive scope gate. Designed for /loop; run as /loop 15m /sch-run --project <id>.
 ---
 
-# SCH Loop — engine
+# SCH Loop — engine (LEGACY in-session path)
+
+> **This is the legacy, prompt-driven, in-session loop.** It still works and it
+> is still supervised by you. The engine now also has a deterministic
+> **sequential graph scheduler** that executes the queue itself — one ready task
+> at a time, each in a fresh external worker, each delivered and remotely
+> verified before the next is claimed:
+>
+> ```bash
+> node scripts/sch-run-queue.mjs --project <id>
+> ```
+>
+> **Never run both against one project at the same time.** While a scheduler
+> holds the project's lease, `task-set --status` is REFUSED here and names the
+> scheduler — that is enforced in code, not by this instruction. This path also
+> cannot set controller-only states (`delivered`) and cannot name a canonical
+> graph state (`READY`, `CLAIMED`, `AWAITING_DELIVERY`, …); every status write it
+> makes goes through the closed transition service and is recorded.
+> Use this loop when you want a supervised in-session pass; use the queue when
+> the graph should execute itself.
 
 > **Engine home (`SCH_HOME`):** `$HOME/.claude/SCH-loop`. Every
 > `node scripts/state.mjs …` command and every `packs/…` file below lives there.

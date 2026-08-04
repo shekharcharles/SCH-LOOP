@@ -114,6 +114,70 @@ for (const [cond, msg] of [
     [read("scripts/state.mjs").includes("CONTROLLER_ONLY_STATUSES"), "`delivered` must be unreachable from task-set"],
   ]) ok(cond, msg);
 
+  // 6d. the sequential graph scheduler. Same principle as above: these are the
+  // structural claims the README makes about it, so they are enforced rather
+  // than trusted. Each one is a boundary a refactor could quietly remove.
+  const graph = read("scripts/taskgraph.mjs");
+  const transitions = read("scripts/transitions.mjs");
+  const envelopes = read("scripts/envelopes.mjs");
+  const gatesSrc = read("scripts/gates.mjs");
+  const phases = read("scripts/phases.mjs");
+  const scheduler = read("scripts/scheduler.mjs");
+  const humangates = read("scripts/humangates.mjs");
+  const projection = read("scripts/projection.mjs");
+  for (const [cond, msg] of [
+    // the graph is audited, never silently rewritten
+    [/FALSE_EDGE_SUSPECTED/.test(graph), "taskgraph.mjs must flag undefended dependency edges"],
+    [/DEPENDENCY_CYCLE/.test(graph), "taskgraph.mjs must detect dependency cycles"],
+    [!/tasks\.splice|delete .*\.deps|\.deps\s*=\s*\[\]/.test(graph), "taskgraph.mjs must never edit the graph it is validating"],
+    // a model is not an actor
+    [/a model never moves a task/.test(transitions), "transitions.mjs must refuse a model as a transition actor"],
+    [/STATE_VERSION_CONFLICT/.test(transitions), "transitions.mjs must enforce expected-version concurrency"],
+    [transitions.includes("LEGACY_TO_STATE") && transitions.includes("STATE_TO_LEGACY"),
+      "transitions.mjs must keep the documented legacy<->canonical map in both directions"],
+    [/merged:\s*"AWAITING_DELIVERY"/.test(transitions),
+      "`merged` must map to AWAITING_DELIVERY — it was never pushed, and mapping it to DELIVERED would claim a remote it never reached"],
+    // envelopes are claims, not evidence
+    [/Envelope claims are not system evidence/.test(envelopes), "envelopes.mjs must state that a claim is not evidence"],
+    [/ENVELOPE_UNKNOWN_FIELD/.test(envelopes), "an envelope field nothing validates must be refused, not ignored"],
+    [/ENVELOPE_AMBIGUOUS/.test(envelopes), "exactly one envelope block must be required"],
+    [envelopes.includes("adaptLegacyHandoff"), "the previous milestone's worker handoff must still be readable"],
+    // gates report evidence and factual ones are absolute
+    [/FACTUAL_GATE_NOT_OVERRIDABLE/.test(gatesSrc), "a factual gate must be overridable by nobody"],
+    [/evidence_hash/.test(gatesSrc), "every gate report must carry a stable evidence hash"],
+    [/const cannotRun = /.test(gatesSrc), "a gate with no evidence must FAIL rather than skip"],
+    // the phase lifecycle is code, and default-fail
+    [/never skips a checkpoint/.test(phases), "the phase lifecycle must refuse a skipped checkpoint"],
+    [/never moves backwards/.test(phases), "the phase lifecycle must refuse a reversal"],
+    [phases.includes('"PENDING", "RUNNING", "EXECUTED", "REPORTED", "GATED", "ACCEPTED"'),
+      "the phase lifecycle must keep all six forward checkpoints"],
+    // the scheduler owns sequencing and delegates delivery
+    [scheduler.includes("DEL.deliverRun"), "the scheduler must deliver THROUGH the existing controller"],
+    [!/spawnSync\(\s*["']git["']|execFileSync\(\s*["']git["']/.test(scheduler),
+      "scheduler.mjs must not run git directly — delivery is the controller's authority"],
+    [scheduler.includes("RUN.runTask"), "the scheduler must execute a task through the existing supervised runner"],
+    [!/markDelivered\s*\(/.test(scheduler), "only the delivery controller may complete a task"],
+    [/max_consecutive_failures/.test(scheduler) && /max_total_attempts/.test(scheduler),
+      "the scheduler must carry explicit, finite budgets"],
+    [/NON_RETRYABLE_FAILURES/.test(scheduler), "retryability must be a policy table, never the worker's opinion"],
+    // human decisions bind, and are never a remote write
+    [/proposalHash/.test(humangates), "a human decision must bind to a proposal hash"],
+    [/decisions_require_local_operator/.test(humangates), "the human-gate projection must state that deciding is local-operator authority"],
+    // the projection is a projection
+    [/PROJECTION of them|It is not the authority/.test(projection), "projection.mjs must state that it is not the authority"],
+    [/INSERT OR IGNORE INTO events/.test(projection), "event projection must be idempotent by event id"],
+    [!/from ["']better-sqlite3["']|require\(["']better-sqlite3/.test(projection), "the projection must use node:sqlite, not a dependency"],
+  ]) ok(cond, msg);
+
+  // The dashboard must not grow a remote write for any of this. Approval and
+  // task authority stay on the CLI until the dashboard has authentication.
+  {
+    const dash = read("scripts/dashboard.mjs");
+    const post = dash.slice(dash.indexOf('if (req.method === "POST")'), dash.indexOf('url.pathname === "/api/projects"'));
+    for (const route of ["human-gate", "approve", "deliver", "task-transition", "scheduler-cancel"])
+      ok(!post.includes(route), `the dashboard must not expose "${route}" as a write — it has no authentication`);
+  }
+
   // The whole point of the narrow ignore rules: never hide the durable record.
   // Checked against the rules the module actually emits, not against its prose.
   const WS = await import("./workspace.mjs");
@@ -137,7 +201,10 @@ for (const [cond, msg] of [
   for (const f of ["scripts/dashboard.mjs", "scripts/state.mjs", "scripts/skills.mjs", "scripts/report.mjs",
                    "scripts/graph.mjs", "scripts/poc.mjs", "scripts/workspace.mjs", "scripts/executor.mjs",
                    "scripts/runner.mjs", "scripts/sch-run-task.mjs", "scripts/candidate.mjs",
-                   "scripts/delivery.mjs", "scripts/sch-deliver-run.mjs"]) {
+                   "scripts/delivery.mjs", "scripts/sch-deliver-run.mjs",
+                   "scripts/taskgraph.mjs", "scripts/transitions.mjs", "scripts/envelopes.mjs",
+                   "scripts/gates.mjs", "scripts/phases.mjs", "scripts/humangates.mjs",
+                   "scripts/scheduler.mjs", "scripts/sch-run-queue.mjs", "scripts/projection.mjs"]) {
     try { execFileSync(process.execPath, ["--check", join(ROOT, f)], { stdio: "pipe" }); }
     catch (e) {
       const why = (e.stderr?.toString() || e.message).split("\n").find((l) => /Error/.test(l)) || e.message;

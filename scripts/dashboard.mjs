@@ -16,6 +16,12 @@ import { projection as capabilityProjection } from "./skills.mjs";
 import { runProjection } from "./runner.mjs";
 import { deliveryProjection } from "./delivery.mjs";
 import { open as openGraph, search as graphSearch, explore as graphExplore, stats as graphStats, logQuery } from "./graph.mjs";
+import { projectGraph as taskGraphProjection } from "./taskgraph.mjs";
+import { canonicalState } from "./transitions.mjs";
+import { schedulerProjection, taskPhases, evaluateCompletion, TASK_WORKFLOW } from "./scheduler.mjs";
+import { projection as humanGateProjection } from "./humangates.mjs";
+import { dashboardProjection as operationalProjection } from "./projection.mjs";
+import { listPhases } from "./phases.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
 // different directory than the one being written to
@@ -229,6 +235,91 @@ const server = createServer(async (req, res) => {
     try { return json(res, deliveryProjection(project, { limit: Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || 10))) })); }
     catch (e) { return json(res, { error: e.message }); }
   }
+  // ------------------------------------------------------ the task graph
+  //
+  // Everything below is READ ONLY, and stays that way until this dashboard has
+  // authentication. Claiming a task, approving a delivery and deciding a human
+  // gate are authority; a page anyone on the tailnet can open is not the place
+  // to exercise it. Each payload says so in its own body rather than relying on
+  // whoever adds the next button to remember.
+  if (url.pathname === "/api/task-graph") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, taskGraphProjection(project, { canonicalState })); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // The sequential scheduler: which one is live, where it is, and why it stopped.
+  if (url.pathname === "/api/scheduler") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, schedulerProjection(project, { limit: Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || 10))) })); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // Every phase of every attempt for one task, with its lifecycle state — the
+  // same records a restarted scheduler reads to work out where it was.
+  if (url.pathname === "/api/phases") {
+    const project = url.searchParams.get("project");
+    const task = Number(url.searchParams.get("task"));
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    if (!Number.isInteger(task)) return json(res, { error: "need ?task=<n>" });
+    try {
+      const p = taskPhases(project, task);
+      return json(res, {
+        ...p,
+        attempts: p.attempts.map((a) => ({
+          ...a,
+          phases: listPhases(a.dir).map((x) => ({
+            phase_id: x.phase_id, kind: x.kind, role: x.role, state: x.state, outcome: x.outcome,
+            failure: x.failure, envelope_type: x.envelope_type, envelope_hash: x.envelope_hash,
+            gates: (x.gate_reports ?? []).map((g) => ({ gate_id: g.gate_id, outcome: g.outcome, kind: g.kind })),
+            accounting: x.accounting, duration_ms: x.duration_ms,
+          })),
+        })),
+      });
+    } catch (e) { return json(res, { error: e.message }); }
+  }
+  // Gate reports: what was checked, with its evidence, per attempt.
+  if (url.pathname === "/api/gates") {
+    const project = url.searchParams.get("project");
+    const task = Number(url.searchParams.get("task"));
+    const only = url.searchParams.get("gate");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    if (!Number.isInteger(task)) return json(res, { error: "need ?task=<n>" });
+    try {
+      const rows = [];
+      for (const a of taskPhases(project, task).attempts)
+        for (const p of listPhases(a.dir))
+          for (const g of p.gate_reports ?? [])
+            if (!only || g.gate_id === only) rows.push({ attempt: a.attempt, phase_id: p.phase_id, ...g });
+      return json(res, { project, task_id: task, gate: only, reports: rows });
+    } catch (e) { return json(res, { error: e.message }); }
+  }
+  // Typed human decisions. Listing them here is right; deciding them here is not.
+  if (url.pathname === "/api/human-gates") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, humanGateProjection(project)); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // Deterministic project completion — every clause, with its evidence.
+  if (url.pathname === "/api/completion") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, evaluateCompletion(project)); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // The SQLite operational projection. A PROJECTION — never the authority — so
+  // a read here can never block the scheduler that is writing it (WAL).
+  if (url.pathname === "/api/operations") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try { return json(res, operationalProjection(project, { limit: Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || 20))) })); }
+    catch (e) { return json(res, { error: e.message }); }
+  }
+  // The workflow definition itself, so a UI never hardcodes the phase list.
+  if (url.pathname === "/api/workflow")
+    return json(res, { schema_version: 1, workflow: TASK_WORKFLOW.map((p) => ({ id: p.id, kind: p.kind, role: p.role ?? null, output_schema: p.output_schema, gates: p.gates })) });
+
   if (url.pathname === "/api/graph-map") {
     const project = url.searchParams.get("project");
     const limit = Math.max(24, Math.min(600, Number(url.searchParams.get("limit") || 24)));
@@ -1222,6 +1313,7 @@ function projSkeleton(id){
     <section id="inboxsec"></section>
     <section id="phase"></section>
     <section id="capsec"></section>
+    <section id="queuesec"></section>
     <section id="graphsec"></section>
     <section id="tasksec"></section>
     <section id="findsec"></section>
@@ -1500,11 +1592,69 @@ function capsSec(c){
     '<code>state.mjs skill-trust &lt;id&gt; --state APPROVED</code></summary><div class="boxin">'+rows+'</div></details>';
 }
 
+// ---- the sequential queue: graph, current execution, attention, gates ------
+// Read-only, deliberately. Approving a delivery and deciding a human gate are
+// authority, and this page has no authentication — every one of these payloads
+// says so, and the CLI command to act is printed instead of a button.
+function loadQueue(pj){
+  Promise.all([
+    fetch("/api/task-graph?project="+encodeURIComponent(pj)).then(r=>r.json()).catch(()=>null),
+    fetch("/api/scheduler?project="+encodeURIComponent(pj)).then(r=>r.json()).catch(()=>null),
+    fetch("/api/human-gates?project="+encodeURIComponent(pj)).then(r=>r.json()).catch(()=>null),
+  ]).then(([g,s,h])=>set("queuesec",queueSec(g,s,h,pj))).catch(()=>{});
+}
+function queueSec(g,s,h,pj){
+  if((!g||g.error)&&(!s||s.error))return"";
+  let out="";
+  // --- project graph
+  if(g&&!g.error){
+    const st=(n)=>'<span class="badge">'+esc(n.state)+'</span>';
+    const rows=(g.nodes||[]).map(n=>'<div class="ph"><span class="ph-n">#'+n.id+' '+esc(n.title)+'</span> '+st(n)+
+      (n.ready?' <span class="badge">ready</span>':'')+
+      (n.depends_on&&n.depends_on.length?' <span class="lx">after '+n.depends_on.map(d=>"#"+d).join(" ")+'</span>':'')+
+      (n.delivery?' <span class="lx">'+esc(String(n.delivery.commit).slice(0,8))+' on '+esc(n.delivery.remote)+'/'+esc(n.delivery.branch)+'</span>':'')+
+      (!n.ready&&(n.blockers||[]).length?'<div class="lx">'+esc(n.blockers[0].detail)+'</div>':'')+'</div>').join("");
+    const v=g.validation||{};
+    out+='<div class="scope"><b>PROJECT GRAPH //</b> '+((g.nodes||[]).length)+' task(s), '+((g.edges||[]).length)+' edge(s)'+
+      (v.ok?'':' · <span style="color:var(--red)">graph INVALID</span>')+
+      ((v.warnings||[]).length?' · <span class="lx">'+(v.warnings.length)+' audit warning(s)</span>':'')+'</div>'+
+      ((v.problems||[]).length?'<div class="q">'+v.problems.map(p=>esc(p.code+": "+p.message)).join("<br>")+'</div>':'')+
+      ((v.warnings||[]).length?'<details class="box"><summary>false-edge audit: '+(v.warnings.length)+' edge(s) with no defensible reason</summary><div class="boxin">'+
+        v.warnings.map(w=>'<div class="ph">'+esc(w.message)+'</div>').join("")+'</div></details>':'')+
+      '<details class="box" open><summary>tasks</summary><div class="boxin">'+rows+'</div></details>';
+  }
+  // --- current execution
+  if(s&&!s.error){
+    const a=s.active, l=s.lease;
+    out+='<div class="scope"><b>SCHEDULER //</b> '+(l?('<b>'+esc(l.scheduler_id)+'</b> live (pid '+esc(String(l.pid))+')'):'none running')+
+      (a?' · task <b>#'+esc(String(a.current_task||"-"))+'</b> phase <b>'+esc(a.current_phase||"-")+'</b> attempt '+esc(String(a.current_attempt||"-")):'')+'</div>';
+    const hist=(s.schedulers||[]).slice(0,6).map(x=>'<div class="ph"><span class="ph-n">'+esc(x.scheduler_id)+'</span> '+
+      '<span class="badge">'+esc(x.state)+'</span> <span class="badge">'+esc(x.stop_reason||"running")+'</span> '+
+      '<span class="lx">'+esc(String(x.tasks_delivered||0))+' delivered · '+esc(String(x.total_attempts||0))+' attempt(s)</span>'+
+      (x.failure?'<div class="lx">'+esc(x.failure.code+": "+String(x.failure.message).slice(0,200))+'</div>':'')+'</div>').join("");
+    if(hist)out+='<details class="box"><summary>recent scheduler runs</summary><div class="boxin">'+hist+'</div></details>';
+    const c=s.completion;
+    if(c)out+='<div class="scope"><b>COMPLETION //</b> '+(c.complete?'<b>COMPLETE</b>':'not complete')+'</div>'+
+      '<details class="box"><summary>completion criteria</summary><div class="boxin">'+
+      (c.reasons||[]).map(r=>'<div class="ph">'+(r.passed?"&#10003;":"&#10007;")+' <span class="ph-n">'+esc(r.item)+'</span><div class="lx">'+esc(r.evidence)+'</div></div>').join("")+
+      '</div></details>';
+  }
+  // --- attention required
+  if(h&&!h.error&&(h.pending||[]).length){
+    out+='<div class="q"><b>&#9888; NEEDS A DECISION — the queue is stopped</b><br>'+
+      h.pending.map(x=>'<div class="ph"><span class="ph-n">'+esc(x.id)+' ['+esc(x.gate_type)+']'+(x.task_id?' task #'+x.task_id:'')+'</span>'+
+        '<div>'+esc(x.question)+'</div>'+
+        '<div class="lx">decide: <code>node scripts/state.mjs human-gate-decide --project '+esc(pj)+' --gate '+esc(x.id)+' --decision APPROVED --approver &lt;you&gt;</code></div></div>').join("")+
+      '</div>';
+  }
+  return out;
+}
+
 // ---- live stream (SSE) + graceful fallback ----
 let LAST=null, curProject=null, es=null;
 function connect(){
   const pj=qp("project"); curProject=pj;
-  if(pj){projSkeleton(pj);loadCaps(pj);} else homeSkeleton();
+  if(pj){projSkeleton(pj);loadCaps(pj);loadQueue(pj);setInterval(()=>loadQueue(pj),15000);} else homeSkeleton();
   const url="/events"+(pj?"?project="+encodeURIComponent(pj):"");
   es=new EventSource(url);
   // never swallow silently: an empty catch here hid a render crash that blanked

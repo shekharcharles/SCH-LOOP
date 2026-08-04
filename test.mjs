@@ -912,12 +912,21 @@ test("skills: /SCH routing metadata is complete and case-insensitive", () => {
   assert.equal(fx.J("sch-commands", "PLAN").name, "plan");
   assert.equal(fx.J("sch-commands", "Brainstorm").name, "brainstorm");
   assert.ok(fx.J("sch-commands", "nonsense").error);
-  // The supervised single-task runner exists and is routable; what must NOT be
-  // advertised as working is everything past it — retry, queue continuation, and
-  // any target-project commit or push.
+  // The supervised runner, the Git controller and the sequential queue are all
+  // routable; what must NOT be advertised as working is everything past them —
+  // parallel worktrees, fan-out/fan-in and unattended operation.
   assert.ok(names.includes("run-task"), "the supervised external runner must be routable");
   assert.ok(names.includes("deliver"), "the Git transaction controller must be routable");
-  assert.match(all.find((c) => c.name === "run").note, /sequential queue continuation and automatic retry are not implemented/);
+  for (const n of ["queue", "graph-validate", "scheduler", "phases", "decide", "transition"])
+    assert.ok(names.includes(n), "/SCH " + n + " must be routable");
+  // `/SCH run` is the LEGACY in-session path, and the table must say so — an
+  // operator choosing between two autonomous engines needs the boundary named.
+  const runCmd = all.find((c) => c.name === "run");
+  assert.equal(runCmd.status, "legacy", "the in-session loop is the legacy path now that the queue executes itself");
+  assert.match(runCmd.note, /cannot set controller-only states/);
+  assert.match(runCmd.note, /while a scheduler holds the project/);
+  assert.match(all.find((c) => c.name === "queue").summary, /one ready task at a time/);
+  assert.match(all.find((c) => c.name === "decide").note, /local-operator authority/);
   assert.match(all.find((c) => c.name === "run-task").note, /VERIFIED is not committed, pushed or done/);
   assert.match(all.find((c) => c.name === "deliver").note, /only after the commit is verified on the remote/);
   fx.done();

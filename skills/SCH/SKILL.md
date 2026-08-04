@@ -62,6 +62,12 @@ know where their project stands, not to read a manual.
 | `approve` | `state.mjs skill-trust <id> --state APPROVED` / `profile-set` |
 | `dashboard` | http://localhost:4600 (start: `node scripts/dashboard.mjs`) |
 | `doctor` | `node scripts/doctor.mjs` (`--fix` to install what is missing) |
+| `queue` | `node scripts/sch-run-queue.mjs --project <id>` (the sequential scheduler) |
+| `graph-validate` | `state.mjs graph-validate --project <id>` / `graph-show` |
+| `scheduler` | `state.mjs scheduler-status / scheduler-list / scheduler-cancel` |
+| `phases` | `state.mjs phase-list --task <n>` / `gate-report --task <n>` |
+| `decide` | `state.mjs human-gate-list` / `human-gate-decide --gate <id> --decision APPROVED --approver <you>` |
+| `transition` | `state.mjs task-transition --task <n> --event <event>` |
 
 Invoke the target skill with the Skill tool — do not re-explain what it does and
 do not summarise its instructions. Routing is the entire contribution here.
@@ -103,16 +109,49 @@ any incoming or unrelated outgoing commit, pushes without force, then fetches
 again and asks the remote before the task becomes `delivered`. It never merges,
 rebases, amends, resets or force-pushes. One run, one commit, then stop.
 
-Still **not implemented**: sequential queue continuation, automatic retry or
-repair, an independent semantic reviewer, the authenticated dashboard, the SCH
-MCP, and the structured learning database. If asked for any of those, say plainly
-that they are planned and name the next milestone:
+## The sequential queue, and the boundary with `/SCH run`
 
-> Implement the sequential queue-driven task graph with closed transitions,
-> bounded retries, human gates, and execution through fresh supervised worker
-> processes.
+The queue now executes itself, **one task at a time**:
 
-Never imply autonomous multi-task execution already works, and never simulate it.
+```bash
+node scripts/state.mjs graph-validate --project <id>      # structure + false-edge audit
+node scripts/sch-run-queue.mjs --project <id>             # run it, then stop
+node scripts/state.mjs scheduler-status --project <id>
+node scripts/state.mjs human-gate-list  --project <id>    # what it is waiting on
+node scripts/state.mjs human-gate-decide --project <id> --gate <HG-id> \
+     --decision APPROVED --approver <you>
+```
+
+Each task runs its 16-phase workflow: deterministic `CODE` phases, one `AGENT`
+phase in a **fresh external worker**, named `GATE` phases that decide whether the
+graph may move, and a `HUMAN` phase for delivery approval. A phase starts
+unaccepted; a zero exit code only means the process returned. Retries are
+bounded and classified, delivery goes through the controller above, and a task
+becomes `DELIVERED` only after the remote has been asked independently. The
+scheduler stops at a typed condition and never spins.
+
+**`/SCH run` is now the LEGACY in-session path.** It still works, and it is
+constrained in code: it cannot set controller-only states, cannot name a
+canonical graph state, and while a scheduler holds the project's lease it cannot
+change task status at all — `task-set` refuses and names the scheduler. Use
+`/SCH run` for supervised in-session work; use `/SCH queue` when the queue should
+execute itself. Never run both against one project at the same time.
+
+Still **not implemented**: parallel execution in Git worktrees, fan-out/fan-in
+and integration joins, path-ownership leases, OS-level worker sandboxing, the
+authenticated dashboard, the SCH MCP, distributed workers. If asked for any of
+those, say plainly that they are planned and name the next milestone:
+
+> Implement isolated parallel task execution using Git worktrees, path ownership
+> leases, fan-out/fan-in, deterministic integration nodes, and conflict-safe joins.
+
+**Workers are not OS-sandboxed.** The environment is allowlisted, `SCH_HOME` is
+withheld, the process is timed out and tree-killed, `.sch-loop/` is
+default-denied and every effect is inspected afterwards — but a write outside the
+repository, a network call or a detached background process is not visible to
+that inspection, and the operator's git credentials remain reachable to any
+process running as them. Fully unattended operation is therefore not supported.
+Never claim otherwise, never imply parallel execution works, and never simulate it.
 
 ## Skills are recommended, never assumed
 

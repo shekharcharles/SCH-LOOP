@@ -48,8 +48,35 @@ secret gate on staged content, makes one commit, blocks on any incoming or
 unrelated outgoing commit, pushes without force, then **fetches again and asks
 the remote** before marking the task `delivered` (a terminal status distinct from
 `merged`, unreachable from `task-set`). Approve with
-`state.mjs delivery-approve --run <RUN-id> --approver <you>`. Sequential queue
-continuation and automatic retry are the NEXT milestone and do not exist.
+`state.mjs delivery-approve --run <RUN-id> --approver <you>`.
+
+**The sequential queue (one task at a time, then stop):**
+`sch-run-queue.mjs --project <id>` executes the task graph itself. Code owns the
+graph, agents own bounded semantic phases, typed envelopes cross phase
+boundaries and named gates define acceptance — the model never selects a task,
+never decides whether a phase passed, never counts its own retries and never
+authorizes a delivery. Each task runs 16 phases (`CODE`/`AGENT`/`GATE`/`HUMAN`),
+starts unaccepted, and only reaches `ACCEPTED` when every required gate has run
+AND passed; a zero exit code only means the process returned. Every task gets a
+fresh worker, its own verification, and delivery through the controller above —
+`DELIVERED` only after the remote was asked independently. Retries are bounded
+and classified (a path violation or a detected secret is never retried); a repair
+gets the failure evidence only, inside a character budget. `graph-validate`
+refuses cycles/self/duplicate/missing edges and **audits** edges nobody can
+defend without deleting them; overlapping paths, shared control files and schema
+ownership are hidden dependencies that block readiness. Typed human gates
+(`human-gate-list` / `human-gate-decide`) stop the queue and resume it, bound to
+the exact proposal and diff. Read-only dashboard APIs: `/api/task-graph`,
+`/api/scheduler`, `/api/phases`, `/api/gates`, `/api/human-gates`,
+`/api/completion`, `/api/operations`.
+
+**`/sch-run` is the LEGACY in-session path.** Never run it and the queue against
+one project at once: while a scheduler holds the lease, `task-set --status` is
+refused in code and names the scheduler. **Workers are still not OS-sandboxed**,
+post-run inspection cannot see writes outside the repository or network calls,
+and git credentials remain reachable — so fully unattended operation is not
+supported. Parallel worktrees, fan-out/fan-in and worker containment are the NEXT
+milestone and do not exist.
 
 **Interval:** ask the engine, don't guess —
 `state.mjs interval-advice --project <id>` (also shown on the dashboard). A pass
