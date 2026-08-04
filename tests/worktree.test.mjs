@@ -51,6 +51,25 @@ test("ensureWorktree is idempotent and preserves uncommitted work", () => {
   } finally { fx.done(); }
 });
 
+test("ensureWorktree refuses a worktree root that resolves inside the managed repository", () => {
+  const fx = fixture("wt-contains");
+  try {
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const r = WT.ensureWorktree({ projectId: fx.P, taskId: 1, repoRoot: fx.repo, base, root: join(fx.repo, "wt") });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "WORKTREE_CREATE_FAILED");
+
+    if (process.platform === "win32") {
+      // Same containment, differing only in the case of repoRoot's drive/segments —
+      // pins the fix that reuses workspace.mjs's case-folded contains() instead of
+      // a case-sensitive comparison.
+      const caseFolded = WT.ensureWorktree({ projectId: fx.P, taskId: 1, repoRoot: fx.repo, base, root: join(fx.repo.toUpperCase(), "wt") });
+      assert.equal(caseFolded.ok, false, "a root that differs from repoRoot only in case must still be refused");
+      assert.equal(caseFolded.code, "WORKTREE_CREATE_FAILED");
+    }
+  } finally { fx.done(); }
+});
+
 test("ensureWorktree refuses a directory that is on the wrong branch", () => {
   const fx = fixture("wt-mismatch");
   const root = join(fx.home, "wt");
