@@ -271,6 +271,29 @@ test("learning: a candidate lesson keeps its provenance and becomes no policy", 
   fx.done();
 });
 
+test("verification: the verification command receives the credential strip", async () => {
+  const fx = fixture("verify-env"); initWorkspace(fx);
+  // Create a verification script that checks for the credential strip
+  const verifyScript = join(fx.repo, "verify-strip.js");
+  writeFileSync(verifyScript, `
+process.exit(
+  process.env.GIT_CONFIG_COUNT === '1' &&
+  process.env.GIT_CONFIG_KEY_0 === 'credential.helper' &&
+  process.env.GIT_CONFIG_VALUE_0 === '' ? 0 : 1
+);
+`);
+  // Commit the script so the working tree is clean for the run
+  git(fx.repo, "add", "verify-strip.js");
+  git(fx.repo, "commit", "-q", "-m", "test verification script");
+  const verifyCmd = process.execPath.replace(/\\/g, "/") + " verify-strip.js";
+  const t = addTask(fx, { verify: verifyCmd });
+  const rec = await run(fx, t, fakeExecutor(fx, { write: [{ path: "src/v.js", content: "v\n" }] }));
+
+  // The verification passes if outcome is VERIFIED (verification commands succeeded)
+  assert.equal(rec.outcome, "VERIFIED", `verification should check and pass, but got: ${rec.failure?.message}`);
+  fx.done();
+});
+
 test("run ids are sortable and collision-resistant", () => {
   const ids = Array.from({ length: 200 }, () => RUN.newRunId());
   assert.equal(new Set(ids).size, 200);
