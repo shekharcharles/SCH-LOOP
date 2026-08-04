@@ -56,3 +56,6 @@ Thumbs.db
 # full-test-suite lease (runtime, machine-local)
 .locks/
 external-skills/
+
+# Agent worktrees — scratch checkouts, never part of the repository.
+.claude/worktrees/
