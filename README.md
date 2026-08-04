@@ -166,6 +166,34 @@ scripts/sch-run-queue.mjs CLI for the queue: --project <id> [--max-tasks --max-d
 scripts/projection.mjs    The SQLite operational PROJECTION (node:sqlite, no dependency) for
                           the dashboard: migrations, WAL, idempotent event projection,
                           bounded text, rebuildable. Never the authority.
+scripts/workflows.mjs     The versioned workflow-template registry: 9 templates over a CLOSED
+                          handler registry. Project data names a handler id, never a module;
+                          unknown handler/role/gate/envelope fails closed; a template can
+                          never grant a tool or widen a write scope.
+scripts/roles.mjs         The versioned agent-role roster (scout, planner, builder, repairer,
+                          reviewer, documenter) and the logical model profiles. Role, executor,
+                          provider, model, tools and write scope are six separate things, and a
+                          selected skill can widen none of them.
+scripts/usage.mjs         Usage, cost and latency — where UNKNOWN IS NOT ZERO. Versioned, dated
+                          pricing tables that ship no unverified rates; characters recorded
+                          separately from tokens and labelled as characters.
+scripts/evidence.mjs      Selective evidence compaction: a passing check contributes ZERO log
+                          characters to any prompt, a failing one contributes bounded excerpts
+                          kept from the END of the log. Every omission is recorded.
+scripts/procedures.mjs    The lazy-loaded, hashed operational procedure registry. A phase gets
+                          the procedure for what it is doing, never the manual — and a
+                          procedure can never grant authority.
+scripts/skillsources.mjs  Governed EXTERNAL skill sources: full-commit pinning, operator-only
+                          sync, file/script/hook inventory, explainable risk classification,
+                          static quality gate, conflict detection against SCH's own machinery,
+                          and hash-bound, ROLE-SCOPED approval whose default is nothing.
+scripts/subprocess.mjs    The ONE bounded subprocess implementation: argv only (no shell),
+                          explicit environment, bounded output, timeout, cancellation, and
+                          process-TREE termination. Timeout is the MINIMUM of every bound.
+scripts/suitelock.mjs     The full-test-suite lease — one complete suite at a time, with a
+                          visible holder and safe stale recovery.
+scripts/sch-test.mjs      Runs the suite under that lease with a heartbeat and an explicit
+                          outer timeout: `--focused`, `--status`, `--release`.
 scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project control,
                           answer box, skill picker, filter; fluid, no flicker. Port 4600.
 scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
@@ -670,6 +698,128 @@ Stated plainly, because a false claim here is worse than a missing feature:
   where you can see it, keep delivery approval on, and treat every task's path
   policy as the real boundary. **OS-level worker containment is the critical
   next milestone.**
+
+## 🏭 Reusable workflows, roles, observability and governed external skills
+
+```bash
+node scripts/state.mjs workflow-template-list                    # the 9 templates
+node scripts/state.mjs task-set <n> --project <id> --workflow PLAN_BUILD_TEST
+node scripts/state.mjs role-resolve --project <id> --role builder --task <n>
+node scripts/state.mjs workflow-trace --project <id> --task <n>  # every phase + actor lane
+node scripts/state.mjs usage-show --project <id>                 # UNKNOWN stays UNKNOWN
+node scripts/sch-test.mjs                                        # one full suite, under a lease
+```
+
+**Workflow templates.** The scheduler used to run one workflow, hardcoded twice —
+a 16-entry array *and* sixteen hand-written call sites, so editing the array
+changed nothing. There are now nine versioned templates: `SCOUT`, `PLAN_ONLY`,
+`BUILD_ONLY`, `PLAN_BUILD`, `PLAN_BUILD_TEST`, `BUILD_REVIEW`, `FULL_SDLC`,
+`SECURITY_REVIEW`, `DOCUMENTATION_ONLY`. Selection precedence is **task override
+→ task-type project policy → project default → system default**, and the choice
+is recorded on the task with the exact template id, version and hash.
+
+A template is **data validated against closed registries**. It names a handler
+id, never a module path; an unknown handler, role, gate or envelope fails closed.
+A template **cannot** grant a tool, widen a write scope or weaken a task's path
+policy — attempting it is a validation failure, not a silently dropped field.
+Changing a template invalidates template-bound approvals on unfinished tasks.
+
+> **The default is `FULL_SDLC`, not the "safer" non-delivering template.** A
+> non-delivering default would silently stop delivering for every project that
+> already exists. That is a regression wearing safety's clothes. Delivery inside
+> `FULL_SDLC` is still gated by an approval a person gives.
+
+**Roles, models and authority are six separate things.** `scout`, `planner`,
+`builder`, `repairer`, `reviewer`, `documenter` — each a stable id with a
+version, a *logical* model profile (`economical`, `workhorse`, `high-reasoning`,
+`frontier-review`, `local-private`), a prompt template, a context policy, tools
+and a write scope. Read-only roles are enforced in code, not documented. A
+worker role's write scope is the **task's**, intersected — never the union. An
+unavailable executor or model profile **fails preflight**; fallback to a cheaper
+profile requires `modelPolicy.allow_fallback`, and fallback to another
+*provider* requires a second, separate approval. `local-private` is declared and
+deliberately unavailable, so asking for it fails rather than quietly using a
+cloud model.
+
+**A selected skill can never expand tools or write scope.** It is content, not
+authority. `roles.mjs` enforces that by intersection and records what it refused.
+
+**Prompt observability.** Every AGENT phase persists `system-prompt.txt`,
+`user-prompt.txt`, `prompt-manifest.json`, `context-manifest.json`,
+`agent-config.json` and `usage.json`. The manifest carries template/role/skill/
+procedure ids **and hashes**, included, omitted and compacted sections, character
+counts, and separate hashes for the system and user prompts. The context
+manifest carries a hash per input — metadata, never a second copy of the prompt.
+Credential-shaped values are redacted before anything is written. **Raw prompts
+are local-only:** no dashboard API exposes one, and `/api/workflow-trace` says
+`raw_prompts_available: false` in its own payload.
+
+**Usage, cost and latency — where UNKNOWN is not zero.** The Claude CLI reports
+no token counts to SCH, so `usage_status` is honestly `UNKNOWN` and every token
+and cost field is `null` with a reason attached. Character counts are recorded
+*beside* them and labelled as characters; nothing divides them by four and calls
+the result tokens. Pricing tables are versioned and dated and **ship no rates**
+this engine cannot verify — an estimate exists only where an operator configured
+one, and every cost record carries the table version that produced it.
+Aggregation sums what is known and **counts** what is not; a budget gate never
+passes on an UNKNOWN.
+
+**Selective evidence compaction.** A passing check contributes **zero** log
+characters to any prompt — one line, an artifact reference and a hash. A failing
+check contributes bounded excerpts kept from the **end** of the log, where the
+failure is, plus a classification (`TEST_FAILURE`, `LINT_FAILURE`, `TIMEOUT`,
+`UNCLASSIFIED`, …) and a sanitized argument vector. Limits are
+`0 / 4000 / 8000 / 10 checks / 1 previous attempt`, and every omission is
+recorded.
+
+**One bounded subprocess implementation.** Workers and verification commands now
+share `subprocess.mjs`: argv only (never a shell string), explicit environment,
+bounded output, timeout, cancellation, **process-tree** termination
+(`taskkill /T /F` on Windows, a process-group signal on POSIX) with cleanup
+evidence, and a bounded post-kill wait so it can never sit on a pipe forever.
+The effective timeout is the **minimum** of command, phase, task, scheduler and
+operator bounds — a large default can no longer override a smaller ceiling.
+
+**Governed external skill sources.** An external skill is somebody else's
+instructions running in your agent, with your credentials, on your code. So:
+sources are pinned to a **full 40-character commit** (a branch is a promise the
+other end can rewrite after you read it); synchronisation is an **operator**
+action a worker can never trigger; credential-bearing URLs, symlinks, path
+escapes and uninspected submodules are refused; discovery grants **no** trust; a
+static quality **PASS is not an approval**; approval binds to
+`(source commit, content hash)` and lapses when either moves; approval is
+**role-scoped with a default of nothing**; and push, deploy, scheduling and
+worktree skills are **never** eligible for a worker role. Every skill is
+inventoried (scripts, hooks, executables, network and environment references,
+git and global-config capabilities) and given an **explainable** risk level with
+its reasons, plus conflict detection against SCH's own scheduler and delivery
+controller.
+
+> The regex command guards here are **defence in depth, not a sandbox.** They
+> make the obvious dangerous thing visible to a reviewer. A determined author
+> evades them, and the answer to that is the reviewer.
+
+**Test-suite discipline.** One complete suite at a time, per repository, under a
+lease with a visible holder and safe stale recovery. A focused run is refused
+while a full suite is live. `sch-test.mjs` prints a heartbeat every 30s and
+enforces an explicit outer timeout — because a buffered, silent suite and a hung
+one look identical, and that confusion once produced a wrong diagnosis and an
+unnecessary rewrite.
+
+### What is NOT wired yet, stated plainly
+
+- Templates can currently **subtract** phases from the delivering pipeline but
+  cannot **add** an agent phase that has no scheduler implementation. `SCOUT`,
+  `PLAN_ONLY`, `PLAN_BUILD` and `DOCUMENTATION_ONLY` declare `scout`, `plan` and
+  `document` phases; the scheduler has no handler bodies for them yet, so those
+  phases are recorded as absent rather than executed. `FULL_SDLC`,
+  `PLAN_BUILD_TEST`, `BUILD_ONLY` and `BUILD_REVIEW` run end to end.
+- Role resolution is implemented, validated and CLI-inspectable, but the
+  scheduler still runs its AGENT phase through the single existing Claude CLI
+  executor; per-phase model routing is configuration that no second executor
+  consumes yet.
+- Usage is `UNKNOWN` for every real run, because nothing reports it. That is the
+  honest state, not a placeholder to be filled with zeros.
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.

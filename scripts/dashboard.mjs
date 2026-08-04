@@ -22,6 +22,11 @@ import { schedulerProjection, taskPhases, evaluateCompletion, TASK_WORKFLOW } fr
 import { projection as humanGateProjection } from "./humangates.mjs";
 import { dashboardProjection as operationalProjection } from "./projection.mjs";
 import { listPhases } from "./phases.mjs";
+import { templateProjection as taskTemplateProjection } from "./workflows.mjs";
+import { rosterProjection as roleRosterProjection } from "./roles.mjs";
+import { projection as procedureProjection } from "./procedures.mjs";
+import { projection as externalSkillProjection } from "./skillsources.mjs";
+import { aggregate as aggregateUsage, splitByOutcome as splitUsageByOutcome } from "./usage.mjs";
 
 // must resolve the same way state.mjs does, or the dashboard would watch a
 // different directory than the one being written to
@@ -316,6 +321,100 @@ const server = createServer(async (req, res) => {
     try { return json(res, operationalProjection(project, { limit: Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || 20))) })); }
     catch (e) { return json(res, { error: e.message }); }
   }
+  // ------------------------------------------- the software-factory runtime
+  //
+  // ALL READ-ONLY, and one rule governs every payload below: raw prompts never
+  // leave the machine. Hashes, sizes and section names travel; the system and
+  // user prompt bodies stay on local disk. An unauthenticated page that could
+  // print a prompt is an unauthenticated page that prints whatever the
+  // repository put in one.
+  if (url.pathname === "/api/workflow-templates") {
+    try { return json(res, taskTemplateProjection()); } catch (e) { return json(res, { error: e.message }); }
+  }
+  if (url.pathname === "/api/roles") {
+    try { return json(res, roleRosterProjection()); } catch (e) { return json(res, { error: e.message }); }
+  }
+  if (url.pathname === "/api/procedures") {
+    try { return json(res, procedureProjection()); } catch (e) { return json(res, { error: e.message }); }
+  }
+  // One task's whole workflow, actor lane by actor lane.
+  if (url.pathname === "/api/workflow-trace") {
+    const project = url.searchParams.get("project");
+    const task = Number(url.searchParams.get("task"));
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    if (!Number.isInteger(task)) return json(res, { error: "need ?task=<n>" });
+    try {
+      const t = (loadState(project).tasks ?? []).find((x) => x.id === task);
+      const attempts = taskPhases(project, task).attempts.map((a) => ({
+        attempt: a.attempt, scheduler_id: a.scheduler_id, run_id: a.run_id, completed: a.recovery.completed,
+        phases: listPhases(a.dir).map((p) => ({
+          phase_id: p.phase_id, kind: p.kind, role: p.role ?? null,
+          actor_lane: p.kind === "AGENT" ? "AGENT" : p.kind === "HUMAN" ? "ENGINEER" : p.kind === "GATE" ? "GATE" : "CODE",
+          state: p.state, outcome: p.outcome, duration_ms: p.duration_ms,
+          envelope_type: p.envelope_type, envelope_hash: p.envelope_hash,
+          gates: (p.gate_reports ?? []).map((g) => ({ gate_id: g.gate_id, outcome: g.outcome, kind: g.kind })),
+          // sizes and hashes only — never the prompt itself
+          prompt_characters: p.accounting?.prompt_characters ?? null,
+          output_bytes: p.accounting?.output_bytes ?? null,
+        })),
+      }));
+      return json(res, { project, task_id: task, workflow_id: t?.workflow_id ?? null,
+        workflow: t?.workflow_binding ?? null, attempts, raw_prompts_available: false,
+        note: "prompt bodies are local-only; this API exposes hashes and sizes" });
+    } catch (e) { return json(res, { error: e.message }); }
+  }
+  // Usage and cost, with UNKNOWN shown as UNKNOWN.
+  if (url.pathname === "/api/usage") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try {
+      const rows = [];
+      for (const t of loadState(project).tasks ?? [])
+        for (const a of taskPhases(project, t.id).attempts) {
+          let meta = null;
+          try { meta = JSON.parse(readFileSync(join(a.dir, "attempt.json"), "utf8")); } catch { continue; }
+          if (!meta?.run_dir) continue;
+          try {
+            const u = JSON.parse(readFileSync(join(meta.run_dir, "usage.json"), "utf8"));
+            rows.push({ ...u, task_id: t.id, attempt: a.attempt, phase_outcome: a.recovery.completed ? "ACCEPTED" : "FAILED" });
+          } catch {}
+        }
+      return json(res, { project, phases: rows.length, total: aggregateUsage(rows),
+        by_task: aggregateUsage(rows, { by: "task_id" }), by_outcome: splitUsageByOutcome(rows),
+        note: "UNKNOWN is counted, never summed as zero — a total with unknown phases is incomplete and says so" });
+    } catch (e) { return json(res, { error: e.message }); }
+  }
+  // External skill governance. Listing only: approving, syncing and trusting are
+  // operator authority and stay on the CLI while this dashboard has no auth.
+  if (url.pathname === "/api/external-skills") {
+    try { return json(res, externalSkillProjection()); } catch (e) { return json(res, { error: e.message }); }
+  }
+  // Everything an operator has to look at, in one place.
+  if (url.pathname === "/api/attention") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try {
+      const items = [];
+      const ext = externalSkillProjection();
+      for (const s of ext.skills) {
+        if (s.trust === "UNREVIEWED" && s.risk_level !== "LOW") items.push({ kind: "SKILL_APPROVAL", detail: `${s.skill_id} is ${s.risk_level} risk and unreviewed`, source: s.source_id });
+        if (s.changed_since_review) items.push({ kind: "SKILL_CHANGED", detail: `${s.skill_id} changed since it was reviewed; its approval lapsed`, source: s.source_id });
+        if (s.conflicts) items.push({ kind: "SKILL_CONFLICT", detail: `${s.skill_id} has ${s.conflicts} conflict(s) with SCH machinery`, source: s.source_id });
+      }
+      for (const s of ext.sources) if (s.out_of_date) items.push({ kind: "SOURCE_OUT_OF_DATE", detail: `${s.id} is pinned to ${String(s.pinned_commit).slice(0, 8)} but synced at ${String(s.synced_commit).slice(0, 8)}` });
+      const tv = taskTemplateProjection();
+      for (const t of loadState(project).tasks ?? []) {
+        const b = t.workflow_binding;
+        if (b && !tv.templates.some((x) => x.template_id === b.template_id && x.version === b.template_version))
+          items.push({ kind: "MALFORMED_TEMPLATE", detail: `task #${t.id} ran ${b.template_id}@${b.template_version}, which no longer exists`, task_id: t.id });
+        if (b?.invalidated_approvals) items.push({ kind: "WORKFLOW_APPROVAL_INVALIDATED", detail: `task #${t.id}: its workflow template changed, invalidating template-bound approvals`, task_id: t.id });
+      }
+      for (const p of roleRosterProjection().model_profiles) if (!p.available)
+        items.push({ kind: "MODEL_UNAVAILABLE", detail: `${p.id}: ${p.unavailable_reason}` });
+      return json(res, { project, items, count: items.length, generated_at: new Date().toISOString() });
+    } catch (e) { return json(res, { error: e.message }); }
+  }
+
   // The workflow definition itself, so a UI never hardcodes the phase list.
   if (url.pathname === "/api/workflow")
     return json(res, { schema_version: 1, workflow: TASK_WORKFLOW.map((p) => ({ id: p.id, kind: p.kind, role: p.role ?? null, output_schema: p.output_schema, gates: p.gates })) });

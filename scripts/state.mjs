@@ -1286,6 +1286,24 @@ const commands = {
         try { t[field] = flags[flag] === "" ? null : JSON.parse(flags[flag]); }
         catch (e) { die(`--${flag} must be JSON: ${e.message}`); }
       }
+    // WHICH WORKFLOW this task runs. `--workflow PLAN_BUILD_TEST` or
+    // `--workflow PLAN_BUILD_TEST@1` to pin the version. Validated against the
+    // closed registry now, so a typo is caught at planning time rather than by
+    // the scheduler halfway through a queue.
+    if (flags.workflow !== undefined) {
+      const WFx = await import("./workflows.mjs");
+      if (!flags.workflow) t.workflow = null;
+      else {
+        const [tpl, ver] = String(flags.workflow).split("@");
+        const def = WFx.TEMPLATES[tpl];
+        if (!def) die(`"${tpl}" is not a workflow template — one of: ${WFx.TEMPLATE_IDS.join(", ")}`);
+        if (ver !== undefined && Number(ver) !== def.version)
+          die(`template "${tpl}" is at version ${def.version}; version ${ver} does not exist`);
+        const check = WFx.validateTemplate(def, { taskType: t.category || null, task: t });
+        if (!check.ok) die(`template "${tpl}" cannot run task #${t.id}: ${check.problems[0].message}`);
+        t.workflow = { template: tpl, version: def.version };
+      }
+    }
     for (const [flag, field] of [["executor-role", "executorRole"], ["verifier-role", "verifierRole"]])
       if (flags[flag] !== undefined) {
         const PHx = await import("./phases.mjs");
@@ -1907,6 +1925,234 @@ const commands = {
     out(PJ.dashboardProjection(id, { limit: Number(flags.limit ?? 20) }));
   },
 
+  // ---- workflow templates ----------------------------------------------------
+  // Read-only. A template is data validated against closed registries; it is
+  // never edited from the CLI, because a template that project data can rewrite
+  // is project data choosing what code runs.
+  async "workflow-template-list"() {
+    const WFx = await import("./workflows.mjs");
+    out(WFx.templateProjection());
+  },
+  async "workflow-template-show"({ flags, pos }) {
+    const WFx = await import("./workflows.mjs");
+    const id = flags.template ?? pos[0] ?? die(`need --template <${WFx.TEMPLATE_IDS.join("|")}>`);
+    const t = WFx.TEMPLATES[id];
+    if (!t) die(`no workflow template "${id}" — one of: ${WFx.TEMPLATE_IDS.join(", ")}`);
+    out({ ...t, hash: WFx.templateHash(id), validation: WFx.validateTemplate(t) });
+  },
+  async "workflow-template-validate"({ flags }) {
+    const WFx = await import("./workflows.mjs");
+    if (flags.template) {
+      const t = WFx.TEMPLATES[flags.template] ?? die(`no template "${flags.template}"`);
+      const r = WFx.validateTemplate(t, { taskType: flags["task-type"] ?? null });
+      out(r); if (!r.ok) process.exitCode = 1; return;
+    }
+    const all = WFx.validateAll();
+    out(all); if (!all.ok) process.exitCode = 1;
+  },
+
+  // ---- agent roles and model profiles -----------------------------------------
+  async "role-list"() { out((await import("./roles.mjs")).rosterProjection()); },
+  async "role-show"({ flags, pos }) {
+    const R = await import("./roles.mjs");
+    const id = flags.role ?? pos[0] ?? die(`need --role <${R.ROLE_IDS.join("|")}>`);
+    const r = R.ROLES[id] ?? die(`no agent role "${id}"`);
+    out({ ...r, hash: R.roleHash(id), model_profile_resolved: R.MODEL_PROFILES[r.model_profile] });
+  },
+  async "role-validate"() {
+    const r = (await import("./roles.mjs")).validateRoster();
+    out(r); if (!r.ok) process.exitCode = 1;
+  },
+  // What this role would ACTUALLY run as, for this task, right now — including
+  // the refusals. The answer to "why did the reviewer not get shell".
+  async "role-resolve"({ flags, pos }) {
+    const R = await import("./roles.mjs");
+    const id = pid(flags); const project = getProject(id);
+    const roleId = flags.role ?? pos[0] ?? die(`need --role <${R.ROLE_IDS.join("|")}>`);
+    const task = flags.task ? loadState(id).tasks.find((t) => t.id === Number(flags.task)) : null;
+    const r = R.resolve(roleId, { task, project });
+    if (!r.ok) { out({ ok: false, ...r.failure }); process.exitCode = 1; return; }
+    out(r.config);
+  },
+
+  // ---- workflow execution -------------------------------------------------------
+  async "workflow-status"({ flags }) {
+    const id = pid(flags);
+    const [WFx, TRx] = [await import("./workflows.mjs"), await import("./transitions.mjs")];
+    const s = loadState(id);
+    out({
+      project: id,
+      default_workflow: getProject(id)?.workflowPolicy?.default ?? WFx.SAFE_DEFAULT.template + " (system default)",
+      task_type_policy: getProject(id)?.workflowPolicy?.task_types ?? {},
+      tasks: (s.tasks ?? []).map((t) => ({
+        task_id: t.id, title: t.title, state: TRx.canonicalState(t),
+        workflow_id: t.workflow_id ?? null,
+        template: t.workflow_binding?.template_id ?? null,
+        template_version: t.workflow_binding?.template_version ?? null,
+        selected_by: t.workflow_binding?.selected_by ?? null,
+        override: t.workflow ?? null,
+      })),
+    });
+  },
+  // The full trace of one task: every attempt, every phase, its actor lane, its
+  // gates and its usage. Hashes only for prompts — never the bodies.
+  async "workflow-trace"({ flags, pos }) {
+    const id = pid(flags);
+    const [S, PHx] = [await import("./scheduler.mjs"), await import("./phases.mjs")];
+    const taskId = Number(flags.task ?? pos[0] ?? die("need --task <n>"));
+    const t = loadState(id).tasks.find((x) => x.id === taskId);
+    const attempts = S.taskPhases(id, taskId).attempts.map((a) => ({
+      attempt: a.attempt, scheduler_id: a.scheduler_id, run_id: a.run_id,
+      resume_at: a.recovery.resume_at, completed: a.recovery.completed,
+      phases: PHx.listPhases(a.dir).map((p) => ({
+        phase_id: p.phase_id, kind: p.kind, role: p.role ?? null,
+        actor_lane: p.kind === "AGENT" ? "AGENT" : p.kind === "HUMAN" ? "ENGINEER" : p.kind === "GATE" ? "GATE" : "CODE",
+        state: p.state, outcome: p.outcome, duration_ms: p.duration_ms,
+        envelope_type: p.envelope_type, envelope_hash: p.envelope_hash,
+        gates: (p.gate_reports ?? []).map((g) => ({ gate_id: g.gate_id, outcome: g.outcome, kind: g.kind })),
+        accounting: p.accounting,
+      })),
+    }));
+    out({ project: id, task_id: taskId, workflow_id: t?.workflow_id ?? null, workflow: t?.workflow_binding ?? null, attempts });
+  },
+  // Usage and cost, aggregated honestly: unknown is counted, never summed as zero.
+  async "usage-show"({ flags }) {
+    const id = pid(flags);
+    const [S, U, PJ] = [await import("./scheduler.mjs"), await import("./usage.mjs"), await import("./projection.mjs")];
+    const rows = [];
+    for (const t of loadState(id).tasks ?? []) {
+      for (const a of S.taskPhases(id, t.id).attempts) {
+        const u = (() => { try { return JSON.parse(readFileSync(join(a.dir, "attempt.json"), "utf8")); } catch { return null; } })();
+        if (!u?.run_dir) continue;
+        try {
+          const rec = JSON.parse(readFileSync(join(u.run_dir, "usage.json"), "utf8"));
+          rows.push({ ...rec, task_id: t.id, attempt: a.attempt, role_id: null, phase_outcome: a.recovery.completed ? "ACCEPTED" : "FAILED" });
+        } catch {}
+      }
+    }
+    out({ project: id, phases: rows.length, total: U.aggregate(rows), by_outcome: U.splitByOutcome(rows),
+      by_task: U.aggregate(rows, { by: "task_id" }),
+      note: "UNKNOWN is counted, never summed as zero. A total with unknown_usage_phases > 0 is incomplete and says so." });
+  },
+
+  // ---- external skill sources -----------------------------------------------------
+  // Every one of these is an OPERATOR action. Nothing in the scheduler, the
+  // runner or a worker reaches this code.
+  async "skill-source-add"({ flags }) {
+    const SS = await import("./skillsources.mjs");
+    const r = SS.addSource({
+      id: flags.id ?? die("need --id <source-id>"),
+      repository: flags.repository ?? flags.repo ?? die("need --repository <url-or-path>"),
+      pinnedCommit: flags.commit ?? die("need --commit <full-40-char-commit>"),
+      license: flags.license ?? null, note: flags.note ?? "",
+    });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out({ ...r.source, next: `node scripts/state.mjs skill-source-sync --id ${r.source.id}` });
+  },
+  async "skill-source-list"() { out((await import("./skillsources.mjs")).projection()); },
+  async "skill-source-show"({ flags, pos }) {
+    const SS = await import("./skillsources.mjs");
+    const id = flags.id ?? pos[0] ?? die("need --id <source-id>");
+    const s = SS.getSource(id) ?? die(`no source "${id}"`);
+    out({ ...s, skills: SS.load().skills.filter((k) => k.source_id === id).map((k) => ({ skill_id: k.skill_id, trust: k.trust, risk: k.risk_level, quality: k.quality?.result })) });
+  },
+  async "skill-source-sync"({ flags, pos }) {
+    const SS = await import("./skillsources.mjs");
+    const id = flags.id ?? pos[0] ?? die("need --id <source-id>");
+    const r = SS.syncSource(id, { allowSubmodules: flags["allow-submodules"] === "true" });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    const d = SS.discoverSkills(id);
+    out({ synced: r.source.synced_commit, files: r.files, source_hash: r.source_hash, discovered: d.discovered,
+      note: "discovery grants NO trust — every skill is UNREVIEWED until a person reviews and approves it per role" });
+  },
+  async "skill-source-disable"({ flags, pos }) {
+    const SS = await import("./skillsources.mjs");
+    const id = flags.id ?? pos[0] ?? die("need --id <source-id>");
+    const r = SS.disableSource(id, flags.reason ?? "operator disabled");
+    if (!r.ok) die(r.failure.message);
+    out(r.source);
+  },
+  async "external-skill-list"() {
+    const p = (await import("./skillsources.mjs")).projection();
+    out({ skills: p.skills, counts: p.counts, mutations_require_local_operator: true });
+  },
+  async "external-skill-show"({ flags, pos }) {
+    const SS = await import("./skillsources.mjs");
+    const id = flags.skill ?? pos[0] ?? die("need --skill <skill-id>");
+    const k = SS.load().skills.find((x) => x.skill_id === id) ?? die(`no external skill "${id}"`);
+    out(k);
+  },
+  async "external-skill-review"({ flags }) {
+    const SS = await import("./skillsources.mjs");
+    const r = SS.reviewSkill(flags.source ?? die("need --source <id>"), flags.skill ?? die("need --skill <id>"),
+      { reviewer: flags.reviewer ?? die("need --reviewer <name>"), notes: flags.notes ?? "" });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out({ skill_id: r.skill.skill_id, reviewed_at: r.skill.reviewed_at, reviewed_by: r.skill.reviewed_by,
+      risk: r.skill.risk_level, quality: r.skill.quality.result,
+      note: "a review is not an approval — approve per role with external-skill-approve" });
+  },
+  async "external-skill-approve"({ flags }) {
+    const SS = await import("./skillsources.mjs");
+    const r = SS.approveSkill(flags.source ?? die("need --source <id>"), flags.skill ?? die("need --skill <id>"), {
+      approver: flags.approver ?? die("need --approver <name>"),
+      eligibleRoles: splitList(flags.roles ?? ""), forbiddenRoles: splitList(flags["forbid-roles"] ?? ""),
+      contentHash: flags["expect-hash"] ?? null, why: flags.why ?? "",
+    });
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out(r.approval);
+  },
+  async "external-skill-disable"({ flags }) {
+    const SS = await import("./skillsources.mjs");
+    const r = SS.disableSkill(flags.source ?? die("need --source <id>"), flags.skill ?? die("need --skill <id>"), flags.reason ?? "operator disabled");
+    if (!r.ok) die(r.failure.message);
+    out({ skill_id: r.skill.skill_id, trust: r.skill.trust });
+  },
+  async "external-skill-update-diff"({ flags }) {
+    const SS = await import("./skillsources.mjs");
+    const r = SS.updateDiff(flags.source ?? die("need --source <id>"), flags.commit ?? die("need --commit <full-commit>"));
+    if (!r.ok) die(`${r.failure.code}: ${r.failure.message}`);
+    out(r);
+  },
+  async "external-skill-conflicts"({ flags }) {
+    const SS = await import("./skillsources.mjs");
+    const [R, PR] = [await import("./roles.mjs"), await import("./procedures.mjs")];
+    const r = SS.detectConflicts(flags.source ?? null, {
+      installed: [], procedures: PR.projection().procedures.map((p) => ({ id: p.id, capabilities: p.capabilities })),
+      roles: R.rosterProjection().roles,
+    });
+    out(r);
+  },
+
+  // ---- process + suite discipline ----------------------------------------------
+  async "verification-process-status"({ flags, pos }) {
+    const id = pid(flags);
+    const S = await import("./scheduler.mjs");
+    const taskId = Number(flags.task ?? pos[0] ?? die("need --task <n>"));
+    const rows = [];
+    for (const a of S.taskPhases(id, taskId).attempts) {
+      const meta = (() => { try { return JSON.parse(readFileSync(join(a.dir, "attempt.json"), "utf8")); } catch { return null; } })();
+      for (const r of meta?.verification?.results ?? [])
+        rows.push({ attempt: a.attempt, check_id: r.id, result: r.result, exit_code: r.exit_code });
+      try {
+        const v = JSON.parse(readFileSync(join(meta.run_dir, "verification.json"), "utf8"));
+        for (const r of v.results ?? []) {
+          const row = rows.find((x) => x.attempt === a.attempt && x.check_id === r.id) ?? {};
+          Object.assign(row, { timeout_ms: r.timeout_ms, timeout_decided_by: r.timeout_decided_by,
+            duration_ms: r.duration_ms, cleanup: r.cleanup ?? null, timed_out: r.timed_out });
+        }
+      } catch {}
+    }
+    out({ project: id, task_id: taskId, checks: rows,
+      cleanup_failures: rows.filter((r) => r.cleanup && r.cleanup.ok === false),
+      note: "cleanup is present only when SCH had to kill a process tree; its absence means the process ended on its own" });
+  },
+  async "test-suite-status"() {
+    const L = await import("./suitelock.mjs");
+    const s = L.status();
+    out({ ...s, running_for_seconds: s.running_for_ms ? Math.round(s.running_for_ms / 1000) : null,
+      focused_allowed: L.focusedAllowed().ok });
+  },
+
   help() { out("commands: " + Object.keys(commands).join(", ")); },
 };
 
@@ -1931,7 +2177,9 @@ const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-f
   "coverage-add", "coverage-set", "session-set", "session-fail",
   "skill-discover", "skill-trust", "profile-set", "workspace-init", "run-cancel",
   "delivery-approve", "delivery-cancel", "handoff-promote",
-  "task-transition", "scheduler-cancel", "human-gate-decide", "human-gate-open"]);
+  "task-transition", "scheduler-cancel", "human-gate-decide", "human-gate-open",
+  "skill-source-add", "skill-source-sync", "skill-source-disable",
+  "external-skill-review", "external-skill-approve", "external-skill-disable"]);
 
 // Commands that mutate state must hold the write lock for the whole
 // read-modify-write, or concurrent writers (parallel waves + dashboard) clobber
