@@ -75,6 +75,9 @@ test("worker: the environment is an allowlist — unrelated secrets never reach 
   assert.equal(got.SCH_RUN_ID, rec.run_id, "run identity IS passed");
   assert.equal(got.SCH_PROJECT_ID, fx.P);
   assert.ok(got.PATH || got.Path, "executable discovery survives");
+  assert.equal(got.GIT_CONFIG_COUNT, "1", "the credential helper is disabled");
+  assert.equal(got.GIT_CONFIG_KEY_0, "credential.helper");
+  assert.equal(got.GIT_CONFIG_VALUE_0, "");
 
   // and none of it is persisted either
   const everything = readdirSync(rec.run_dir).filter((f) => f.endsWith(".json") || f.endsWith(".log") || f.endsWith(".txt"))
@@ -314,19 +317,3 @@ test("handoff: the human-readable handoff separates reported, observed and verif
   fx.done();
 });
 
-test("the worker environment carries no git credential helper", () => {
-  const env = EXEC.buildEnv(
-    { ...process.env, GH_TOKEN: "ghp_x", GITHUB_TOKEN: "ghp_y", GIT_ASKPASS: "C:\\askpass.exe",
-      SSH_AUTH_SOCK: "/tmp/agent.sock", SSH_AGENT_PID: "1234" },
-    {},
-  );
-  for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GIT_ASKPASS", "SSH_AUTH_SOCK", "SSH_AGENT_PID"])
-    assert.equal(env[k], undefined, `${k} must never reach a worker`);
-});
-
-test("the worker environment disables the configured credential helper", () => {
-  const env = EXEC.buildEnv(process.env, EXEC.GIT_CREDENTIAL_STRIP);
-  assert.equal(env.GIT_CONFIG_COUNT, "1");
-  assert.equal(env.GIT_CONFIG_KEY_0, "credential.helper");
-  assert.equal(env.GIT_CONFIG_VALUE_0, "");
-});

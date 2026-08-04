@@ -39,6 +39,10 @@ export const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encod
 export const SECRET_ENV = {
   AWS_SECRET_ACCESS_KEY: ["wJalrXUtnFEMI", "K7MDENGbPxRfiCY", "EXAMPLEKEY"].join(""),
   GITHUB_TOKEN: ["gh" + "p", "0".repeat(36) + "ab"].join("_"),
+  GH_TOKEN: ["gh" + "p", "1".repeat(36) + "cd"].join("_"),
+  GIT_ASKPASS: "C:\\askpass.exe",
+  SSH_AUTH_SOCK: "/tmp/agent.sock",
+  SSH_AGENT_PID: "1234",
   DATABASE_PASSWORD: "hunter2-not-for-the-worker",
   OPENAI_API_KEY: ["sk-", "unrelated-provider-key-", "0".repeat(12)].join(""),
   SCH_HOME_LOOKALIKE: "should-not-travel",

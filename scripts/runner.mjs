@@ -24,7 +24,7 @@ import * as SK from "./skills.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
-import { ClaudeCliExecutor, buildEnv, redactEnv, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
+import { ClaudeCliExecutor, buildEnv, redactEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
 import { getProject, loadState, saveState, auditLog, event as stateEvent } from "./state.mjs";
 
 // ------------------------------------------------------------- vocabulary
@@ -396,7 +396,7 @@ export async function runVerification(commands, {
   env = process.env, phaseRemainingMs = null, taskRemainingMs = null, schedulerRemainingMs = null,
   isCancelled = () => false,
 } = {}) {
-  const childEnv = buildEnv(env, {});
+  const childEnv = buildEnv(env, GIT_CREDENTIAL_STRIP);
   const results = [];
   for (const [i, v] of commands.entries()) {
     const id = v.id ?? `VER-${i + 1}`;
