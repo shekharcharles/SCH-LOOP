@@ -624,3 +624,23 @@ test("revoking the namespace closes it again", () => {
     assert.equal(STATE.branchInNamespace(fx.P, "sch/task-1"), false);
   } finally { fx.done(); }
 });
+
+test("revoking a namespace that was never set writes nothing", () => {
+  const fx = fixture("ns-revoke-noop");
+  try {
+    assert.equal(fx.cli("delivery-branch-namespace", "--project", fx.P, "--revoke", "true"), "no namespace set");
+    // Stronger than checking the event log: state.json must not even exist —
+    // proof no read-modify-write happened for an authorization that was never there.
+    assert.equal(existsSync(join(fx.home, "projects", fx.P, "state.json")), false,
+      "nothing was actually revoked, so nothing should have been written");
+  } finally { fx.done(); }
+});
+
+test("--set and --revoke together is a contradiction, not a silent --revoke win", () => {
+  const fx = fixture("ns-contradiction");
+  try {
+    assert.throws(() => fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", "sch/task-*", "--revoke", "true", "--approver", "test-operator"),
+      /contradict/);
+    assert.equal(STATE.branchNamespace(fx.P), null, "neither side of the contradiction took effect");
+  } finally { fx.done(); }
+});

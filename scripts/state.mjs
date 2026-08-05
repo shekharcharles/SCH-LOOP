@@ -1782,16 +1782,19 @@ const commands = {
   // branch's first push does not stop the queue on every single task.
   "delivery-branch-namespace"({ flags }) {
     const id = pid(flags);
+    if (flags.revoke === "true" && flags.set)
+      die(`--revoke and --set contradict each other — pass one or the other, not both`);
     const s = loadState(id);
     if (flags.revoke === "true") {
-      delete (s.delivery ??= {}).branch_namespace;
+      if (!s.delivery?.branch_namespace) return out("no namespace set");
+      delete s.delivery.branch_namespace;
       event(s, "branch namespace authorization revoked");
       saveState(id, s);
       return out("revoked");
     }
     if (!flags.set) return out(branchNamespace(id));
     const pattern = String(flags.set);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*\*?$/.test(pattern) || (pattern.match(/\*/g) ?? []).length > 1)
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*\*?$/.test(pattern))
       die(`"${pattern}" is not a usable branch namespace — one trailing "*" at most`);
     const rec = {
       id: "BNS-" + randomUUID().slice(0, 8), pattern,
