@@ -357,3 +357,44 @@ test("executor: extraArgs reach the spawned process and the record", async () =>
     assert.ok(seen.includes("--setting-sources"), "the child process must actually receive them");
   } finally { fx.done(); }
 });
+
+test("a run builds a pack and launches the worker pointed at it", async () => {
+  const fx = fixture("run-pack");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const argvTo = join(fx.home, "argv.json");
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      argvTo,
+      write: [{ path: "src/app.js", content: "// packed\n" }],
+    }));
+    assert.equal(rec.outcome, "VERIFIED", rec.failure?.message);
+
+    const argv = JSON.parse(readFileSync(argvTo, "utf8"));
+    const i = argv.indexOf("--plugin-dir");
+    assert.ok(i >= 0, "the worker must be launched with its pack");
+    assert.ok(existsSync(join(argv[i + 1], ".claude-plugin", "plugin.json")),
+      "the path passed must be a real generated pack");
+    assert.equal(argv[argv.indexOf("--setting-sources") + 1], "project",
+      "the operator's global catalogue must be suppressed");
+    assert.ok(argv.includes("Skill(schedule)"),
+      "a built-in that schedules work outside SCH's queue must be denied");
+
+    assert.ok(rec.pack, "the run record must carry what was packed");
+    assert.equal(typeof rec.pack.manifest_name, "string");
+  } finally { fx.done(); }
+});
+
+test("a pack that cannot be built fails the run closed — no worker starts", async () => {
+  const fx = fixture("run-pack-fail");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    // An unwritable pack root is the reachable form of "the pack is unavailable".
+    const rec = await run(fx, t, fakeExecutor(fx, {}), {
+      env: { ...process.env, SCH_PACK_ROOT: join(fx.repo, "src", "app.js") },
+    });
+    assert.notEqual(rec.outcome, "VERIFIED");
+    assert.equal(rec.failure?.code, "PACK_UNAVAILABLE");
+  } finally { fx.done(); }
+});
