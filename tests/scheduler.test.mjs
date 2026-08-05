@@ -837,6 +837,43 @@ test("scheduler: a worktree missing mid-attempt is NEEDS_DECISION and is not rec
   assert.equal(existsSync(wtPath(fx, a)), false, "and the checkout is not recreated");
 });
 
+// The other half of the same loss, and the one `parked` did not cover. An
+// attempt that RAN TO A STOP is closed, so `openAttempt().resume` is false — yet
+// its uncommitted change is in that checkout exactly as a parked attempt's is.
+// Before M6 that work sat in the main tree and survived a requeue.
+test("scheduler: a checkout cleared after a CLOSED attempt stops the next one too", async (t) => {
+  const fx = fixture("sched-wt-cleared-closed"); t.after(() => fx.done());
+  initWorkspace(fx);
+  // One attempt, and it fails its verification: the attempt reaches a stop the
+  // scheduler will not resume, and the task ends FAILED with its work in the
+  // checkout, uncommitted.
+  const a = addTask(fx, {
+    title: "fails once", allow: "src/**",
+    verify: `${process.execPath.replace(/\\/g, "/")} -e process.exit(1)`,
+  });
+  fx.cli("task-set", String(a), "--project", fx.P, "--retry-policy", '{"max_attempts":1}');
+  const env = fakeQueueEnv(fx, { [a]: { write: [{ path: "src/app.js", content: "// attempt 1\n" }] } });
+
+  const first = await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  assert.equal(existsSync(wtPath(fx, a)), true, "a FAILED task keeps its checkout — it is the evidence");
+  assert.equal(SCHED.openAttempt(fx.wsDir(), a).resume, false,
+    `precondition: the attempt is CLOSED, so the parked guard cannot see it (${JSON.stringify(first.failure)})`);
+  assert.equal(SCHED.openAttempt(fx.wsDir(), a).attempt, 2, "precondition: attempt 1 is on record");
+
+  // The operator route back: a stopped task is looked at, then returned to the
+  // queue. Both edges are the closed machine's own.
+  TR.transition(fx.P, a, { to: "NEEDS_DECISION", actor: "operator", reason: "operator picked it up" });
+  TR.transition(fx.P, a, { to: "READY", actor: "operator", reason: "operator sent it back to the queue" });
+  rmSync(wtPath(fx, a), { recursive: true, force: true });
+  git(fx.repo, "worktree", "prune");
+
+  const r = await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  assert.equal(r.stop_reason, "NEEDS_DECISION", JSON.stringify(r.failure));
+  assert.equal(r.failure.code, "WORKTREE_MISSING");
+  assert.equal(existsSync(wtPath(fx, a)), false, "the branch must NOT be checked out again at its last commit");
+  assert.equal(invocations(fx).length, 1, "and no second worker ran against a baseline that was never true");
+});
+
 test("scheduler: a checkout cleared BETWEEN queue runs stops the resumed attempt", async (t) => {
   const fx = fixture("sched-wt-cleared"); t.after(() => fx.done());
   initWorkspace(fx);
