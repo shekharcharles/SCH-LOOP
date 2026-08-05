@@ -167,3 +167,48 @@ export function removePack({ projectId, taskId, root = packsRoot() }) {
   try { rmSync(path, { recursive: true, force: true }); } catch { /* reported by the existsSync below */ }
   return { ok: !existsSync(path), removed: !existsSync(path), path };
 }
+
+// ------------------------------------------------------- built-in capabilities
+
+// `--setting-sources project` removes the operator's catalogue but NOT
+// Anthropic's built-in skills — probed, not assumed. So they are policed
+// explicitly: denied where they persist state, mutate configuration or schedule
+// future work; allowed where they only read or advise.
+//
+// Denying blocks INVOCATION, not listing. The names still appear in the worker's
+// skill list, and nothing here changes that.
+export const BUILTIN_POLICY = Object.freeze({
+  version: 1,
+  deny: Object.freeze([
+    "schedule",                 // creates scheduled agents — work outside SCH's queue and lease
+    "loop",                     // creates recurring execution — the same problem on a timer
+    "init",                     // writes CLAUDE.md into the repository
+    "update-config",            // mutates settings.json, including permissions and hooks
+    "fewer-permission-prompts", // writes a permission allowlist
+    "run",                      // launches and drives the project's application
+  ]),
+  allow: Object.freeze([
+    "dataviz", "simplify", "claude-api", "review", "security-review", "keybindings-help",
+  ]),
+  // Every built-in this SCH build has seen. A name absent from `known` is new,
+  // and a new capability is denied until somebody classifies it.
+  known: Object.freeze([
+    "dataviz", "update-config", "keybindings-help", "simplify", "fewer-permission-prompts",
+    "loop", "schedule", "claude-api", "run", "init", "review", "security-review",
+  ]),
+});
+
+export function deniedBuiltins(policy = BUILTIN_POLICY) {
+  const allow = new Set(policy.allow ?? []);
+  const seen = new Set([...(policy.known ?? []), ...(policy.deny ?? []), ...allow]);
+  return [...seen].filter((n) => !allow.has(n)).sort();
+}
+
+// The exact argument vector a contained worker is launched with. Kept here, next
+// to the policy it enforces, so the launcher cannot drift from the reasoning.
+export function workerArgs({ packPath, policy = BUILTIN_POLICY }) {
+  const args = ["--plugin-dir", String(packPath), "--setting-sources", "project"];
+  const denied = deniedBuiltins(policy);
+  if (denied.length) args.push("--disallowed-tools", ...denied.map((n) => `Skill(${n})`));
+  return args;
+}
