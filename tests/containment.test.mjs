@@ -62,6 +62,29 @@ test("no ambient credential helper or token reaches a bounded child", () => {
   assert.equal(env.SSH_AGENT_PID, undefined);
 });
 
+// An auditor asking "did this worker have GH_TOKEN?" must get an answer about
+// the environment that existed. The record used to be RECOMPUTED from a
+// different extra object than the executor passed the child, so it silently
+// omitted the credential strip and the SCH identity vars — a wrong answer, on
+// the exact surface this milestone hardened.
+test("worker.json lists the environment the child actually received", async () => {
+  const fx = fixture("worker-env-record");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const res = await runQueue(fx, {
+      env: fakeQueueEnv(fx, { [t]: { write: [{ path: "src/app.js", content: "// in scope\n" }] } }),
+      maxTasks: 1,
+    });
+    const runId = res.tasks[0].attempt_records[0].run_id;
+    const names = JSON.parse(readFileSync(join(RUN.readRun(fx.P, runId).dir, "worker.json"), "utf8")).environment_names;
+    for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "SCH_RUN_ID", "SCH_PROJECT_ID", "SCH_TASK_ID", "SCH_ATTEMPT"])
+      assert.ok(names.includes(k), `${k} reached the child and must be in the record — got ${names.join(",")}`);
+    assert.ok(!names.includes("SCH_HOME"), "and nothing that did not reach it");
+    assert.ok(!names.includes("GH_TOKEN"));
+  } finally { fx.done(); }
+});
+
 test("a worker that creates its own worktree trips worktrees_changed", async () => {
   const fx = fixture("worker-made-worktree");
   try {
