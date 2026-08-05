@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fixture, git, ROOT, url } from "./helpers.mjs";
 
@@ -95,6 +95,28 @@ test("removeWorktree removes the checkout and leaves the branch", () => {
     assert.equal(existsSync(a.path), false);
     const branches = git(fx.repo, "for-each-ref", "--format=%(refname:short)", "refs/heads");
     assert.ok(branches.includes("sch/task-1"), "the branch is evidence and must survive");
+  } finally { fx.done(); }
+});
+
+// The branch's primary new stop. Every failure used to read `git worktree add …
+// did not produce a worktree at <path>` and nothing else, so a stale admin
+// entry, a locked checkout, a full disk and a MAX_PATH failure were one message.
+test("a checkout deleted by hand fails with git's own reason and the prune remedy", () => {
+  const fx = fixture("wt-stale-admin");
+  const root = join(fx.home, "wt");
+  try {
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const a = WT.ensureWorktree({ projectId: fx.P, taskId: 1, repoRoot: fx.repo, base, root });
+    // Deleted with the file manager: the directory is gone, git's administrative
+    // entry is not, and `worktree add` refuses the branch it still believes is out.
+    rmSync(a.path, { recursive: true, force: true });
+
+    const b = WT.ensureWorktree({ projectId: fx.P, taskId: 1, repoRoot: fx.repo, base, root });
+    assert.equal(b.ok, false);
+    assert.equal(b.code, "WORKTREE_CREATE_FAILED");
+    assert.match(b.message, /already registered|already used by|already checked out/i,
+      `the message must name git's cause, not just the path: ${b.message}`);
+    assert.match(b.message, /worktree prune/, `and the remedy for it: ${b.message}`);
   } finally { fx.done(); }
 });
 
