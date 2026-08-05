@@ -1314,7 +1314,9 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
     // the three hashes describe different questions and the comparison is
     // guaranteed to report drift that never happened.
     const current = CAND.computeCandidate({
-      repoRoot, projectId, taskId, runId,
+      // The worker's checkout, where the change actually is — recomputing this
+      // against the operator's working tree would find no change at all.
+      repoRoot: workRoot ?? repoRoot, projectId, taskId, runId,
       baseline: ctx.baseline, verification: ctx.verification, promptManifest: ctx.prompt_manifest,
       policy: { allowed: ctx.task.allowedPaths ?? [], forbidden: ctx.task.forbiddenPaths ?? [], controlCategory: ctx.task.controlCategory ?? null },
       outcome: ctx.run?.outcome, verifiedAt: ctx.run?.ended_at,
@@ -1351,7 +1353,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
     const enter = TR.transition(projectId, taskId, { to: "DELIVERING", actor: "delivery", reason: `delivery controller invoked for run ${runId}`, runId, attempt });
     if (!enter.ok && TR.canonicalState(loadState(projectId).tasks.find((t) => t.id === Number(taskId))) !== "DELIVERING")
       return { ok: false, state: "FAILED", failure: enter.failure };
-    const first = DEL.deliverRun({ projectId, runId });
+    const first = DEL.deliverRun({ projectId, runId, workRoot });
     let read = DEL.readDelivery(projectId, runId);
 
     // ONE HUMAN DECISION, TWO RECORDS. If the operator has already answered the
@@ -1371,7 +1373,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
             approver: answered.approver, decision: answered.status,
             why: `human gate ${answered.id}${answered.conditions ? `: ${answered.conditions}` : ""}`,
           });
-          if (answered.status === "APPROVED") DEL.deliverRun({ projectId, runId });
+          if (answered.status === "APPROVED") DEL.deliverRun({ projectId, runId, workRoot });
           read = DEL.readDelivery(projectId, runId);
         }
       }
@@ -1442,7 +1444,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
     // re-reads the transaction; otherwise the controller runs to completion now.
     if (TR.canonicalState(loadState(projectId).tasks.find((t) => t.id === Number(taskId))) === "AWAITING_DELIVERY")
       TR.transition(projectId, taskId, { to: "DELIVERING", actor: "delivery", reason: `delivering run ${runId}`, runId, attempt });
-    const d = commit ? { state: "DELIVERED", commit: { hash: commit } } : DEL.deliverRun({ projectId, runId });
+    const d = commit ? { state: "DELIVERED", commit: { hash: commit } } : DEL.deliverRun({ projectId, runId, workRoot });
     const read = DEL.readDelivery(projectId, runId);
     ctx.delivery = read;
     ctx.transaction = read.ok ? { ...read.transaction, outgoing: read.outgoing?.outgoing ?? [], incoming: read.outgoing?.incoming ?? [], remote_verification: read.remote_verification ?? read.transaction.remote_verification ?? null } : null;

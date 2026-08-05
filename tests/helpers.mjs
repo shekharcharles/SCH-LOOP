@@ -100,8 +100,13 @@ export function fixture(name, { register = true, commit = true } = {}) {
 
 // Initialize the workspace and commit what it created, so the working tree is
 // clean — exactly the state a run requires.
-export function initWorkspace(fx) {
+// The namespace is authorized here, as an operator would, rather than defaulted
+// in `workspace-init`: SCH creating remote branches because a workspace exists
+// is exactly the thing the authorization is there to prevent. A fixture that
+// wants a project with no namespace uses `fixture()` alone.
+export function initWorkspace(fx, { namespace = "sch/task-*" } = {}) {
   fx.cli("workspace-init", "--project", fx.P);
+  if (namespace) fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", namespace, "--approver", "test-operator");
   git(fx.repo, "add", "-A");
   git(fx.repo, "commit", "-q", "-m", "sch workspace");
   return fx.wsDir();
@@ -163,8 +168,8 @@ export function otherClone(bare, name = "other") {
 
 // Run a task to VERIFIED so there is something deliverable, without asserting
 // on the run itself — the delivery tests are about what happens next.
-export async function verifiedRun(fx, taskId, behaviour) {
-  const rec = await run(fx, taskId, fakeExecutor(fx, behaviour));
+export async function verifiedRun(fx, taskId, behaviour, extra = {}) {
+  const rec = await run(fx, taskId, fakeExecutor(fx, behaviour), extra);
   if (rec.outcome !== "VERIFIED") throw new Error(`fixture expected VERIFIED, got ${rec.outcome}: ${rec.failure?.message}`);
   return rec;
 }
@@ -175,9 +180,12 @@ export async function verifiedRun(fx, taskId, behaviour) {
 // so the transaction has to exist first. That is what the operator flow looks
 // like too: run the delivery, it stops at APPROVAL_REQUIRED having written down
 // exactly what it intends, and only then is there something to sign.
-export function approve(fx, runId, extra = {}) {
+// `workRoot` bootstraps the transaction from the same checkout the delivery will
+// run in: an approval signs the branch, so signing one written against the main
+// repository would be invalidated the moment the real delivery recomputed it.
+export function approve(fx, runId, { workRoot = null, ...extra } = {}) {
   if (!DEL.readTransaction(DEL.deliveryPathFor(join(fx.repo, ".sch-loop"), runId)))
-    DEL.deliverRun({ projectId: fx.P, runId });
+    DEL.deliverRun({ projectId: fx.P, runId, workRoot });
   return DEL.approveDelivery(fx.P, runId, { approver: "test-operator", why: "fixture", ...extra });
 }
 export const deliver = (fx, runId, extra = {}) => DEL.deliverRun({ projectId: fx.P, runId, ...extra });

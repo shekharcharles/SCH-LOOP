@@ -22,6 +22,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as WS from "./workspace.mjs";
 import * as C from "./candidate.mjs";
+// The pure namespace matcher only. worktree.mjs is a leaf, so this cannot close
+// an import cycle the way reaching back into state.mjs for it would.
+import * as WT from "./worktree.mjs";
 import { readRun, promoteHandoff } from "./runner.mjs";
 import { getProject, loadState, auditLog, markDelivered } from "./state.mjs";
 
@@ -109,7 +112,8 @@ export const DELIVERY_EVENTS = [
   "delivery.approval_invalidated", "delivery.staging_started", "delivery.staging_completed",
   "delivery.staging_rejected", "delivery.commit_started", "delivery.commit_created",
   "delivery.commit_verified", "delivery.fetch_started", "delivery.fetch_completed",
-  "delivery.outgoing_inspected", "delivery.push_started", "delivery.push_completed",
+  "delivery.outgoing_inspected", "delivery.remote_branch_created",
+  "delivery.push_started", "delivery.push_completed",
   "delivery.remote_verification_started", "delivery.remote_verification_completed",
   "delivery.delivered", "delivery.needs_decision", "delivery.failed", "delivery.cancelled",
   "delivery.lease_acquired", "delivery.lease_released", "delivery.state_changed",
@@ -282,12 +286,18 @@ const writeTransaction = (deliveryPath, tx) => {
 
 // --------------------------------------------------- resolving the workspace
 
-function resolveTarget(projectId) {
+// `workRoot` is the checkout the commit is made in — a task's disposable
+// worktree, not the operator's working tree. The WORKSPACE is still the
+// project's own: runs, deliveries and the repository lease all live in the main
+// repository, so a second checkout never gets a second set of records.
+function resolveTarget(projectId, workRoot = null) {
   const project = getProject(projectId);
   if (!project) return { ok: false, failure: { code: "WORKSPACE_INVALID", message: `no registered project "${projectId}"` } };
   const ws = WS.validateWorkspace({ projectId, repoPath: project.path });
   if (!ws.ok) return { ok: false, failure: { code: "WORKSPACE_INVALID", message: ws.problems.map((p) => p.message).join("; ") } };
-  return { ok: true, project, repoRoot: ws.root, wsDir: ws.dir };
+  const root = workRoot ? WS.repositoryRoot(workRoot) : ws.root;
+  if (workRoot && !root) return { ok: false, failure: { code: "WORKSPACE_INVALID", message: `workRoot ${workRoot} is not a git repository` } };
+  return { ok: true, project, repoRoot: root, mainRoot: ws.root, wsDir: ws.dir };
 }
 
 // ----------------------------------------------------------------- approval
@@ -351,11 +361,11 @@ export function cancelDelivery(projectId, runId, reason = "operator cancelled") 
 
 // ------------------------------------------------------------- THE CONTROLLER
 
-export function deliverRun({ projectId, runId, env = process.env, commitMessageOverride = null, onEvent = null }) {
+export function deliverRun({ projectId, runId, env = process.env, commitMessageOverride = null, onEvent = null, workRoot = null }) {
   const started = Date.now();
-  const target = resolveTarget(projectId);
+  const target = resolveTarget(projectId, workRoot);
   if (!target.ok) return { ok: false, state: "FAILED", failure: target.failure, delivery_id: null };
-  const { project, repoRoot, wsDir } = target;
+  const { project, repoRoot, mainRoot, wsDir } = target;
 
   const run = readRun(projectId, runId);
   if (!run?.run) return { ok: false, state: "FAILED", delivery_id: null,
@@ -477,6 +487,18 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
     if (upstreamRef && upstreamRef !== `${remote}/${remoteBranch}`)
       return stop("UPSTREAM_CHANGED", `the upstream is "${upstreamRef}" but this delivery targets "${remote}/${remoteBranch}"`);
 
+    // The branch this one FORKED FROM. It is only consulted on a first push,
+    // where there is no remote branch to measure against and a task branch's
+    // whole history would otherwise read as outgoing. A task worktree is cut
+    // from the main repository's HEAD, so the main repository's branch is the
+    // honest answer; the remote's default branch, then the target branch itself,
+    // are the fallbacks for a delivery made from the project checkout directly.
+    const mainBranch = C.gitOut(mainRoot, "rev-parse", "--abbrev-ref", "HEAD");
+    const remoteDefault = C.gitOut(repoRoot, "symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`) ?? "";
+    const baseRemoteBranch = (mainBranch && mainBranch !== "HEAD" ? mainBranch : null)
+      ?? (remoteDefault.startsWith(`${remote}/`) ? remoteDefault.slice(remote.length + 1) : null)
+      ?? remoteBranch;
+
     // A baseline recorded against a different branch or head is not this one.
     if (run.baseline?.repository?.branch && run.baseline.repository.branch !== branch)
       return stop("BRANCH_CHANGED", `the run was verified on "${run.baseline.repository.branch}" and the repository is on "${branch}"`);
@@ -487,7 +509,8 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
 
     Object.assign(tx, {
       baseline_head: current.head, branch, remote, upstream_ref: upstreamRef ?? `${remote}/${remoteBranch}`,
-      remote_branch: remoteBranch, remote_url_redacted: C.redactRemote(remoteUrl),
+      remote_branch: remoteBranch, base_remote_branch: baseRemoteBranch,
+      remote_url_redacted: C.redactRemote(remoteUrl),
       verified_effects_hash: current.verified_effects_hash,
       verified_diff_hash: current.verified_diff_hash,
       verification_evidence_hash: current.verification_evidence_hash,
@@ -707,7 +730,13 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
       incoming = (C.gitOut(repoRoot, "rev-list", `HEAD..${remoteRef}`) ?? "").split("\n").filter(Boolean);
       ahead = outgoing.length; behind = incoming.length;
     } else {
-      outgoing = (C.gitOut(repoRoot, "rev-list", "HEAD") ?? "").split("\n").filter(Boolean);
+      // No remote branch. What counts as "outgoing" is what this branch adds on
+      // top of the base it forked from — not its entire history. With no shared
+      // history to fork from there is nothing to subtract, and the whole branch
+      // stays outgoing so the one-commit check below still fails closed.
+      const baseRef = `${tx.remote}/${tx.base_remote_branch}`;
+      mergeBase = C.gitOut(repoRoot, "merge-base", "HEAD", baseRef);
+      outgoing = (C.gitOut(repoRoot, "rev-list", mergeBase ? `${mergeBase}..HEAD` : "HEAD") ?? "").split("\n").filter(Boolean);
       ahead = outgoing.length;
     }
     artifact("outgoing.json", {
@@ -718,16 +747,26 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
     });
     ev("delivery.outgoing_inspected", { ahead, behind, outgoing, incoming, remote_head: remoteHead });
 
-    if (!remoteHead)
+    // Creating a remote branch is STILL an explicit decision. The decision was
+    // just made once, over a namespace, instead of once per task — outside that
+    // namespace this stops exactly as it always did.
+    const ns = state.delivery?.branch_namespace ?? null;
+    const nsOk = !remoteHead && WT.branchMatchesNamespace(ns, tx.remote_branch);
+    if (!remoteHead && !nsOk)
       return stop("UPSTREAM_CHANGED",
-        `"${tx.remote_branch}" does not exist on "${tx.remote}". Commit ${hash} is created locally and NOT pushed — creating a remote branch is an explicit decision, not something SCH does on your behalf.`,
+        `"${tx.remote_branch}" does not exist on "${tx.remote}". Commit ${hash} is created locally and NOT pushed — creating a remote branch is an explicit decision, not something SCH does on your behalf.\n` +
+        `  authorize a namespace: node scripts/state.mjs delivery-branch-namespace --project ${projectId} --set "sch/task-*" --approver <you>`,
         { commit: tx.commit });
-    if (incoming.length)
-      return stop("INCOMING_COMMITS_PRESENT",
-        `${incoming.length} commit(s) exist on ${tx.remote}/${tx.remote_branch} that are not local. Commit ${hash} is NOT pushed and nothing was merged or rebased — integrate them yourself, then deliver again.`,
-        { commit: tx.commit });
-    if (mergeBase !== remoteHead)
-      return stop("NON_FAST_FORWARD", `the local branch has diverged from ${tx.remote}/${tx.remote_branch} (merge base ${mergeBase}) — refusing to push`, { commit: tx.commit });
+    // Both of these compare against a remote branch, so neither has anything to
+    // say about a branch the remote has never seen.
+    if (remoteHead) {
+      if (incoming.length)
+        return stop("INCOMING_COMMITS_PRESENT",
+          `${incoming.length} commit(s) exist on ${tx.remote}/${tx.remote_branch} that are not local. Commit ${hash} is NOT pushed and nothing was merged or rebased — integrate them yourself, then deliver again.`,
+          { commit: tx.commit });
+      if (mergeBase !== remoteHead)
+        return stop("NON_FAST_FORWARD", `the local branch has diverged from ${tx.remote}/${tx.remote_branch} (merge base ${mergeBase}) — refusing to push`, { commit: tx.commit });
+    }
     if (outgoing.length !== 1)
       return stop("UNRELATED_OUTGOING_COMMITS",
         `${outgoing.length} commit(s) would be pushed but exactly one — the delivery commit — is permitted: ${outgoing.map((c) => c.slice(0, 8)).join(", ")}. Commit ${hash} is NOT pushed.`,
@@ -751,15 +790,21 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
     // ------------------------------------------------------------- 11. PUSH
     move("PUSHING");
     const refspec = `refs/heads/${tx.branch}:refs/heads/${tx.remote_branch}`;
-    ev("delivery.push_started", { remote: tx.remote, refspec, commit: hash });
+    ev("delivery.push_started", { remote: tx.remote, refspec, commit: hash, creates_branch: nsOk });
     const pushStart = now();
-    const push = C.gitRun(repoRoot, ["push", tx.remote, refspec]);
+    // `--set-upstream` on a first push only, so the branch that was just created
+    // tracks the ref it was created as. It moves nothing and rewrites nothing.
+    const push = C.gitRun(repoRoot, nsOk
+      ? ["push", "--set-upstream", tx.remote, refspec]
+      : ["push", tx.remote, refspec]);
     capture("stdout", "git-push.log", push.stdout); capture("stderr", "git-push.log", push.stderr);
     tx.push = {
-      command: `git push ${tx.remote} ${refspec}`, remote: tx.remote, refspec,
+      command: `git ${push.args.join(" ")}`, remote: tx.remote, refspec, created_branch: nsOk,
       local_ref: `refs/heads/${tx.branch}`, remote_ref: `refs/heads/${tx.remote_branch}`,
       started_at: pushStart, ended_at: now(), exit_code: push.code, ok: push.ok,
-      pushed_range: `${remoteHead}..${hash}`,
+      // A branch the remote has never seen has no remote head to range from, so
+      // the range starts at the commit it forked from.
+      pushed_range: `${remoteHead ?? mergeBase ?? "(no shared history)"}..${hash}`,
       stdout: clamp(push.stdout, 4000), stderr: clamp(push.stderr, 4000),
     };
     artifact("push.json", tx.push);
@@ -770,6 +815,10 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
         { commit: tx.commit, push: tx.push });
     move("PUSHED");
     ev("delivery.push_completed", { exit_code: push.code, pushed_range: tx.push.pushed_range });
+    // AFTER the push, not before it: a branch is created when the remote accepts
+    // the ref, and a record written on the way in would be a claim rather than
+    // an event. The independent verification below still has to agree.
+    if (nsOk) ev("delivery.remote_branch_created", { branch: tx.remote_branch, namespace_id: ns?.id ?? null, namespace: ns?.pattern ?? null });
 
     // ------------------------------------------------ 12. REMOTE VERIFICATION
     move("REMOTE_VERIFYING");

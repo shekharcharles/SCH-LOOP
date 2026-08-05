@@ -42,7 +42,10 @@ const invocations = (fx) => {
   const p = join(fx.home, "behaviours", "invocations.log");
   return existsSync(p) ? readFileSync(p, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 };
-const remoteLog = (fx) => git(fx.bare, "log", "--oneline").trim().split("\n").filter(Boolean);
+// `--all`, because a delivered commit lands on that task's own branch now, not
+// on the remote's default branch. The question every assertion below is asking
+// is still "what reached the remote", which is every ref it holds.
+const remoteLog = (fx) => git(fx.bare, "log", "--oneline", "--all").trim().split("\n").filter(Boolean);
 
 // ============================================================ 47–52. sequencing
 
@@ -422,9 +425,10 @@ test("scheduler: a rejected gate stops the queue and pushes nothing", async (t) 
   assert.equal(r.tasks_delivered, 0);
   assert.equal(remoteLog(fx).length, 2);
   assert.equal(states(fx)[a], "FAILED");
-  // the change is still in the tree, unstaged — nothing was reverted
-  assert.equal(readFileSync(join(fx.repo, "src", "a.js"), "utf8"), "// a\n");
-  assert.equal(git(fx.repo, "diff", "--cached", "--name-only").trim(), "");
+  // the change is still in the task's checkout, unstaged — nothing was reverted
+  assert.equal(readFileSync(join(wtPath(fx, a), "src", "a.js"), "utf8"), "// a\n");
+  assert.equal(git(wtPath(fx, a), "diff", "--cached", "--name-only").trim(), "");
+  assert.equal(existsSync(join(fx.repo, "src", "a.js")), false, "and never in the operator's tree");
 });
 
 test("human gates: typed decisions bind, expire and invalidate when the proposal moves", (t) => {
@@ -536,8 +540,14 @@ test("scheduler: an incoming commit stops the queue rather than merging or rebas
   const a = addTask(fx, { title: "one", allow: "src/**" });
   const other = otherClone(fx.bare);
   t.after(() => { try { rmSync(other, { recursive: true, force: true }); } catch {} });
+  // On THIS TASK'S branch. A commit on the default branch is no longer incoming
+  // to a delivery — the task branch is its own ref, and its first push cannot
+  // race anyone. Somebody pushing to the task's own branch still can, and that
+  // is the case this test has always been about.
+  git(other, "checkout", "-q", "-b", `sch/task-${a}`);
   writeFileSync(join(other, "OTHER.md"), "# somebody else pushed first\n");
-  git(other, "add", "OTHER.md"); git(other, "commit", "-q", "-m", "their work"); git(other, "push", "-q");
+  git(other, "add", "OTHER.md"); git(other, "commit", "-q", "-m", "their work");
+  git(other, "push", "-q", "origin", `sch/task-${a}`);
 
   const r = await SCHED.runQueue({ projectId: fx.P, env: fakeQueueEnv(fx, { [a]: { write: [{ path: "src/a.js", content: "// a\n" }] } }), maxTasks: 2 });
   assert.equal(r.tasks_delivered, 0);
@@ -603,7 +613,7 @@ test("scheduler: a task becomes DELIVERED only through the controller, after rem
   const reports = JSON.parse(fx.cli("gate-report", "--project", fx.P, "--task", String(a), "--gate", "remote-commit-present"));
   assert.equal(reports.reports.length, 1);
   assert.equal(reports.reports[0].outcome, "PASS");
-  assert.match(reports.reports[0].checks[0].evidence, /origin\/main/);
+  assert.match(reports.reports[0].checks[0].evidence, new RegExp(`origin/sch/task-${a}$|origin/sch/task-${a}[,\\s]`));
 });
 
 // =========================================================== project completion
