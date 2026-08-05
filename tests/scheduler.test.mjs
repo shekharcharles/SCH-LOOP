@@ -138,8 +138,9 @@ test("scheduler: a worker that crashes mid-task leaves the task recoverable, not
   assert.equal(r.tasks_delivered, 0);
   assert.equal(remoteLog(fx).length, 2, "nothing reached the remote");
   assert.ok(["FAILED", "NEEDS_DECISION"].includes(states(fx)[a]));
-  // the worker's half-written change is preserved, not reverted
-  assert.equal(readFileSync(join(fx.repo, "src", "a.js"), "utf8"), "// half\n");
+  // the worker's half-written change is preserved, not reverted — in the task's
+  // own checkout, which is where the worker was running
+  assert.equal(readFileSync(join(fx.wt, fx.P, `task-${a}`, "src", "a.js"), "utf8"), "// half\n");
 });
 
 // ================================================== 54–56. why nothing is ready
@@ -824,4 +825,36 @@ test("scheduler: a worktree missing mid-attempt is NEEDS_DECISION and is not rec
   assert.equal(r.failure.code, "WORKTREE_MISSING");
   assert.equal(invocations(fx).length, 1, "attempt 2's worker must not start on a fabricated baseline");
   assert.equal(existsSync(wtPath(fx, a)), false, "and the checkout is not recreated");
+});
+
+test("scheduler: a checkout cleared BETWEEN queue runs stops the resumed attempt", async (t) => {
+  const fx = fixture("sched-wt-cleared"); t.after(() => fx.done());
+  initWorkspace(fx);
+  const a = addTask(fx);
+  const env = fakeQueueEnv(fx, { [a]: { write: [{ path: "src/app.js", content: "// attempt 1\n" }] } });
+
+  await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  assert.equal(existsSync(wtPath(fx, a)), true, "the first run left its checkout behind");
+
+  // An attempt interrupted before it could record a stop — a killed scheduler.
+  // The next run RESUMES it rather than restarting, so the uncommitted change in
+  // that checkout is the baseline every later phase is graded against.
+  rmSync(join(SCHED.attemptDir(fx.wsDir(), a, 1), "phases"), { recursive: true, force: true });
+  assert.equal(SCHED.openAttempt(fx.wsDir(), a).resume, true, "precondition: the attempt is resumable");
+  TR.transition(fx.P, a, { to: "READY", actor: "human-gate", reason: "operator sent it back to the queue" });
+
+  // ...and the scratch space is cleared underneath it: a reboot, a temp reaper,
+  // someone tidying %LOCALAPPDATA%. This is the realistic loss, and it happens
+  // where `ensureWorktree` would otherwise put the branch back at its last commit.
+  // Pruned as well as deleted, which is the dangerous half: while git still holds
+  // the administrative entry it refuses to re-add the branch, so the loss is only
+  // silent once that entry is gone — and `git gc` prunes it on its own.
+  rmSync(wtPath(fx, a), { recursive: true, force: true });
+  git(fx.repo, "worktree", "prune");
+
+  const r = await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  assert.equal(r.stop_reason, "NEEDS_DECISION", JSON.stringify(r.failure));
+  assert.equal(r.failure.code, "WORKTREE_MISSING");
+  assert.equal(existsSync(wtPath(fx, a)), false, "the branch must NOT be checked out again at its last commit");
+  assert.equal(invocations(fx).length, 1, "and no second worker ran against a baseline that was never true");
 });

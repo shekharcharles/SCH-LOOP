@@ -151,6 +151,9 @@ export function releaseLease(wsDir, taskId, runId) {
 
 const g = (cwd, ...a) => WS.git(cwd, ...a);
 const gt = (cwd, ...a) => (g(cwd, ...a) ?? "").trim();
+// The SHARED git directory. A linked worktree and its main repository report the
+// same one; two unrelated repositories never do.
+const gitCommonDir = (dir) => { const o = gt(dir, "rev-parse", "--git-common-dir"); return o ? WS.real(resolve(dir, o)) : null; };
 
 // A remote URL can carry credentials. Only ever record the redacted form.
 export const redactRemote = (url) =>
@@ -177,11 +180,21 @@ export function parseStatusZ(raw) {
 // of this, so without a fingerprint an installed hook is invisible.
 export function gitMetaFingerprint(repoRoot) {
   const gitDir = gt(repoRoot, "rev-parse", "--absolute-git-dir") || join(repoRoot, ".git");
+  // A LINKED WORKTREE'S private gitdir holds HEAD and almost nothing else: the
+  // config, the packed refs and the hooks live in the SHARED directory, which is
+  // the only place a hook can be installed and therefore the only place worth
+  // fingerprinting. Reading them from the private dir made all three hash as
+  // "absent" both before and after — the check went blind in exactly the
+  // configuration the scheduler now runs every worker in.
+  const commonDir = gitCommonDir(repoRoot) ?? gitDir;
   const h = createHash("sha256");
-  for (const f of ["HEAD", "config", "packed-refs"]) {
-    try { h.update(f).update(readFileSync(join(gitDir, f))); } catch { h.update(f).update("\0absent"); }
+  // HEAD stays worktree-private on purpose: it is THIS checkout's HEAD, and it
+  // moving is an effect of this run rather than of some other worktree's.
+  try { h.update("HEAD").update(readFileSync(join(gitDir, "HEAD"))); } catch { h.update("HEAD").update("\0absent"); }
+  for (const f of ["config", "packed-refs"]) {
+    try { h.update(f).update(readFileSync(join(commonDir, f))); } catch { h.update(f).update("\0absent"); }
   }
-  const hooks = join(gitDir, "hooks");
+  const hooks = join(commonDir, "hooks");
   try {
     for (const f of readdirSync(hooks).sort()) {
       if (f.endsWith(".sample")) continue;
@@ -741,9 +754,6 @@ const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; 
 // Path equality with the same case folding `contains` uses, so a Windows path
 // that differs only in case is the same directory rather than an escape.
 const sameDir = (a, b) => Boolean(a && b && WS.contains(a, b) && WS.contains(b, a));
-// The shared object store. A linked worktree and its main repository report the
-// same one; two unrelated repositories never do.
-const gitCommonDir = (dir) => { const o = gt(dir, "rev-parse", "--git-common-dir"); return o ? WS.real(resolve(dir, o)) : null; };
 
 // Everything that must hold before a worker is started. Collects ALL failures
 // rather than stopping at the first — the operator should see the whole list.
