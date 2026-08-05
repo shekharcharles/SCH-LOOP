@@ -354,9 +354,10 @@ Parallel execution in Git worktrees · fan-out / fan-in and integration joins ·
 path-ownership leases · OS-level worker sandboxing · authenticated dashboard
 writes · a full SCH MCP · automatic knowledge ingestion · distributed workers ·
 Temporal (evaluation only) · migrating state authority into SQLite. The queue
-scheduler runs **one task at a time**, in the current working tree, and stops at
-a defined terminal condition. Nothing here is unattended-safe yet: see
-[Worker containment](#worker-containment-what-is-not-true-yet).
+scheduler runs **one task at a time** — each in its own disposable worktree, but
+never two at once — and stops at a defined terminal condition. Nothing here is
+unattended-safe yet: see
+[Worker containment](#worker-containment-what-is-and-is-not-true).
 
 ## 🧪 Supervised external single-task runner
 
@@ -503,6 +504,15 @@ upstream, or a credential-bearing remote URL all stop the push. The push is an
 explicit refspec. Afterwards SCH **fetches again and asks the remote** — push
 stdout is the pushing process describing its own success and is never accepted as
 proof; the commit's tree and parent are re-checked against what was committed.
+
+**Unpushed commits on your base branch stop a task's first push, and the message
+will surprise you.** A task branch is created from the main repository's current
+branch, and until it exists on the remote there is nothing to compare it against
+except `<remote>/<that branch>` — so "outgoing" is everything the task branch adds
+on top of what the *remote* has. Local commits you have not pushed on `main` are
+inside that range, and the delivery stops with `UNRELATED_OUTGOING_COMMITS`
+listing commits you did not write in that task. That is correct fail-closed
+behaviour, not a bug: push or drop those commits, then deliver again.
 
 **Only then** does the task become `delivered` — a new terminal status distinct
 from `merged` (which means the in-session loop finished it *locally* and was
@@ -689,24 +699,53 @@ the scheduler). Its status writes go through the same transition service and are
 recorded. Use `/sch-run` for supervised in-session work; use
 `sch-run-queue.mjs` when the queue should execute itself.
 
-### Worker containment: what is not true yet
+### Worker containment: what is and is not true
 
-Stated plainly, because a false claim here is worse than a missing feature:
+Stated plainly, because a false claim here is worse than a missing feature.
 
-- **Workers are not OS-sandboxed.** They run as your user, in your repository,
-  with your PATH. The environment is allowlisted, `SCH_HOME` is withheld, the
-  process is timed out and tree-killed, `.sch-loop/` is default-denied and every
-  effect is inspected afterwards — but none of that is a sandbox.
-- **Post-run effect inspection cannot see everything.** It compares the
-  repository before and after. A write outside the repository, a network call, or
-  a background process that outlives the run is not visible to it.
-- **Git credentials remain reachable.** A malicious worker running as you could
-  use your configured credential helper directly. SCH refuses to push except
-  through the delivery controller; it cannot stop the operating system.
-- **Therefore: fully unattended operation is not supported.** Run the queue
-  where you can see it, keep delivery approval on, and treat every task's path
-  policy as the real boundary. **OS-level worker containment is the critical
-  next milestone.**
+**True now**, each backed by a test:
+
+- **A worker never runs in your working tree.** Every task gets a disposable git
+  worktree on its own `sch/task-<n>` branch, created outside the repository and
+  outside `SCH_HOME`. After a queue run your working tree is byte-identical —
+  file content and `git status --untracked-files=all` alike.
+- **A worker has no ambient git credentials.** `credential.helper` is emptied for
+  its process via `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`, and
+  `GH_TOKEN`, `GITHUB_TOKEN`, `GIT_ASKPASS`, `SSH_AUTH_SOCK` and `SSH_AGENT_PID`
+  are not on the environment allowlist, so they never reach it. **This covers the
+  verification children too**, not just the worker — a task's `--verify` is
+  usually `npm test`, and the worker wrote those test files.
+- **Only the delivery controller pushes**, and only to a branch inside a
+  namespace an operator authorized for that project, with the `--approver`
+  recorded.
+- **Run evidence lives in the main repository**, not in the disposable checkout,
+  so it outlives a worktree that is later removed.
+- **The effect inspection still sees the shared `.git`.** A worker that creates
+  its own worktree trips `worktrees_changed`, and a hook installed into the
+  shared hooks directory is still caught: the metadata fingerprint resolves
+  against the common dir, not the linked worktree's private git dir.
+
+**Still NOT true.** Each of these is a real gap, and the first is asserted as a
+known gap in `tests/containment.test.mjs` so that the day it closes, a test fails
+and says so:
+
+- **A write outside the worktree is neither prevented nor detected.** Effect
+  inspection compares the worktree before and after; anything else is invisible.
+- **Workers are not OS-sandboxed.** They run as your user with your PATH.
+- **Network access is unrestricted.**
+- **A process that detaches into a new session survives the tree-kill.**
+- **The credential strip removes the *ambient* helper only.** A worker that
+  deliberately re-adds one — `git -c credential.helper=manager`, or `git config
+  --local` — is not stopped. SCH inspects the repository afterwards and fails the
+  run on `FORBIDDEN_GIT_EFFECT` for what left a trace there. That is detection
+  after the fact, not prevention.
+- **All projects share one worktree root**, so a worker that walks up two levels
+  can see other projects' worktrees.
+- **Therefore: fully unattended operation is still not supported.** This
+  milestone narrows the blast radius; it is not isolation. Run the queue where
+  you can see it, keep delivery approval on, and treat every task's path policy
+  as a policy rather than a boundary. **An authenticated control plane and a
+  supervisor daemon inherit every caveat above.**
 
 ## 🏭 Reusable workflows, roles, observability and governed external skills
 

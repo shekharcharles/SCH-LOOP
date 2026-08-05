@@ -51,6 +51,13 @@ for (const w of b.write ?? []) {
   mkdirSync(dirname(p), { recursive: true });
   w.append ? appendFileSync(p, w.content ?? "") : writeFileSync(p, w.content ?? "");
 }
+// A write OUTSIDE the worker's working directory. `write` joins onto cwd, which
+// on Windows swallows an absolute path rather than escaping — so proving the
+// "writes outside the worktree are invisible" gap needs its own key.
+for (const w of b.writeAbsolute ?? []) {
+  mkdirSync(dirname(w.path), { recursive: true });
+  writeFileSync(w.path, w.content ?? "");
+}
 for (const p of b.delete ?? []) { try { rmSync(abs(p), { force: true, recursive: true }); } catch {} }
 for (const r of b.rename ?? []) { try { renameSync(abs(r.from), abs(r.to)); } catch {} }
 for (const args of b.git ?? []) {
