@@ -26,7 +26,7 @@ import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
 import { ClaudeCliExecutor, buildEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
-import { getProject, loadState, saveState, auditLog, event as stateEvent } from "./state.mjs";
+import { getProject, loadState, mutateState, auditLog, event as stateEvent } from "./state.mjs";
 
 // ------------------------------------------------------------- vocabulary
 
@@ -1096,10 +1096,10 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     // SCH_HOME stays the operational authority for run REFERENCES. The runner
     // never changes task status — that is a human/controller decision.
     try {
-      const s = loadState(projectId);
-      s.runs = [{ run_id: runId, task_id: String(taskId), attempt, outcome, failure: failure?.code ?? null, at: record.ended_at, dir: runPath }, ...(s.runs ?? [])].slice(0, 100);
-      stateEvent(s, `run ${runId} for task #${taskId}: ${outcome}${failure ? ` (${failure.code})` : ""}`);
-      saveState(projectId, s);
+      mutateState(projectId, (s) => {
+        s.runs = [{ run_id: runId, task_id: String(taskId), attempt, outcome, failure: failure?.code ?? null, at: record.ended_at, dir: runPath }, ...(s.runs ?? [])].slice(0, 100);
+        stateEvent(s, `run ${runId} for task #${taskId}: ${outcome}${failure ? ` (${failure.code})` : ""}`);
+      });
     } catch { /* the run record on disk is the durable one */ }
     return record;
   };

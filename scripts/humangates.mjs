@@ -19,7 +19,7 @@
 // would be a second thing to lose.
 
 import { createHash } from "node:crypto";
-import { loadState, saveState, event as stateEvent, auditLog } from "./state.mjs";
+import { loadState, mutateState, event as stateEvent, auditLog } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
 
@@ -77,32 +77,35 @@ export function create(projectId, {
     return { ok: false, failure: { code: "QUESTION_UNREADABLE", message:
       "a human gate needs a question a person can answer from the dashboard alone: what is being decided, the options with what each one means, and your recommended default. Pointing at notes elsewhere is not a question." } };
 
-  const s = loadState(projectId);
-  s.humanGates = s.humanGates ?? [];
-  const proposal = { gate_type: gateType, question: q, options: options.map((o) => clamp(o, 500)).slice(0, 10), recommended: clamp(recommended, 500), subject };
-  const hash = proposalHash(proposal);
+  // Read and write under one lock: a gate decided against a state another
+  // writer had already moved is a decision about something that no longer
+  // exists in that form.
+  return mutateState(projectId, (s) => {
+      s.humanGates = s.humanGates ?? [];
+      const proposal = { gate_type: gateType, question: q, options: options.map((o) => clamp(o, 500)).slice(0, 10), recommended: clamp(recommended, 500), subject };
+      const hash = proposalHash(proposal);
 
-  // The same unanswered question, asked twice, is one question. Re-asking it
-  // would put two identical cards on the dashboard and make answering either of
-  // them look like it moved nothing.
-  const open = s.humanGates.find((g) => g.status === "PENDING" && g.proposal_hash === hash && String(g.task_id ?? "") === String(taskId ?? ""));
-  if (open) return { ok: true, gate: open, existing: true };
+      // The same unanswered question, asked twice, is one question. Re-asking it
+      // would put two identical cards on the dashboard and make answering either of
+      // them look like it moved nothing.
+      const open = s.humanGates.find((g) => g.status === "PENDING" && g.proposal_hash === hash && String(g.task_id ?? "") === String(taskId ?? ""));
+      if (open) return { ok: true, gate: open, existing: true };
 
-  const gate = {
-    schema_version: SCHEMA_VERSION, id: newId(), project_id: projectId,
-    task_id: taskId === null ? null : Number(taskId), run_id: runId, attempt,
-    phase_id: phaseId, state_version: stateVersion,
-    gate_type: gateType, ...proposal, proposal_hash: hash, diff_hash: diffHash,
-    status: "PENDING", decision: null, approver: null, conditions: null, decided_at: null,
-    requested_by: requestedBy, created_at: now(),
-    expires_at: new Date(Date.now() + ttlMs).toISOString(),
-    invalidated_reason: null,
-  };
-  s.humanGates = [gate, ...s.humanGates].slice(0, 300);
-  stateEvent(s, `human gate ${gate.id} [${gateType}]${taskId ? ` on task #${taskId}` : ""}: ${clamp(q, 100)}`);
-  saveState(projectId, s);
-  auditLog({ kind: "human-gate", project: projectId, task: taskId === null ? null : String(taskId), gate: gate.id, gate_type: gateType, event: "created" });
-  return { ok: true, gate };
+      const gate = {
+        schema_version: SCHEMA_VERSION, id: newId(), project_id: projectId,
+        task_id: taskId === null ? null : Number(taskId), run_id: runId, attempt,
+        phase_id: phaseId, state_version: stateVersion,
+        gate_type: gateType, ...proposal, proposal_hash: hash, diff_hash: diffHash,
+        status: "PENDING", decision: null, approver: null, conditions: null, decided_at: null,
+        requested_by: requestedBy, created_at: now(),
+        expires_at: new Date(Date.now() + ttlMs).toISOString(),
+        invalidated_reason: null,
+      };
+      s.humanGates = [gate, ...s.humanGates].slice(0, 300);
+      stateEvent(s, `human gate ${gate.id} [${gateType}]${taskId ? ` on task #${taskId}` : ""}: ${clamp(q, 100)}`);
+        auditLog({ kind: "human-gate", project: projectId, task: taskId === null ? null : String(taskId), gate: gate.id, gate_type: gateType, event: "created" });
+      return { ok: true, gate };
+  });
 }
 
 // ------------------------------------------------------------------ read
@@ -139,21 +142,24 @@ export function decide(projectId, gateId, { decision, approver, conditions = "",
     return { ok: false, failure: { code: "UNKNOWN_DECISION", message: `decision must be ${DECISIONS.join(" or ")}` } };
   if (!approver) return { ok: false, failure: { code: "APPROVER_REQUIRED", message: "a decision without an approver is not a decision" } };
 
-  const s = loadState(projectId);
-  const g = (s.humanGates ?? []).find((x) => x.id === gateId);
-  if (!g) return { ok: false, failure: { code: "GATE_NOT_FOUND", message: `no human gate ${gateId} in ${projectId}` } };
-  const live = statusOf(g);
-  if (live !== "PENDING")
-    return { ok: false, failure: { code: "GATE_NOT_PENDING", message: `human gate ${gateId} is ${live}, not PENDING` }, gate: { ...g, status: live } };
-  if (expectProposalHash && expectProposalHash !== g.proposal_hash)
-    return { ok: false, failure: { code: "PROPOSAL_CHANGED", message: `the proposal changed since you read it (${g.proposal_hash.slice(0, 12)} now)` } };
+  // Read and write under one lock: a gate decided against a state another
+  // writer had already moved is a decision about something that no longer
+  // exists in that form.
+  return mutateState(projectId, (s) => {
+      const g = (s.humanGates ?? []).find((x) => x.id === gateId);
+      if (!g) return { ok: false, failure: { code: "GATE_NOT_FOUND", message: `no human gate ${gateId} in ${projectId}` } };
+      const live = statusOf(g);
+      if (live !== "PENDING")
+        return { ok: false, failure: { code: "GATE_NOT_PENDING", message: `human gate ${gateId} is ${live}, not PENDING` }, gate: { ...g, status: live } };
+      if (expectProposalHash && expectProposalHash !== g.proposal_hash)
+        return { ok: false, failure: { code: "PROPOSAL_CHANGED", message: `the proposal changed since you read it (${g.proposal_hash.slice(0, 12)} now)` } };
 
-  g.status = decision; g.decision = decision; g.approver = String(approver);
-  g.conditions = clamp(conditions, 1000) || null; g.decided_at = now();
-  stateEvent(s, `human gate ${g.id} ${decision} by ${g.approver}${g.conditions ? ` (${clamp(g.conditions, 60)})` : ""}`);
-  saveState(projectId, s);
-  auditLog({ kind: "human-gate", project: projectId, task: g.task_id === null ? null : String(g.task_id), gate: g.id, gate_type: g.gate_type, event: "decided", decision, approver: g.approver });
-  return { ok: true, gate: g };
+      g.status = decision; g.decision = decision; g.approver = String(approver);
+      g.conditions = clamp(conditions, 1000) || null; g.decided_at = now();
+      stateEvent(s, `human gate ${g.id} ${decision} by ${g.approver}${g.conditions ? ` (${clamp(g.conditions, 60)})` : ""}`);
+        auditLog({ kind: "human-gate", project: projectId, task: g.task_id === null ? null : String(g.task_id), gate: g.id, gate_type: g.gate_type, event: "decided", decision, approver: g.approver });
+      return { ok: true, gate: g };
+  });
 }
 
 // -------------------------------------------------------------- invalidate
@@ -163,21 +169,24 @@ export function decide(projectId, gateId, { decision, approver, conditions = "",
 // invalidated, and the operator is asked again rather than being taken to have
 // agreed to something they never saw.
 export function revalidate(projectId, gateId, { proposal = null, diffHash = null, stateVersion = null }) {
-  const s = loadState(projectId);
-  const g = (s.humanGates ?? []).find((x) => x.id === gateId);
-  if (!g) return { ok: false, failure: { code: "GATE_NOT_FOUND", message: `no human gate ${gateId}` } };
-  const reasons = [];
-  if (proposal && proposalHash(proposal) !== g.proposal_hash) reasons.push("the proposal changed");
-  if (diffHash !== null && g.diff_hash !== null && diffHash !== g.diff_hash) reasons.push("the diff changed since it was approved");
-  if (stateVersion !== null && g.state_version !== null && Number(stateVersion) !== Number(g.state_version))
-    reasons.push(`the task moved (state version ${g.state_version} → ${stateVersion})`);
-  if (!reasons.length) return { ok: true, gate: { ...g, status: statusOf(g) }, invalidated: false };
+  // Read and write under one lock: a gate decided against a state another
+  // writer had already moved is a decision about something that no longer
+  // exists in that form.
+  return mutateState(projectId, (s) => {
+      const g = (s.humanGates ?? []).find((x) => x.id === gateId);
+      if (!g) return { ok: false, failure: { code: "GATE_NOT_FOUND", message: `no human gate ${gateId}` } };
+      const reasons = [];
+      if (proposal && proposalHash(proposal) !== g.proposal_hash) reasons.push("the proposal changed");
+      if (diffHash !== null && g.diff_hash !== null && diffHash !== g.diff_hash) reasons.push("the diff changed since it was approved");
+      if (stateVersion !== null && g.state_version !== null && Number(stateVersion) !== Number(g.state_version))
+        reasons.push(`the task moved (state version ${g.state_version} → ${stateVersion})`);
+      if (!reasons.length) return { ok: true, gate: { ...g, status: statusOf(g) }, invalidated: false };
 
-  g.status = "INVALIDATED"; g.invalidated_reason = reasons.join("; "); g.decided_at = g.decided_at ?? null;
-  stateEvent(s, `human gate ${g.id} INVALIDATED: ${g.invalidated_reason}`);
-  saveState(projectId, s);
-  auditLog({ kind: "human-gate", project: projectId, gate: g.id, event: "invalidated", reason: g.invalidated_reason });
-  return { ok: true, gate: g, invalidated: true, reasons };
+      g.status = "INVALIDATED"; g.invalidated_reason = reasons.join("; "); g.decided_at = g.decided_at ?? null;
+      stateEvent(s, `human gate ${g.id} INVALIDATED: ${g.invalidated_reason}`);
+        auditLog({ kind: "human-gate", project: projectId, gate: g.id, event: "invalidated", reason: g.invalidated_reason });
+      return { ok: true, gate: g, invalidated: true, reasons };
+  });
 }
 
 // ------------------------------------------------------------- projection
