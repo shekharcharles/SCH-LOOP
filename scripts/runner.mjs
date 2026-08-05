@@ -740,7 +740,7 @@ const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; 
 
 // Everything that must hold before a worker is started. Collects ALL failures
 // rather than stopping at the first — the operator should see the whole list.
-export function preflight({ projectId, taskId, env = process.env, executor = null, runId = null, allowDirtyPaths = null, policyOverride = null }) {
+export function preflight({ projectId, taskId, env = process.env, executor = null, runId = null, allowDirtyPaths = null, policyOverride = null, workRoot = null }) {
   const failures = [];
   const bad = (code, message) => failures.push({ code, message });
   const ctx = { project: null, task: null, state: null, repoRoot: null, wsDir: null, baselineRepo: null, policy: null, skills: null };
@@ -752,7 +752,13 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
   // repository + workspace
   const ws = WS.validateWorkspace({ projectId, repoPath: project.path });
   for (const p of ws.problems) bad(p.code, p.message);
-  ctx.repoRoot = ws.root; ctx.wsDir = ws.dir;
+  // wsDir is the DURABLE record and stays in the main repository: run evidence
+  // must outlive the disposable checkout that produced it. repoRoot is where
+  // work happens, and may be a worktree.
+  ctx.wsDir = ws.dir;
+  ctx.repoRoot = workRoot ? WS.repositoryRoot(workRoot) : ws.root;
+  if (workRoot && !ctx.repoRoot)
+    bad("WORKSPACE_INVALID", `workRoot ${workRoot} is not a git repository`);
 
   // execution mode
   const profile = SK.readProfile(project);
@@ -969,7 +975,7 @@ ${verification ? li(verification.results, (r) => `\`${r.display}\` -> **${r.resu
 
 // ---------------------------------------------------------------- the runner
 
-export async function runTask({ projectId, taskId, env = process.env, executor = null, attempt = 1, onEvent = null, allowDirtyPaths = null, roleConfig = null, workflow = null, policyOverride = null, planEnvelope = null, semanticHandler = null, expectEnvelope = null }) {
+export async function runTask({ projectId, taskId, env = process.env, executor = null, attempt = 1, onEvent = null, allowDirtyPaths = null, roleConfig = null, workflow = null, policyOverride = null, planEnvelope = null, semanticHandler = null, expectEnvelope = null, workRoot = null }) {
   const runId = newRunId();
   const identity = { run_id: runId, project_id: projectId, task_id: String(taskId), attempt, phase_id: semanticHandler ?? "implement", semantic: semanticHandler ?? null, started_at: now() };
   const started = Date.now();
@@ -981,7 +987,8 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
   let wsDir = null, repoRoot = null, runPath = null;
   try {
     const ws = WS.validateWorkspace({ projectId, repoPath: project?.path });
-    wsDir = ws.dir; repoRoot = ws.root;
+    wsDir = ws.dir;
+    repoRoot = workRoot ? WS.repositoryRoot(workRoot) : ws.root;
   } catch { /* preflight will report it */ }
   if (wsDir) { runPath = WS.runDir(wsDir, runId); mkdirSync(runPath, { recursive: true }); }
 
@@ -1027,7 +1034,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
 
   // ---- preflight
   ev("run.preflight_started");
-  const pre = preflight({ projectId, taskId, env, executor, runId, allowDirtyPaths, policyOverride });
+  const pre = preflight({ projectId, taskId, env, executor, runId, allowDirtyPaths, policyOverride, workRoot });
   const prep = pre.preparePromise ? await pre.preparePromise : { ok: true, problems: [] };
   const preFailures = [...pre.failures, ...(prep.ok ? [] : prep.problems)];
   write("preflight.json", { checked_at: now(), ok: preFailures.length === 0, failures: preFailures });

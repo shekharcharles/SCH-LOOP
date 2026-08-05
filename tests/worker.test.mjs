@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, EXEC, WS, SECRET_ENV, FAKE_CLAUDE } from "./helpers.mjs";
+import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, WS, SECRET_ENV, FAKE_CLAUDE } from "./helpers.mjs";
 
 const runsOf = (fx) => readdirSync(join(fx.repo, ".sch-loop", "runs"));
 const artifact = (rec, name) => readFileSync(join(rec.run_dir, name), "utf8");
@@ -315,5 +315,27 @@ test("handoff: the human-readable handoff separates reported, observed and verif
   assert.ok(md.includes("I changed everything perfectly"), "the claim is shown");
   assert.ok(md.indexOf("I changed everything perfectly") > md.indexOf("UNTRUSTED"), "and it is labelled");
   fx.done();
+});
+
+test("a run writes evidence to the main workspace while working in workRoot", async () => {
+  const fx = fixture("split-root");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const alt = join(fx.home, "alt-checkout");
+    git(fx.repo, "worktree", "add", alt, "-b", "sch/task-" + t, "HEAD");
+
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      write: [{ path: "src/app.js", content: "// edited in the alternate checkout\n" }],
+      handoff: { summary: "done", files_reported_changed: ["src/app.js"] },
+    }), { workRoot: alt });
+
+    assert.equal(rec.outcome, "VERIFIED", JSON.stringify(rec.failure));
+    assert.ok(existsSync(join(fx.repo, ".sch-loop", "runs", rec.run_id)),
+      "evidence must land in the MAIN repository workspace, not the alternate checkout");
+    assert.equal(readFileSync(join(alt, "src", "app.js"), "utf8"), "// edited in the alternate checkout\n");
+    assert.equal(readFileSync(join(fx.repo, "src", "app.js"), "utf8"), "// app\n",
+      "the main working tree must be untouched");
+  } finally { fx.done(); }
 });
 
