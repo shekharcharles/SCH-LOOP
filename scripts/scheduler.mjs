@@ -349,8 +349,12 @@ export function evaluateCompletion(projectId, { state = null, wsDir = null } = {
 export async function runQueue({
   projectId, maxTasks = null, maxDurationMs = null, phase = null, stopAfterTask = null,
   dryRun = false, env = process.env, executor = null, onEvent = null, schedulerId = null,
+  maxParallel = 1,
 }) {
   const started = Date.now();
+  // How many tasks may be IN FLIGHT at once. One by default: parallelism is a
+  // decision an operator makes per run, not a behaviour that changes under them.
+  const parallel = Math.max(1, Number(maxParallel) || 1);
   const id = schedulerId ?? newSchedulerId();
   const project = getProject(projectId);
   if (!project) return { ok: false, scheduler_id: id, stop_reason: "POLICY_VIOLATION", failure: { code: "TASK_INELIGIBLE", message: `no registered project "${projectId}"` }, tasks: [] };
@@ -408,6 +412,7 @@ export async function runQueue({
     state: "RUNNING", stop_reason: null, failure: null, pid: process.pid,
     max_tasks: limitTasks, max_duration_ms: limitMs, phase_filter: phase,
     stop_after_task: stopAfterTask, dry_run: dryRun,
+    max_parallel: parallel,
     tasks: [], tasks_delivered: 0, consecutive_failures: 0, total_attempts: 0,
     started_at: now(), ended_at: null, duration_ms: 0,
     current_task: null, current_phase: null, current_attempt: null,
@@ -430,6 +435,34 @@ export async function runQueue({
   emit("scheduler.lease_acquired", { expires_at: lease.lease.expires_at, recovered_stale: lease.recovered?.scheduler_id ?? null });
   if (lease.recovered) emit("scheduler.started", { recovered_from: lease.recovered.scheduler_id, note: "a previous scheduler's lease was stale and has been recovered" });
   else emit("scheduler.started", {});
+
+  // Tasks currently running, by task id. Never larger than `parallel`.
+  const inFlight = new Map();
+
+  // One more ready task to start, chosen from the state as it is RIGHT NOW.
+  // It does NOT claim: `runOne` claims, synchronously, before it yields. So by
+  // the time this is called again the previous task is already CLAIMED - an
+  // OWNING state - and everything overlapping its paths has stopped being
+  // ready. That is what keeps two tasks off the same files, and it only works
+  // because selection is re-read per task instead of batched from one snapshot.
+  const pickAnother = () => {
+    const st = loadState(projectId);
+    const pick = GRAPH.selectReady(st, { canonicalState: TR.canonicalState, phase });
+    return (pick.ready ?? []).find((c) => !inFlight.has(c.id)) ?? null;
+  };
+
+  // Every stop condition must let the running workers finish and record what
+  // they did. Abandoning a live run leaves a task RUNNING with no process, and
+  // the next queue pass has to recover it as a stale lease.
+  const finishDraining = async (reason, failure = null) => {
+    while (inFlight.size) {
+      const r = await Promise.race(inFlight.values());
+      inFlight.delete(r.task.id);
+      if (r.outcome) { record.tasks.push(r.outcome); record.total_attempts += r.outcome.attempts; }
+    }
+    save();
+    return finish(reason, failure);
+  };
 
   const finish = (reason, failure = null) => {
     record.state = "STOPPED"; record.stop_reason = reason; record.failure = failure;
@@ -495,7 +528,10 @@ export async function runQueue({
 
       // ---- select exactly one
       const pick = GRAPH.selectReady(refreshed, { canonicalState: TR.canonicalState, phase });
-      if (!pick.selected) {
+      // Nothing new to start. If workers are still running, fall through and wait
+      // for them: declaring the queue finished here would abandon a live run and
+      // leave its task RUNNING with no process behind it.
+      if (!pick.selected && !inFlight.size) {
         const why = diagnoseNoReady(refreshed, pick, validation);
         emit("scheduler.stopped", { no_ready_kind: why.kind, detail: why.detail });
         if (why.kind === "PROJECT_COMPLETE") {
@@ -508,109 +544,139 @@ export async function runQueue({
         return finish("NO_READY_TASK", { code: why.kind, message: why.detail });
       }
 
-      const task = pick.selected;
-      emit("scheduler.task_ready", { title: clamp(task.title, 120), priority: task.priority, phase: task.phase }, { taskId: task.id });
+      if (pick.selected) {
+        const task = pick.selected;
+        emit("scheduler.task_ready", { title: clamp(task.title, 120), priority: task.priority, phase: task.phase }, { taskId: task.id });
 
-      if (dryRun) {
-        record.tasks.push({ task_id: task.id, title: task.title, outcome: "DRY_RUN", would_run: true });
-        return finish("DRY_RUN");
+        if (dryRun) {
+          record.tasks.push({ task_id: task.id, title: task.title, outcome: "DRY_RUN", would_run: true });
+          return finish("DRY_RUN");
+        }
+
+        // ---- claim it, against the version we just read. Another process that
+        // moved this task between the read and the claim wins, and we go round again.
+        // A task whose attempt is only PARKED (waiting on a person, or interrupted)
+        // is re-claimed to continue that attempt, not to start a new one. The
+        // difference matters: continuing skips the worker, restarting runs a second
+        // one over a working tree that already holds the first one's change.
+        // One task, start to finish: claim, contain, run, dispose. Returns its
+        // outcome instead of ending the queue, because with several tasks in
+        // flight the queue-level decision belongs to the drain loop below.
+        const runOne = async (task) => {
+          const att = openAttempt(wsDir, task.id);
+          const parked = att.resume;
+          // Has this task ever run before? `resume` only answers "is the last attempt
+          // still open"; an attempt that COMPLETED and failed leaves a record and a
+          // checkout full of uncommitted work, and answers `false`. A first claim has
+          // no attempt directory at all, so `attempt` is 1 and this stays false.
+          const ranBefore = att.resume || att.attempt > 1;
+          const claim = TR.transition(projectId, task.id, {
+            to: "CLAIMED", actor: "scheduler", reason: `scheduler ${id} ${parked ? "re-claimed to continue its open attempt" : "claimed this task"}`,
+            expectVersion: task.stateVersion ?? 0, causation: lastEventId,
+          });
+          if (!claim.ok) {
+            emit("scheduler.task_blocked", { failure: claim.failure.code, message: clamp(claim.failure.message, 300) }, { taskId: task.id });
+            // Someone else moved it between the read and the claim; re-select.
+            if (claim.failure.code === "STATE_VERSION_CONFLICT") return { reselect: true };
+            return { fatal: claim.failure };
+          }
+          emit("scheduler.task_claimed", { state_version: claim.state_version }, { taskId: task.id });
+
+          // A worker never runs in the operator's working tree. One worktree per
+          // TASK — every attempt reuses it, so a retry inherits the previous
+          // attempt's uncommitted work exactly as it did before.
+          //
+          // Three ways a task can fail to get a contained place to run. Every one of
+          // them is a question for a person: there is no second-best directory to
+          // run the worker in, and running it somewhere else is the whole thing this
+          // refuses to do.
+          const noWorktree = (code, message) => {
+            emit("scheduler.task_blocked", { failure: code, message: clamp(message, 300) }, { taskId: task.id });
+            TR.transition(projectId, task.id, { to: "NEEDS_DECISION", actor: "scheduler", reason: clamp(message, 400) });
+            return { blocked: { code, message } };
+          };
+
+          // ANY earlier attempt left its change in that checkout, uncommitted. If the
+          // checkout is gone — a reboot, a temp reaper, someone tidying scratch space
+          // — `ensureWorktree` would find the branch and check it out AT ITS LAST
+          // COMMIT, and every phase downstream would then grade a change that no
+          // longer exists and report the work as absent rather than lost.
+          //
+          // Not just PARKED attempts: an attempt that ran to a failure is closed, so
+          // `resume` is false, and before M6 that work sat in the main tree and
+          // survived. Requeueing such a task with the checkout cleared in between is
+          // the same silent loss, reached by a shorter path.
+          if (ranBefore && !WT.worktreeState({ projectId, taskId: task.id, repoRoot }).exists)
+            return noWorktree("WORKTREE_MISSING",
+              `the worktree for task #${task.id} is gone but attempt ${att.resume ? att.attempt : att.attempt - 1} already ran in it — that attempt's uncommitted work cannot be reconstructed, and SCH will not fabricate a baseline by checking the branch out again`);
+
+          const base = (WS.git(repoRoot, "rev-parse", "HEAD") ?? "").trim();
+          if (!base)
+            return noWorktree("WORKTREE_CREATE_FAILED",
+              `${repoRoot} has no commit at HEAD — an unborn branch, or git could not be run there. A task worktree is branched from HEAD, so there is nothing to branch from.`);
+
+          const wt = WT.ensureWorktree({ projectId, taskId: task.id, repoRoot, base });
+          if (!wt.ok) return noWorktree(wt.code, wt.message);
+          if (wt.created) emit("scheduler.worktree_created", { path: wt.path, branch: wt.branch, base }, { taskId: task.id });
+          // Only on creation. A resumed worktree already carries its dependencies'
+          // work, and merging again would add an empty merge on every retry.
+          if (wt.created && (task.deps ?? []).length) {
+            const fan = WT.mergeDependencies({ worktreePath: wt.path, repoRoot, deps: task.deps });
+            if (!fan.ok) return noWorktree(fan.code, fan.message);
+            if (fan.merged.length)
+              emit("scheduler.dependencies_merged", { merged: fan.merged }, { taskId: task.id });
+          }
+
+          const outcome = await executeTask({
+            projectId, taskId: task.id, wsDir, repoRoot, workRoot: wt.path, project, schedulerId: id, dir,
+            env, executor, emit, db, budgets, record,
+          });
+
+          // The checkout is disposable; the BRANCH is the record and survives it. It
+          // is kept on FAILED on purpose — a failed task's tree is the evidence
+          // someone has to look at.
+          if (outcome.state === "DELIVERED" || outcome.state === "CANCELLED") {
+            const rm = WT.removeWorktree({ projectId, taskId: task.id, repoRoot });
+            emit("scheduler.worktree_removed", { removed: rm.removed, path: rm.path ?? wt.path }, { taskId: task.id });
+            // The pack is disposable in exactly the same way, and kept on FAILED
+            // for the same reason the worktree is: it is part of what a person
+            // examines to see what the worker was actually given.
+            const rmp = PACK.removePack({ projectId, taskId: task.id });
+            emit("scheduler.pack_removed", { removed: rmp.removed, path: rmp.path }, { taskId: task.id });
+          }
+
+          return { outcome };
+        };
+
+        // Start this one, then keep CLAIMING while there is capacity. Claiming is
+        // sequential and re-reads readiness each time on purpose: a claim moves a
+        // task to CLAIMED, an OWNING state, which makes every path-overlapping
+        // task un-ready. Claiming a batch from one snapshot would defeat exactly
+        // that and let two tasks own the same files.
+        inFlight.set(task.id, runOne(task).then((r) => ({ task, ...r })));
+        while (inFlight.size < parallel) {
+          const more = pickAnother();
+          if (!more) break;
+          inFlight.set(more.id, runOne(more).then((r) => ({ task: more, ...r })));
+        }
       }
-
-      // ---- claim it, against the version we just read. Another process that
-      // moved this task between the read and the claim wins, and we go round again.
-      // A task whose attempt is only PARKED (waiting on a person, or interrupted)
-      // is re-claimed to continue that attempt, not to start a new one. The
-      // difference matters: continuing skips the worker, restarting runs a second
-      // one over a working tree that already holds the first one's change.
-      const att = openAttempt(wsDir, task.id);
-      const parked = att.resume;
-      // Has this task ever run before? `resume` only answers "is the last attempt
-      // still open"; an attempt that COMPLETED and failed leaves a record and a
-      // checkout full of uncommitted work, and answers `false`. A first claim has
-      // no attempt directory at all, so `attempt` is 1 and this stays false.
-      const ranBefore = att.resume || att.attempt > 1;
-      const claim = TR.transition(projectId, task.id, {
-        to: "CLAIMED", actor: "scheduler", reason: `scheduler ${id} ${parked ? "re-claimed to continue its open attempt" : "claimed this task"}`,
-        expectVersion: task.stateVersion ?? 0, causation: lastEventId,
-      });
-      if (!claim.ok) {
-        emit("scheduler.task_blocked", { failure: claim.failure.code, message: clamp(claim.failure.message, 300) }, { taskId: task.id });
-        if (claim.failure.code === "STATE_VERSION_CONFLICT") continue;   // someone else moved it; re-select
-        return finish("POLICY_VIOLATION", claim.failure);
-      }
-      emit("scheduler.task_claimed", { state_version: claim.state_version }, { taskId: task.id });
-
-      // A worker never runs in the operator's working tree. One worktree per
-      // TASK — every attempt reuses it, so a retry inherits the previous
-      // attempt's uncommitted work exactly as it did before.
-      //
-      // Three ways a task can fail to get a contained place to run. Every one of
-      // them is a question for a person: there is no second-best directory to
-      // run the worker in, and running it somewhere else is the whole thing this
-      // refuses to do.
-      const noWorktree = (code, message) => {
-        emit("scheduler.task_blocked", { failure: code, message: clamp(message, 300) }, { taskId: task.id });
-        TR.transition(projectId, task.id, { to: "NEEDS_DECISION", actor: "scheduler", reason: clamp(message, 400) });
-        return finish("NEEDS_DECISION", { code, message });
-      };
-
-      // ANY earlier attempt left its change in that checkout, uncommitted. If the
-      // checkout is gone — a reboot, a temp reaper, someone tidying scratch space
-      // — `ensureWorktree` would find the branch and check it out AT ITS LAST
-      // COMMIT, and every phase downstream would then grade a change that no
-      // longer exists and report the work as absent rather than lost.
-      //
-      // Not just PARKED attempts: an attempt that ran to a failure is closed, so
-      // `resume` is false, and before M6 that work sat in the main tree and
-      // survived. Requeueing such a task with the checkout cleared in between is
-      // the same silent loss, reached by a shorter path.
-      if (ranBefore && !WT.worktreeState({ projectId, taskId: task.id, repoRoot }).exists)
-        return noWorktree("WORKTREE_MISSING",
-          `the worktree for task #${task.id} is gone but attempt ${att.resume ? att.attempt : att.attempt - 1} already ran in it — that attempt's uncommitted work cannot be reconstructed, and SCH will not fabricate a baseline by checking the branch out again`);
-
-      const base = (WS.git(repoRoot, "rev-parse", "HEAD") ?? "").trim();
-      if (!base)
-        return noWorktree("WORKTREE_CREATE_FAILED",
-          `${repoRoot} has no commit at HEAD — an unborn branch, or git could not be run there. A task worktree is branched from HEAD, so there is nothing to branch from.`);
-
-      const wt = WT.ensureWorktree({ projectId, taskId: task.id, repoRoot, base });
-      if (!wt.ok) return noWorktree(wt.code, wt.message);
-      if (wt.created) emit("scheduler.worktree_created", { path: wt.path, branch: wt.branch, base }, { taskId: task.id });
-      // Only on creation. A resumed worktree already carries its dependencies'
-      // work, and merging again would add an empty merge on every retry.
-      if (wt.created && (task.deps ?? []).length) {
-        const fan = WT.mergeDependencies({ worktreePath: wt.path, repoRoot, deps: task.deps });
-        if (!fan.ok) return noWorktree(fan.code, fan.message);
-        if (fan.merged.length)
-          emit("scheduler.dependencies_merged", { merged: fan.merged }, { taskId: task.id });
-      }
-
-      const outcome = await executeTask({
-        projectId, taskId: task.id, wsDir, repoRoot, workRoot: wt.path, project, schedulerId: id, dir,
-        env, executor, emit, db, budgets, record,
-      });
-
-      // The checkout is disposable; the BRANCH is the record and survives it. It
-      // is kept on FAILED on purpose — a failed task's tree is the evidence
-      // someone has to look at.
-      if (outcome.state === "DELIVERED" || outcome.state === "CANCELLED") {
-        const rm = WT.removeWorktree({ projectId, taskId: task.id, repoRoot });
-        emit("scheduler.worktree_removed", { removed: rm.removed, path: rm.path ?? wt.path }, { taskId: task.id });
-        // The pack is disposable in exactly the same way, and kept on FAILED
-        // for the same reason the worktree is: it is part of what a person
-        // examines to see what the worker was actually given.
-        const rmp = PACK.removePack({ projectId, taskId: task.id });
-        emit("scheduler.pack_removed", { removed: rmp.removed, path: rmp.path }, { taskId: task.id });
-      }
-
+      const ran = await Promise.race(inFlight.values());
+      inFlight.delete(ran.task.id);
+      if (ran.reselect) continue;
+      if (ran.fatal) return finishDraining("POLICY_VIOLATION", ran.fatal);
+      if (ran.blocked) return finishDraining("NEEDS_DECISION", ran.blocked);
+      const outcome = ran.outcome;
+      // The task that SETTLED, which under a parallel bound is not necessarily
+      // the one claimed at the top of this pass.
+      const done = ran.task;
       record.tasks.push(outcome);
       record.total_attempts += outcome.attempts;
       save();
 
       if (outcome.state === "DELIVERED") {
         record.tasks_delivered += 1; record.consecutive_failures = 0; save();
-        emit("scheduler.task_delivered", { commit: outcome.commit, attempts: outcome.attempts }, { taskId: task.id });
-        if (stopAfterTask !== null && Number(stopAfterTask) === Number(task.id)) return finish("STOP_AFTER_TASK");
+        emit("scheduler.task_delivered", { commit: outcome.commit, attempts: outcome.attempts }, { taskId: done.id });
+        if (stopAfterTask !== null && Number(stopAfterTask) === Number(done.id)) return finishDraining("STOP_AFTER_TASK");
         continue;                                    // and only now is the next task selectable
       }
 
@@ -621,15 +687,15 @@ export async function runQueue({
         record.consecutive_failures = 0;
         record.tasks_completed_without_delivery = (record.tasks_completed_without_delivery ?? 0) + 1;
         save();
-        if (stopAfterTask !== null && Number(stopAfterTask) === Number(task.id)) return finish("STOP_AFTER_TASK");
+        if (stopAfterTask !== null && Number(stopAfterTask) === Number(done.id)) return finishDraining("STOP_AFTER_TASK");
         continue;
       }
 
       record.consecutive_failures += 1; save();
-      if (outcome.state === "NEEDS_DECISION") return finish("NEEDS_DECISION", outcome.failure);
-      if (outcome.state === "BLOCKED") return finish("BLOCKED", outcome.failure);
-      if (outcome.state === "CANCELLED") return finish("CANCELLED", outcome.failure);
-      return finish("FAILED", outcome.failure);
+      if (outcome.state === "NEEDS_DECISION") return finishDraining("NEEDS_DECISION", outcome.failure);
+      if (outcome.state === "BLOCKED") return finishDraining("BLOCKED", outcome.failure);
+      if (outcome.state === "CANCELLED") return finishDraining("CANCELLED", outcome.failure);
+      return finishDraining("FAILED", outcome.failure);
     }
   } catch (e) {
     return finish("FAILED", { code: "POLICY_VIOLATION", message: `unexpected scheduler failure: ${e.message}` });
