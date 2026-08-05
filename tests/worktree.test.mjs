@@ -110,19 +110,30 @@ test("worktreeState reports absence without throwing", () => {
 // --------------------------------------------- branch namespace matching
 
 // Direct calls, not through state.mjs: a rename of branchMatchesNamespace
-// must fail HERE, not just break Task 6 silently. Each case isolates ONE
-// guard — deleting any single guard from the function must fail one of these.
+// must fail HERE, not just break Task 6 silently. Each row is picked so that
+// disabling the ONE guard it targets (and only that one) flips it from false
+// to true — verified by hand, see task-5-report.md. A row rejected for a
+// reason unrelated to its target guard (e.g. by a simple prefix mismatch)
+// proves nothing about that guard, so it is not used as evidence here.
 test("branchMatchesNamespace: every refusal guard is independently load-bearing", () => {
   const ns = { pattern: "sch/task-*" };
   for (const [b, want] of [
     ["sch/task-12", true],
-    ["sch/task-1/x", false],     // the "*" must never match across "/"
+    ["sch/task-1/x", false],     // "*" must never match across "/" ([^/]* vs .*)
     ["sch/task-..x", false],     // traversal — [^/]* alone WOULD match "..x"
     ["sch/task-1.lock", false],  // a git lockfile name
-    ["sch/task-1/", false],      // trailing slash
-    ["-x", false],               // charset: must not start with "-"
-    ["main", false],
+    ["main", false],             // sanity: an unrelated branch, not a guard pin
   ]) assert.equal(WT.branchMatchesNamespace(ns, b), want, b);
+
+  // "sch/task-*"'s own wildcard shape already forbids a trailing "/" and
+  // already requires an alnum-starting match, so no branch reaches THOSE two
+  // guards through it — a pattern shaped so the guard, not the wildcard, is
+  // what's left standing is required for each.
+  assert.equal(WT.branchMatchesNamespace({ pattern: "sch/task-1/" }, "sch/task-1/"), false,
+    "endsWith('/') — a literal (non-wildcard) pattern ending in '/' would otherwise match its own trailing slash");
+  assert.equal(WT.branchMatchesNamespace({ pattern: "*" }, "-x"), false,
+    "the leading-alnum/charset regex — a bare '*' pattern would otherwise accept any non-slash string");
+
   assert.equal(WT.branchMatchesNamespace(null, "sch/task-1"), false, "no record at all");
   assert.equal(WT.branchMatchesNamespace({ pattern: "" }, "sch/task-1"), false, "empty pattern");
 });
