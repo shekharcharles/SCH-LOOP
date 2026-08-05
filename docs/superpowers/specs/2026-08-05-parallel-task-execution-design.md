@@ -42,11 +42,27 @@ Inside one process, being single-threaded does not save this pattern: any `await
 between the load and the save lets a second run load the same state and write
 after the first, silently erasing it.
 
-Across processes it is worse, and it is **already broken today**: a dashboard
-POST and a running scheduler are two processes mutating one file with no lock.
+A lock primitive already exists — `withFileLock` at `state.mjs:131`, whose own
+comment says it fixes read-modify-write races for "parallel waves + the
+dashboard". **It is applied in exactly one place**: `state.mjs:2277`, wrapping the
+CLI command dispatcher, and it locks the *registry* file, not the per-project
+`state.json`.
+
+Every other mutator — `runner.mjs`, `scheduler.mjs`, `transitions.mjs`,
+`humangates.mjs`, `dashboard.mjs` — imports `loadState`/`saveState` directly and
+takes no lock at all. The race is therefore **live today at `--max-parallel 1`**:
+a dashboard POST during a scheduler run can silently erase a task update.
 Parallel execution does not introduce this bug, it makes it routine.
 
-**Decision.** Add `mutateState(projectId, fn)` to `state.mjs`:
+A second weakness: after `LOCK_WAIT` (5s) `withFileLock` gives up waiting and
+**proceeds without the lock**, commented "availability > perfection". For a CLI
+command that is a defensible trade. For N concurrent workers mutating task state
+it silently reintroduces last-write-wins under exactly the contention that makes
+the lock necessary. State mutation must instead fail closed with a typed error
+and let the caller decide.
+
+**Decision.** Add `mutateState(projectId, fn)` to `state.mjs`, built on the
+existing lock but pointed at the right file and failing closed:
 
 1. acquire a per-project lock file (same staleness and pid-liveness discipline as
    the existing task lease),
