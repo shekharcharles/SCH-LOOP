@@ -121,8 +121,9 @@ edit configuration — `schedule`, `loop`, `init`, `update-config`,
 built-in is denied too. Two residuals: a denied built-in is still LISTED to the
 worker (denial blocks invocation, not listing), and a skill needing its own
 scripts cannot be packed — only documents are carried.
-But **workers are still not OS-sandboxed**: a write outside the worktree
-is neither prevented nor detected, the network is unrestricted, a detached
+But **workers are still not OS-sandboxed**: a write outside the worktree is
+not prevented - though a write into the main repository or another task's
+checkout is now DETECTED and fails the run as `OUTSIDE_WORKTREE_WRITE`, the network is unrestricted, a detached
 process survives the tree-kill, the credential strip only removes the *ambient*
 helper, and all projects share one worktree root. So fully unattended operation
 is still not supported — the blast radius is narrower, it is not isolation. See
