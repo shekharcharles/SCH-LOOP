@@ -129,7 +129,7 @@ function writeJson(path, obj) {
 // each other last-write-wins. mkdir is atomic on every OS, so we use a lock dir:
 // acquire → read → mutate → write → release. Stale locks (crashed holder) expire.
 const LOCK_TTL = 10000, LOCK_WAIT = 5000;
-function withFileLock(path, fn) {
+function withFileLock(path, fn, { failClosed = false } = {}) {
   const lock = path + ".lock";
   const start = Date.now();
   for (;;) {
@@ -138,7 +138,15 @@ function withFileLock(path, fn) {
       let age = Infinity;
       try { age = Date.now() - statSync(lock).mtimeMs; } catch { break; }
       if (age > LOCK_TTL) { try { rmSync(lock, { recursive: true, force: true }); } catch {} continue; }
-      if (Date.now() - start > LOCK_WAIT) break;           // give up waiting; proceed (availability > perfection)
+      if (Date.now() - start > LOCK_WAIT) {
+        // A CLI command prefers availability: proceed, accept last-write-wins.
+        // A state mutation must not - that is precisely the erased update this
+        // lock exists to prevent, and it shows up only under the contention
+        // that makes it likely.
+        if (failClosed)
+          throw Object.assign(new Error(`could not lock ${path} within ${LOCK_WAIT}ms - another writer is holding it`), { code: "STATE_LOCK_TIMEOUT" });
+        break;
+      }
       // busy-wait briefly (sync API by design — these are millisecond-scale ops)
       const until = Date.now() + 25; while (Date.now() < until);
     }
@@ -161,6 +169,27 @@ export const saveRegistry = (r) => writeJson(registryPath(), r);
 export const getProject = (id) => loadRegistry().projects.find((p) => p.id === id) || null;
 export const loadState = (id) => readJson(statePath(id), STATE_EMPTY);
 export const saveState = (id, s) => writeJson(statePath(id), s);
+
+// The ONLY safe way to change project state. `load -> mutate -> save` is a
+// read-modify-write, and every `await` between the read and the write is a
+// window where another writer's change is silently erased. `withFileLock`
+// already existed for exactly this reason, but it was applied to a single call
+// site on the REGISTRY path, wrapping the CLI dispatcher; project state - the
+// thing parallel workers actually mutate - had no lock at all.
+//
+// `fn` MUST be synchronous. An async fn returns a promise, the lock would be
+// released before the mutation finished, and the mutual exclusion this function
+// exists to provide would be gone.
+export function mutateState(projectId, fn) {
+  return withFileLock(statePath(projectId), () => {
+    const s = loadState(projectId);
+    const result = fn(s);
+    if (result && typeof result.then === "function")
+      throw Object.assign(new Error("mutateState requires a synchronous mutation - an async one releases the lock before the write lands"), { code: "STATE_MUTATION_ASYNC" });
+    saveState(projectId, s);
+    return result;
+  }, { failClosed: true });
+}
 
 export function event(state, msg) {
   state.events.unshift({ id: ++state.seq.event, ts: now(), msg });

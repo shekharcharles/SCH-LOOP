@@ -168,3 +168,81 @@ test("delivery-branch-namespace --set rejects a pattern with no usable shape", (
         /not a usable branch namespace/, bad);
   } finally { fx.done(); }
 });
+
+test("a dependent worktree contains its delivered dependency's work", () => {
+  const fx = fixture("wt-fanin");
+  try {
+    // Task 1's work, on task 1's branch, exactly where delivery leaves it.
+    git(fx.repo, "checkout", "-q", "-b", WT.branchNameFor(1));
+    writeFileSync(join(fx.repo, "src", "from-dep.js"), "// dep\n");
+    git(fx.repo, "add", "--", "src/from-dep.js");
+    git(fx.repo, "commit", "-q", "-m", "task 1 work");
+    git(fx.repo, "checkout", "-q", "main");
+
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const wt = WT.ensureWorktree({ projectId: fx.P, taskId: 2, repoRoot: fx.repo, base });
+    assert.equal(wt.ok, true, wt.message);
+
+    const r = WT.mergeDependencies({ worktreePath: wt.path, repoRoot: fx.repo, deps: [1] });
+    assert.equal(r.ok, true, r.message);
+    assert.equal(r.merged.length, 1);
+    assert.equal(r.merged[0].task_id, 1);
+    assert.ok(existsSync(join(wt.path, "src", "from-dep.js")),
+      "a task that depends on task 1 must start from a tree containing task 1's change");
+  } finally { fx.done(); }
+});
+
+test("a conflicting dependency merge is refused before any worker starts", () => {
+  const fx = fixture("wt-fanin-conflict");
+  try {
+    git(fx.repo, "checkout", "-q", "-b", WT.branchNameFor(1));
+    writeFileSync(join(fx.repo, "src", "app.js"), "// dependency version\n");
+    git(fx.repo, "add", "--", "src/app.js");
+    git(fx.repo, "commit", "-q", "-m", "task 1 rewrites app.js");
+    git(fx.repo, "checkout", "-q", "main");
+    writeFileSync(join(fx.repo, "src", "app.js"), "// main version\n");
+    git(fx.repo, "add", "--", "src/app.js");
+    git(fx.repo, "commit", "-q", "-m", "main rewrites app.js");
+
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const wt = WT.ensureWorktree({ projectId: fx.P, taskId: 2, repoRoot: fx.repo, base });
+    const r = WT.mergeDependencies({ worktreePath: wt.path, repoRoot: fx.repo, deps: [1] });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "DEPENDENCY_MERGE_CONFLICT");
+    assert.equal(r.task_id, 1);
+    assert.ok(!(git(wt.path, "status", "--porcelain") ?? "").includes("UU"),
+      "a refused merge must be aborted, not left conflicted");
+  } finally { fx.done(); }
+});
+
+test("two dependencies merge in task-id order, deterministically", () => {
+  const fx = fixture("wt-fanin-order");
+  try {
+    for (const id of [2, 1]) {                    // created out of order on purpose
+      git(fx.repo, "checkout", "-q", "-b", WT.branchNameFor(id), "main");
+      writeFileSync(join(fx.repo, "src", `dep-${id}.js`), `// ${id}\n`);
+      git(fx.repo, "add", "--", `src/dep-${id}.js`);
+      git(fx.repo, "commit", "-q", "-m", `task ${id}`);
+      git(fx.repo, "checkout", "-q", "main");
+    }
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const wt = WT.ensureWorktree({ projectId: fx.P, taskId: 3, repoRoot: fx.repo, base });
+    const r = WT.mergeDependencies({ worktreePath: wt.path, repoRoot: fx.repo, deps: [2, 1] });
+    assert.equal(r.ok, true, r.message);
+    assert.deepEqual(r.merged.map((m) => m.task_id), [1, 2], "ascending id, not argument order");
+    assert.ok(existsSync(join(wt.path, "src", "dep-1.js")));
+    assert.ok(existsSync(join(wt.path, "src", "dep-2.js")));
+  } finally { fx.done(); }
+});
+
+test("a dependency whose branch is gone is a typed failure, not a silent skip", () => {
+  const fx = fixture("wt-fanin-missing");
+  try {
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const wt = WT.ensureWorktree({ projectId: fx.P, taskId: 2, repoRoot: fx.repo, base });
+    const r = WT.mergeDependencies({ worktreePath: wt.path, repoRoot: fx.repo, deps: [1] });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, "DEPENDENCY_BRANCH_MISSING",
+      "carrying on without a dependency's work is how a task silently builds on nothing");
+  } finally { fx.done(); }
+});

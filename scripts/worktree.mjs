@@ -134,3 +134,33 @@ export function removeWorktree({ projectId, taskId, repoRoot, root = worktreesRo
   }
   return { ok: !existsSync(path), removed: !existsSync(path), path, git_said: r.ok ? null : said(r) || null };
 }
+
+// A task's dependencies are not just a scheduling order - they are code the task
+// is expected to build on. `deps` gated readiness and nothing else, so a task
+// whose dependency had already delivered started from a tree that did not
+// contain that dependency's work.
+//
+// Merging happens HERE, at creation, before any worker starts: a conflict then
+// costs no model time and no partial work. Ascending task id, always - merge
+// order changes the resulting tree, and a base that depends on argument order is
+// not reproducible.
+export function mergeDependencies({ worktreePath, repoRoot, deps = [] }) {
+  const merged = [];
+  for (const id of [...deps].map(Number).sort((a, b) => a - b)) {
+    const branch = branchNameFor(id);
+    const commit = gt(repoRoot, "rev-parse", "--verify", "--quiet", branch);
+    if (!commit)
+      return { ok: false, code: "DEPENDENCY_BRANCH_MISSING", task_id: id, branch,
+        message: `task #${id} is complete but its branch "${branch}" does not exist - its work cannot be merged, and continuing would build on a tree that never contained it` };
+
+    const r = gitGuarded(worktreePath, "merge", "--no-ff", "-m", `sch: integrate task #${id}`, branch);
+    if (!r.ok) {
+      // Leave nothing half-merged: the worktree is evidence, not a workspace.
+      gitGuarded(worktreePath, "merge", "--abort");
+      return { ok: false, code: "DEPENDENCY_MERGE_CONFLICT", task_id: id, branch,
+        message: `task #${id}'s branch "${branch}" does not merge cleanly into this task's base - resolve it and re-queue; retrying produces the same conflict` };
+    }
+    merged.push({ task_id: id, branch, commit });
+  }
+  return { ok: true, merged };
+}
