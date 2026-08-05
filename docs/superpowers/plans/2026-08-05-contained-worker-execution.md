@@ -744,7 +744,17 @@ git commit -m "feat(delivery): authorize a branch namespace once per project, no
 
 **Files:**
 - Modify: `scripts/delivery.mjs:288-290` (accept `workRoot`), `scripts/delivery.mjs:721-724` (the conditional stop), `scripts/delivery.mjs:753-756` (first-push refspec)
+- Modify: `scripts/scheduler.mjs:1255` (`CAND.computeCandidate`), `scripts/scheduler.mjs:1326`, `:1346`, `:1417` (`DEL.deliverRun`) — thread `workRoot` from the task's worktree
 - Test: `tests/delivery-remote.test.mjs` (append)
+
+> **This task is what makes the suite green again.** Task 4 moves work into a
+> worktree, so the delivery commit lands on `sch/task-<n>` and the existing
+> scheduler tests fail with `UPSTREAM_CHANGED` — the remote has no such branch.
+> That is correct behavior, not breakage: creating a remote branch is the
+> explicit decision Task 5 authorizes and this task consumes. The branch is red
+> from Task 4 until this task lands, and no amount of reordering avoids it —
+> Task 6 depends on Task 5, and Task 5's namespace is meaningless without Task 4's
+> worktree. Do not "fix" the red by reverting Task 4.
 
 **Interfaces:**
 - Consumes: `WT.branchMatchesNamespace(ns, branch)` from Task 5 (the pure matcher in `scripts/worktree.mjs`). `delivery.mjs` reads the namespace record from the project state it **already loads** at `:288` — `project.delivery?.branch_namespace` — so no new import of `state.mjs` and no import cycle.
