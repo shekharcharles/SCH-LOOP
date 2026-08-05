@@ -201,6 +201,10 @@ scripts/pack.mjs          The project-local CAPABILITY PACK: a generated plugin 
                           execute, and states the built-in policy plus the exact worker argv.
                           A built-in on neither the allow nor the deny list is DENIED.
                           Denying blocks INVOCATION, not listing — the names still appear.
+scripts/territory.mjs     Fingerprints the ground OUTSIDE a task worktree that SCH owns — the
+                          main repository and every sibling task checkout — so a write there
+                          is DETECTED after the fact. Size and mtime, not content; bounded
+                          walk that reports truncation instead of a false clean bill.
 scripts/subprocess.mjs    The ONE bounded subprocess implementation: argv only (no shell),
                           explicit environment, bounded output, timeout, cancellation, and
                           process-TREE termination. Timeout is the MINIMUM of every bound.
@@ -786,8 +790,13 @@ the checkout, not the branch, that is disposable.
 known gap in `tests/containment.test.mjs` so that the day it closes, a test fails
 and says so:
 
-- **A write outside the worktree is neither prevented nor detected.** Effect
-  inspection compares the worktree before and after; anything else is invisible.
+- **A write outside the worktree is not PREVENTED — but writes into SCH's own
+  territory are now detected.** The main repository and every other task's
+  checkout are fingerprinted before and after each run; a change there fails
+  the run as `OUTSIDE_WORKTREE_WRITE` with the evidence kept. Writes anywhere
+  else — your home directory, another project, `/etc` — remain invisible, and
+  a writer that restores both a file's size and its modification time is not
+  detected either. Only an OS boundary fixes those.
 - **Workers are not OS-sandboxed.** They run as your user with your PATH.
 - **Parallelism multiplies uncontained workers.** N workers means N processes
   with your PATH and your network. Every containment caveat here applies N times

@@ -66,8 +66,12 @@ test("excluded directories are not watched, and say so", () => {
 test("a walk that hits its limit reports truncation instead of a clean result", () => {
   const fx = fixture("terr-truncated");
   try {
-    for (let i = 0; i < 12; i++) writeFileSync(join(fx.repo, "src", `f${i}.js`), String(i));
-    const fp = T.fingerprint(fx.repo, { maxEntries: 5 });
+    // A plain directory, not a git checkout: truncation is a property of the
+    // WALK, and a git checkout never needs one.
+    const plain = join(fx.home, "plain");
+    mkdirSync(plain, { recursive: true });
+    for (let i = 0; i < 12; i++) writeFileSync(join(plain, `f${i}.js`), String(i));
+    const fp = T.fingerprint(plain, { maxEntries: 5 });
     assert.equal(fp.truncated, true, "a bounded walk must admit when it stopped early");
     assert.ok(fp.entries <= 5);
   } finally { fx.done(); }
@@ -76,9 +80,11 @@ test("a walk that hits its limit reports truncation instead of a clean result", 
 test("comparing two truncated fingerprints is INCONCLUSIVE, never 'same'", () => {
   const fx = fixture("terr-inconclusive");
   try {
-    for (let i = 0; i < 12; i++) writeFileSync(join(fx.repo, "src", `g${i}.js`), String(i));
-    const before = T.fingerprint(fx.repo, { maxEntries: 5 });
-    const after = T.fingerprint(fx.repo, { maxEntries: 5 });
+    const plain = join(fx.home, "plain2");
+    mkdirSync(plain, { recursive: true });
+    for (let i = 0; i < 12; i++) writeFileSync(join(plain, `g${i}.js`), String(i));
+    const before = T.fingerprint(plain, { maxEntries: 5 });
+    const after = T.fingerprint(plain, { maxEntries: 5 });
     const d = T.compare(before, after);
     assert.equal(d.inconclusive, true,
       "a check that could not see everything must not report everything is fine");

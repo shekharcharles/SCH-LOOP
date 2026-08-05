@@ -22,6 +22,8 @@ import { join, basename, resolve } from "node:path";
 import * as WS from "./workspace.mjs";
 import * as SK from "./skills.mjs";
 import * as PACK from "./pack.mjs";
+import * as TERR from "./territory.mjs";
+import * as WT from "./worktree.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
@@ -41,6 +43,7 @@ export const FAILURES = [
   "ENVIRONMENT_MISSING", "REPOSITORY_DIRTY", "WORKSPACE_INVALID", "TASK_INELIGIBLE",
   "DEPENDENCY_INCOMPLETE", "SKILL_NOT_APPROVED", "SKILL_HASH_STALE", "PATH_POLICY_MISSING",
   "PATH_SCOPE_VIOLATION", "UNEXPECTED_FILE_CHANGE", "FORBIDDEN_GIT_EFFECT",
+  "OUTSIDE_WORKTREE_WRITE",
   "VERIFICATION_FAILURE", "VERIFICATION_TIMEOUT", "UNSAFE_VERIFICATION_COMMAND",
   "AMBIGUOUS_EVIDENCE", "BUDGET_EXCEEDED", "POLICY_VIOLATION", "LEASE_CONFLICT",
   "LEASE_LOST", "CANCELLED", "PACK_UNAVAILABLE",
@@ -59,6 +62,9 @@ const FAILURE_OUTCOME = {
   PACK_UNAVAILABLE: "NEEDS_DECISION",
   SKILL_HASH_STALE: "NEEDS_DECISION", PATH_POLICY_MISSING: "NEEDS_DECISION",
   FORBIDDEN_GIT_EFFECT: "NEEDS_DECISION", AMBIGUOUS_EVIDENCE: "NEEDS_DECISION",
+  // A person decides. The worker may have had a reason, and retrying it writes
+  // to the same place again.
+  OUTSIDE_WORKTREE_WRITE: "NEEDS_DECISION",
   BUDGET_EXCEEDED: "NEEDS_DECISION", CANCELLED: "CANCELLED",
 };
 export const outcomeFor = (code) => FAILURE_OUTCOME[code] ?? "FAILED";
@@ -290,6 +296,62 @@ export function classifyPath(repoRoot, rel, { allowed = [], forbidden = [], cont
 
 // Everything that actually happened, compared against the baseline. The worker's
 // account of it is not consulted.
+// Which directories a run is expected to leave alone, fingerprinted before and
+// after. Two of them, both SCH's own and both reachable by walking up from the
+// worktree: the main repository the task was branched from, and every OTHER
+// task's checkout.
+//
+// When the run is happening IN the main repository - the legacy single-task
+// runner does exactly that - there is no outside to watch, and fingerprinting it
+// would report the worker's own approved work as an escape. That case returns
+// nothing, and the gate reports it as not applicable rather than as a pass.
+export function territoriesFor(project, repoRoot, env = process.env) {
+  const out = [];
+  const here = WS.repositoryRoot(repoRoot) ?? repoRoot;
+  const main = WS.repositoryRoot(project?.path ?? "") ?? project?.path ?? null;
+  const same = main && norm(main) === norm(here);
+
+  if (main && !same)
+    out.push({ id: "main-repository", dir: main, fingerprint: TERR.fingerprint(main) });
+
+  // Sibling checkouts. This task's own is excluded by path, not by name: two
+  // projects share one worktree root, so the name alone is not unique.
+  let root = null;
+  try { root = WT.worktreesRoot(env); } catch { root = null; }
+  if (root && existsSync(root)) {
+    let names = [];
+    try { names = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); }
+    catch { names = []; }
+    for (const n of names) {
+      const dir = join(root, n);
+      if (norm(dir) === norm(here) || norm(here).startsWith(norm(dir) + "/")) continue;
+      out.push({ id: `worktree:${n}`, dir, fingerprint: TERR.fingerprint(dir) });
+    }
+  }
+  return out;
+}
+
+const norm = (p) => String(p ?? "").split(String.fromCharCode(92)).join("/").replace(/[/]+$/, "");
+
+// Did the worker stay where it was put? Re-fingerprints each territory and
+// reports per-directory, because "something changed somewhere" is not actionable
+// and "task 4's checkout gained a file" is.
+export function inspectTerritories(territories = []) {
+  const results = [];
+  for (const t of territories) {
+    const after = TERR.fingerprint(t.dir);
+    const d = TERR.compare(t.fingerprint, after);
+    results.push({ id: t.id, dir: TERR.fingerprint === null ? t.dir : after.dir ?? t.dir,
+      same: d.same, inconclusive: d.inconclusive, why: d.why,
+      added: d.added, removed: d.removed, changed: d.changed,
+      excluded: after.excluded ?? [], truncated: Boolean(after.truncated || t.fingerprint?.truncated) });
+  }
+  const violated = results.filter((r) => !r.same && !r.inconclusive);
+  const unknown = results.filter((r) => r.inconclusive);
+  return { schema_version: SCHEMA_VERSION, checked_at: now(), results, violated, unknown,
+    watched: results.length, ok: violated.length === 0 };
+}
+
 export function inspectEffects(repoRoot, baseline, policy) {
   const after = repoSnapshot(repoRoot);
   const gitEffects = [];
@@ -896,6 +958,13 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
   if (ctx.repoRoot && ctx.wsDir) {
     const snap = repoSnapshot(ctx.repoRoot);
     ctx.baselineRepo = snap;
+    // The ground OUTSIDE the worktree that SCH owns and a worker can reach by
+    // walking up: the main repository it was branched from, and the checkouts of
+    // every other task. Fingerprinted here so the same comparison can be made
+    // after the worker stops. Skipped when the run is in the main repository
+    // itself - there is no "outside" to watch, and watching it would report the
+    // worker's own legitimate work.
+    ctx.territories = territoriesFor(ctx.project, ctx.repoRoot, env);
     if (!snap.branch) bad("REPOSITORY_DIRTY", "the current branch cannot be determined");
     if (!snap.head) bad("REPOSITORY_DIRTY", "HEAD cannot be determined — an empty repository has nothing to compare against");
     // Only IGNORED RUNTIME paths are disregarded — a run's own evidence is not
@@ -1256,6 +1325,11 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
 
     // ---- effects (authoritative)
     const effects = inspectEffects(repoRoot, baselineRepo, policy);
+    // Did it stay where it was put? Detection only - nothing stopped the write,
+    // and the run is failed after the fact with the evidence kept.
+    const territory = inspectTerritories(pre.ctx.territories ?? []);
+    write("territory.json", territory);
+    effects.territory = territory;
     // The worker's file list is compared, never trusted: a mismatch is recorded
     // as evidence and never as a reason to believe the worker.
     const actual = new Set(effects.paths.map((p) => p.path));
@@ -1267,6 +1341,17 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     };
     write("git-effects.json", effects);
     ev("run.effects_inspected", { counts: effects.counts, git_effects: effects.git_effects.map((e) => e.kind), claim_agrees: effects.claim_comparison.agrees });
+
+    // Checked BEFORE the git effects: a worker that wrote into another task's
+    // checkout has done something worse than a stray commit in its own, and the
+    // first failure a person sees should be the larger one.
+    if (territory.violated.length) {
+      const where = territory.violated.map((v) => `${v.id} (${[...v.added.slice(0, 3), ...v.changed.slice(0, 3)].join(", ") || "contents differ"})`).join("; ");
+      const f = { code: "OUTSIDE_WORKTREE_WRITE", message: `the worker changed files OUTSIDE its own worktree: ${where}. Nothing has been reverted - inspect ${runPath} and decide.` };
+      ev("run.effects_rejected", { code: f.code, territories: territory.violated.map((v) => v.id) });
+      writeHumanHandoff({ wsDir, taskId, runId, identity, task, worker, handoff: parsed.handoff, effects, verification: null, outcome: "NEEDS_DECISION", failure: f });
+      return finish("NEEDS_DECISION", f, { worker: summarizeWorker(worker), effects: effects.counts });
+    }
 
     if (effects.git_effects.length) {
       const f = { code: "FORBIDDEN_GIT_EFFECT", message: `the worker produced git effects it must never produce: ${effects.git_effects.map((e) => `${e.kind} (${e.detail})`).join("; ")}. Evidence is preserved and NOTHING has been reverted or pushed — inspect ${runPath} and decide.` };
