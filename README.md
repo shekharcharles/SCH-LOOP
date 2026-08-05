@@ -527,6 +527,9 @@ which it does not have.**
 ## 🧮 Sequential graph scheduler
 
 ```bash
+node scripts/state.mjs workspace-init  --project <id>     # once per repository
+node scripts/state.mjs delivery-branch-namespace --project <id> \
+     --set "sch/task-*" --approver <you>                  # once per project, REQUIRED
 node scripts/state.mjs graph-validate  --project <id>     # structure + false-edge audit
 node scripts/state.mjs graph-show      --project <id> [--format markdown]
 node scripts/sch-run-queue.mjs         --project <id>     # run the queue, then stop
@@ -536,6 +539,12 @@ node scripts/state.mjs human-gate-list  --project <id>
 node scripts/state.mjs human-gate-decide --project <id> --gate <HG-id> \
      --decision APPROVED --approver <you>
 ```
+
+**The two one-time setup steps are not optional.** Each queued task delivers on
+its own `sch/task-<n>` branch, which does not exist on the remote yet, and
+creating a remote branch is an operator decision. Without the namespace
+authorization every task stops at `UPSTREAM_CHANGED` after doing all its work.
+`--revoke true` takes it back.
 
 The architectural invariant, and everything below is a consequence of it:
 
@@ -705,10 +714,18 @@ Stated plainly, because a false claim here is worse than a missing feature.
 
 **True now**, each backed by a test:
 
-- **A worker never runs in your working tree.** Every task gets a disposable git
-  worktree on its own `sch/task-<n>` branch, created outside the repository and
-  outside `SCH_HOME`. After a queue run your working tree is byte-identical —
-  file content and `git status --untracked-files=all` alike.
+- **A queued task never runs in your working tree.** Every task the *scheduler*
+  claims gets a disposable git worktree on its own `sch/task-<n>` branch, created
+  outside the repository and outside `SCH_HOME`. **The legacy single-task runner
+  is the exception**: `sch-run-task.mjs` passes no work root, so it still runs the
+  worker in your working tree, on your branch, over your uncommitted changes — it
+  gets the credential strip, not the containment. Use `sch-run-queue.mjs` for
+  anything you would not want run in your own checkout.
+- **After a queue run your working tree is byte-identical** — file content and
+  `git status --untracked-files=all` alike. That is measured of a *cooperative*
+  worker: nothing stops one from reading the main repository path out of the
+  worktree's own `.git` file and writing there, which is the "write outside the
+  worktree" gap below.
 - **A worker has no ambient git credentials.** `credential.helper` is emptied for
   its process via `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`, and
   `GH_TOKEN`, `GITHUB_TOKEN`, `GIT_ASKPASS`, `SSH_AUTH_SOCK` and `SSH_AGENT_PID`
@@ -724,6 +741,20 @@ Stated plainly, because a false claim here is worse than a missing feature.
   its own worktree trips `worktrees_changed`, and a hook installed into the
   shared hooks directory is still caught: the metadata fingerprint resolves
   against the common dir, not the linked worktree's private git dir.
+
+**Where the checkouts live, and what removes them.** The default root is
+`%LOCALAPPDATA%\sch-loop\worktrees` on Windows and
+`${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees` elsewhere.
+`SCH_WORKTREE_ROOT`, if set to an absolute path, moves it — useful for a shorter
+path on Windows or a different disk. It is a **process-wide** environment
+variable, not a per-project setting: every project the process schedules uses
+that one root. A checkout is removed on `DELIVERED` and on `CANCELLED`, and kept
+on `FAILED` because a failed tree is the evidence. **Cancelling a running task
+force-removes its checkout** — `run-cancel --run <RUN-id>` ends the run as
+`CANCELLED`, and the scheduler then runs `git worktree remove --force` on it, so
+whatever that worker had written and not committed is destroyed. Read the tree
+first if you might want it. The `sch/task-<n>` branch survives either way; it is
+the checkout, not the branch, that is disposable.
 
 **Still NOT true.** Each of these is a real gap, and the first is asserted as a
 known gap in `tests/containment.test.mjs` so that the day it closes, a test fails

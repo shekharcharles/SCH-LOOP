@@ -5,6 +5,12 @@
 // never picks another task, and never stages, commits or pushes anything in the
 // managed project.
 //
+// IT RUNS IN YOUR WORKING TREE. The disposable per-task worktree belongs to the
+// scheduler (`sch-run-queue.mjs`), which passes a work root; this runner does
+// not, so the worker edits your checkout, on your branch, over your uncommitted
+// changes. It still gets the credential strip — that lives below this caller, in
+// executor.mjs and runVerification — but not the containment.
+//
 //   node scripts/sch-run-task.mjs --project <id> --task <n>
 //   node scripts/sch-run-task.mjs --project <id> --task <n> --preflight-only
 //

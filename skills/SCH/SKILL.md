@@ -114,6 +114,9 @@ rebases, amends, resets or force-pushes. One run, one commit, then stop.
 The queue now executes itself, **one task at a time**:
 
 ```bash
+node scripts/state.mjs workspace-init --project <id>      # once per repository
+node scripts/state.mjs delivery-branch-namespace --project <id> \
+     --set "sch/task-*" --approver <you>                  # once per project, REQUIRED
 node scripts/state.mjs graph-validate --project <id>      # structure + false-edge audit
 node scripts/sch-run-queue.mjs --project <id>             # run it, then stop
 node scripts/state.mjs scheduler-status --project <id>
@@ -145,8 +148,14 @@ those, say plainly that they are planned and name the next milestone:
 > Implement isolated parallel task execution using Git worktrees, path ownership
 > leases, fan-out/fan-in, deterministic integration nodes, and conflict-safe joins.
 
-**Workers are contained, not sandboxed.** Each task runs in a disposable worktree
-on `sch/task-<n>` outside the repository and outside `SCH_HOME`, with no ambient
+**Workers are contained, not sandboxed.** Each task **the queue runs** gets a
+disposable worktree on `sch/task-<n>` outside the repository and outside
+`SCH_HOME` — `sch-run-task.mjs` does not, and still runs in the operator's
+working tree with the credential strip only; say so rather than implying every
+task is contained. The worktree root is `%LOCALAPPDATA%\sch-loop\worktrees`
+(POSIX: `${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees`), moved by the
+**process-wide** `SCH_WORKTREE_ROOT`; cancelling a running task force-removes its
+checkout and destroys uncommitted work. Workers run with no ambient
 git credential helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/
 `SSH_AUTH_SOCK`/`SSH_AGENT_PID` — verification commands included — and only the
 delivery controller pushes, inside an authorized branch namespace. Effect

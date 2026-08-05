@@ -25,12 +25,22 @@ The worker gets its own checkout, no credentials, and no way to publish.
 
 Three mechanisms, each independently testable:
 
-**A disposable worktree per task.** `git worktree add <root>/<project>/<task> -b
-sch/task-<n> <base>` on task claim, where `<root>` is outside the managed
-repository and outside `SCH_HOME`. One worktree per *task*, not per attempt, so
+**A disposable worktree per task the SCHEDULER claims.** `git worktree add
+<root>/<project>/<task> -b sch/task-<n> <base>` on task claim, where `<root>` is
+outside the managed repository and outside `SCH_HOME` — defaulting to
+`%LOCALAPPDATA%\sch-loop\worktrees` (POSIX:
+`${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees`) and moved by the
+**process-wide** `SCH_WORKTREE_ROOT` when that is an absolute path. `scripts/
+sch-run-task.mjs`, the legacy supervised single-task runner, passes no work root
+and is **not** covered by this: it still runs the worker in the operator's
+working tree, and gets the credential strip below and nothing else. Threading a
+work root into it is its own change with its own test surface and was left to a
+later milestone rather than claimed here.
+One worktree per *task*, not per attempt, so
 ADR 0003's guarantee — a retry inherits the previous attempt's uncommitted work
-rather than discarding it — survives. Removed on DELIVERED or CANCELLED, **kept
-on FAILED**, because a failed worktree is evidence. `git worktree prune` is never
+rather than discarding it — survives. Removed on DELIVERED and **force-removed on
+CANCELLED**, which destroys whatever that worker had written and not committed;
+**kept on FAILED**, because a failed worktree is evidence. `git worktree prune` is never
 run automatically: a pruned worktree with unapproved work in it is unrecoverable,
 and no scheduler decision is worth that.
 
@@ -99,7 +109,10 @@ unrestricted. A process that detaches into a new session survives the tree-kill.
 The credential strip removes the *ambient* helper and does not stop a worker that
 deliberately re-adds one with `git -c credential.helper=…` or `git config
 --local`. All projects share one worktree root, so a worker walking up two levels
-can see other projects' worktrees. None of this is OS-level sandboxing.
+can see other projects' worktrees. "The main working tree is byte-identical after
+a queue run" is measured of a *cooperative* worker: the worktree's `.git` file
+names the main repository, and nothing stops a worker following it. The legacy
+`sch-run-task.mjs` is not contained at all. None of this is OS-level sandboxing.
 
 Therefore **fully unattended operation is still not supported**. This milestone
 narrows the blast radius; it is not isolation, and the authenticated control
