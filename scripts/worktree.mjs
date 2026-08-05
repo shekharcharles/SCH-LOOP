@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { git, repositoryRoot, contains } from "./workspace.mjs";
-import { assertSafeGitArgs } from "./candidate.mjs";
+import { gitRun } from "./candidate.mjs";
 
 export const SCHEMA_VERSION = 1;
 export const BRANCH_PREFIX = "sch/task-";
@@ -21,11 +21,22 @@ export const DEFAULT_NAMESPACE = "sch/task-*";
 
 const gt = (cwd, ...a) => (git(cwd, ...a) ?? "").trim();
 
-// The only git calls that mutate the repository or its worktree list. Guarded
-// on every call, same as candidate.mjs's own mutating calls — a worker's retry
-// creating a worktree is exactly the kind of repository mutation that module
-// exists to keep honest.
-const gitGuarded = (cwd, ...args) => { assertSafeGitArgs(args); return git(cwd, ...args); };
+// The only git calls that mutate the repository or its worktree list. They go
+// through candidate.mjs's gitRun, which runs assertSafeGitArgs on every call —
+// a worker's retry creating a worktree is exactly the kind of repository
+// mutation that module exists to keep honest — and, unlike WS.git, keeps git's
+// own stderr instead of collapsing every failure into `null`. This is the
+// branch's primary new stop; an operator who reaches it needs the cause.
+const gitGuarded = (cwd, ...args) => gitRun(cwd, args);
+
+// What git actually said, trimmed to one readable line. Empty when git succeeded
+// but the expected directory is still absent, which is itself worth saying.
+const said = (r) => String(r.stderr || r.error || "").trim().split(/\r?\n/).filter(Boolean).join("; ");
+
+// The one failure an operator causes by hand, and the only one with a remedy
+// short enough to print: a checkout deleted with the file manager leaves git's
+// administrative entry behind, and `worktree add` then refuses the branch.
+const STALE_ADMIN = /already registered|already used by|already checked out|missing but/i;
 
 // Outside the repository AND outside SCH_HOME. A worker that walks up must not
 // land in the operational state that grades it.
@@ -98,9 +109,15 @@ export function ensureWorktree({ projectId, taskId, repoRoot, base, root = workt
   const args = existingBranch
     ? ["worktree", "add", path, branch]
     : ["worktree", "add", path, "-b", branch, base];
-  const out = gitGuarded(repoRoot, ...args);
-  if (out === null || !existsSync(path))
-    return { ok: false, code: "WORKTREE_CREATE_FAILED", message: `git ${args.join(" ")} did not produce a worktree at ${path}` };
+  const r = gitGuarded(repoRoot, ...args);
+  if (!r.ok || !existsSync(path)) {
+    const why = said(r);
+    const hint = STALE_ADMIN.test(why)
+      ? ` — if you deleted that checkout by hand, git still holds its administrative entry; \`git -C ${repoRoot} worktree prune\` clears it, and SCH will not run that for you because a prune can drop unapproved work`
+      : "";
+    return { ok: false, code: "WORKTREE_CREATE_FAILED",
+      message: `git ${args.join(" ")} did not produce a worktree at ${path}: ${why || `git exited ${r.code} and said nothing`}${hint}` };
+  }
 
   return { ok: true, path, branch, created: true };
 }
@@ -110,10 +127,10 @@ export function ensureWorktree({ projectId, taskId, repoRoot, base, root = workt
 export function removeWorktree({ projectId, taskId, repoRoot, root = worktreesRoot() }) {
   const path = worktreePathFor(projectId, taskId, { root });
   if (!existsSync(path)) return { ok: true, removed: false };
-  const out = gitGuarded(repoRoot, "worktree", "remove", "--force", path);
-  if (out === null) {
+  const r = gitGuarded(repoRoot, "worktree", "remove", "--force", path);
+  if (!r.ok) {
     try { rmSync(path, { recursive: true, force: true }); } catch { /* reported below */ }
     gitGuarded(repoRoot, "worktree", "prune");
   }
-  return { ok: !existsSync(path), removed: !existsSync(path), path };
+  return { ok: !existsSync(path), removed: !existsSync(path), path, git_said: r.ok ? null : said(r) || null };
 }
