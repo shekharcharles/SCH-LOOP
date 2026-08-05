@@ -89,11 +89,22 @@ base     the project branch HEAD at the moment the task is claimed
 root     outside the managed repository, and outside SCH_HOME:
          Windows  %LOCALAPPDATA%\sch-loop\worktrees
          POSIX    ${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees
-         overridable per project by an operator-set absolute path
+         overridable by SCH_WORKTREE_ROOT, an absolute path
 reuse    every attempt of that task
 remove   on DELIVERED, on CANCELLED, or on explicit operator cleanup
 keep     on FAILED — the worktree is evidence
 ```
+
+**Amended after implementation (2026-08-05).** This line first said "overridable
+per project by an operator-set absolute path". What shipped is `SCH_WORKTREE_ROOT`,
+a **process-wide** environment variable: every project a given process schedules
+uses that one root. The spec is amended to the implementation rather than the
+reverse, because a per-project override needs a registry field, its own
+validation and a migration, and buys nothing the process-wide variable does not —
+the real reasons to move the root (a different disk, a shorter Windows path) are
+properties of the machine, not of one project. The one thing it does not support
+is two projects on two roots in one scheduler process; nothing asks for that, and
+the shared root is already listed in section 2 as an unsolved gap.
 
 The worktree root lives outside the repository deliberately. Placing it under
 `.sch-loop/worktrees/` would put worker scratch space inside the control state

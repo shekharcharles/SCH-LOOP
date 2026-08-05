@@ -24,7 +24,8 @@ is today's in-session loop.
 **Supervised external runner (one task, one attempt, then stop):**
 `state.mjs workspace-init --project <id>` once per repository, then
 `sch-run-task.mjs --project <id> --task <n>`. It runs the task in a **fresh
-external `claude` process** — a new process IS the context reset; `/clear` and a
+external `claude` process, in your working tree** — the disposable worktree is
+the queue's, not this runner's. A new process IS the context reset; `/clear` and a
 cleared terminal are not. SCH owns the timeout, the kill, the lease, the prompt,
 the effect inspection and the verification; the worker cannot mark itself
 verified. A task needs `--allow`, `--forbid` and `--verify` before it is eligible.
@@ -94,9 +95,18 @@ never overlap.
 one project at once: while a scheduler holds the lease, `task-set --status` is
 refused in code and names the scheduler.
 
-**Worker containment, both halves.** A worker now runs in a disposable worktree
-on `sch/task-<n>`, outside the repository and outside `SCH_HOME`; your working
-tree is byte-identical after a queue run. It gets no ambient git credential
+**Worker containment, both halves.** A worker the **queue** runs gets a
+disposable worktree on `sch/task-<n>`, outside the repository and outside
+`SCH_HOME`; your working tree is byte-identical after a queue run — of a
+cooperative worker, since nothing prevents one writing to the main repository
+path it can read out of the worktree's `.git` file. **`sch-run-task.mjs` passes
+no work root and still runs in your working tree**: it gets the credential strip,
+not the worktree. The root is `%LOCALAPPDATA%\sch-loop\worktrees` (POSIX:
+`${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees`), moved by the
+**process-wide** `SCH_WORKTREE_ROOT` if it is an absolute path — one root for
+every project that process schedules, not a per-project setting. A checkout is
+removed on DELIVERED and force-removed on CANCELLED, destroying uncommitted work;
+it is kept on FAILED as evidence. It gets no ambient git credential
 helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/`SSH_AUTH_SOCK`/
 `SSH_AGENT_PID` — verification children included. Only the delivery controller
 pushes, and only inside a branch namespace an operator authorized for that
