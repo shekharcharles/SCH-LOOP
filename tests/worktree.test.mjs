@@ -106,3 +106,32 @@ test("worktreeState reports absence without throwing", () => {
     assert.equal(s.exists, false);
   } finally { fx.done(); }
 });
+
+// --------------------------------------------- branch namespace matching
+
+// Direct calls, not through state.mjs: a rename of branchMatchesNamespace
+// must fail HERE, not just break Task 6 silently. Each case isolates ONE
+// guard — deleting any single guard from the function must fail one of these.
+test("branchMatchesNamespace: every refusal guard is independently load-bearing", () => {
+  const ns = { pattern: "sch/task-*" };
+  for (const [b, want] of [
+    ["sch/task-12", true],
+    ["sch/task-1/x", false],     // the "*" must never match across "/"
+    ["sch/task-..x", false],     // traversal — [^/]* alone WOULD match "..x"
+    ["sch/task-1.lock", false],  // a git lockfile name
+    ["sch/task-1/", false],      // trailing slash
+    ["-x", false],               // charset: must not start with "-"
+    ["main", false],
+  ]) assert.equal(WT.branchMatchesNamespace(ns, b), want, b);
+  assert.equal(WT.branchMatchesNamespace(null, "sch/task-1"), false, "no record at all");
+  assert.equal(WT.branchMatchesNamespace({ pattern: "" }, "sch/task-1"), false, "empty pattern");
+});
+
+test("delivery-branch-namespace --set rejects a pattern with no usable shape", () => {
+  const fx = fixture("wt-ns-pattern");
+  try {
+    for (const bad of ["*", "a*b*", "-x"])
+      assert.throws(() => fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", bad, "--approver", "t"),
+        /not a usable branch namespace/, bad);
+  } finally { fx.done(); }
+});
