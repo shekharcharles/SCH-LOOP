@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -608,11 +608,19 @@ test("skill sources: a symlink and a path escape are refused outright", (t) => {
   const { repo, commit, g } = fakeSource(t, { "a/SKILL.md": SAFE_SKILL });
   SS.addSource({ id: "fake", repository: repo, pinnedCommit: commit, license: "MIT" });
   SS.syncSource("fake");
-  // add a symlink pointing outside the source
-  let made = true;
-  try { symlinkSync(tmpdir(), join(repo, "escape")); } catch { made = false; }
-  if (!made) return;   // unprivileged Windows cannot create links; the check itself is still unit-tested below
-  g("add", "-A"); g("commit", "-q", "-m", "symlink");
+  // Add a symlink through GIT PLUMBING, not the filesystem.
+  //
+  // The previous version called `symlinkSync` and returned early when it threw.
+  // On unprivileged Windows it always threw, so this test passed for a whole
+  // milestone without ever asserting anything — and hid a real gap: under
+  // `core.symlinks=false` git checks a link out as a plain text file, so a
+  // guard built on `lstat` never fired. `update-index --cacheinfo 120000`
+  // records the entry the way git does regardless of platform or privilege, so
+  // this test now always runs.
+  const target = execFileSync("git", ["-C", repo, "hash-object", "-w", "--stdin"],
+    { input: tmpdir(), encoding: "utf8" }).trim();
+  g("update-index", "--add", "--cacheinfo", `120000,${target},escape`);
+  g("commit", "-q", "-m", "symlink");
   const c2 = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const db = SS.load(); db.sources[0].pinned_commit = c2; SS.save(db);
   const r = SS.syncSource("fake");

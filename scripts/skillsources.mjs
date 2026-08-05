@@ -193,22 +193,51 @@ export function syncSource(id, { allowSubmodules = false } = {}) {
 
 // A deterministic hash of everything tracked at the pinned commit — the identity
 // an approval binds to, independent of checkout path or filesystem order.
+// Git's INDEX MODE decides what an entry is, not the filesystem.
+//
+// `core.symlinks=false` is the Git-for-Windows default, and under it a symlink
+// is checked out as an ordinary text file whose contents are the target path.
+// `lstatSync(...).isSymbolicLink()` is then false, so a guard built on the
+// filesystem never fires and the source is accepted — on the platform this
+// engine actually runs on. The test that should have caught it guarded on
+// `symlinkSync` succeeding, so on an unprivileged box it returned early and
+// passed without ever checking anything.
+//
+// Git knows. `ls-files -s` reports mode 120000 for a symlink and 160000 for a
+// gitlink whatever the working tree looks like, so the mode is the answer and
+// the filesystem is only a fallback for anything git did not classify.
+const MODE_SYMLINK = "120000";
+const MODE_GITLINK = "160000";
+
 export function inventorySource(dir) {
-  const listed = git(dir, ["ls-files", "-z"]);
+  // `-s` gives "<mode> <object> <stage>\t<path>"; `-z` keeps NUL-separated
+  // paths so a filename with a newline cannot forge a record boundary.
+  const listed = git(dir, ["ls-files", "-s", "-z"]);
   if (!listed.ok) return fail("INVENTORY_FAILED", `cannot list files: ${clamp(listed.stderr, 300)}`);
-  const files = listed.stdout.split("\0").filter(Boolean).sort();
+  const records = listed.stdout.split("\0").filter(Boolean).map((rec) => {
+    const tab = rec.indexOf("\t");
+    if (tab === -1) return null;
+    return { mode: rec.slice(0, rec.indexOf(" ")), path: rec.slice(tab + 1) };
+  }).filter(Boolean).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   const root = resolve(dir);
   const entries = [];
-  for (const f of files) {
+  for (const { mode, path: f } of records) {
     const abs = resolve(dir, f);
     // TRAVERSAL AND LINK ESCAPE. A path that resolves outside the checkout is
     // refused rather than read — a symlink to /etc or to the operator's home is
     // the cheapest possible exfiltration.
     if (!(abs === root || abs.startsWith(root + sep)))
       return fail("SOURCE_PATH_ESCAPE", `"${f}" resolves outside the source root`);
+    // Ask git first — this is the check that works on every platform.
+    if (mode === MODE_SYMLINK)
+      return fail("SOURCE_SYMLINK_REFUSED", `"${f}" is a symbolic link (git mode ${mode}); external sources may not contain links`);
+    if (mode === MODE_GITLINK)
+      return fail("SOURCE_HAS_SUBMODULES", `"${f}" is a gitlink (git mode ${mode}) — a submodule is a separate pin needing its own review`);
     let st;
     try { st = lstatSync(abs); } catch { continue; }
+    // Belt and braces: on a platform that DOES materialise links, catch anything
+    // git did not label — a link created after checkout, for instance.
     if (st.isSymbolicLink())
       return fail("SOURCE_SYMLINK_REFUSED", `"${f}" is a symbolic link; external sources may not contain links`);
     entries.push({ path: f, bytes: st.size, hash: sha(safeRead(abs)) });
