@@ -112,7 +112,7 @@ export const SCHEDULER_EVENTS = [
   "scheduler.task_failed", "scheduler.task_blocked", "scheduler.project_completed",
   "scheduler.stopped", "scheduler.cancelled", "scheduler.lease_acquired", "scheduler.lease_released",
   "scheduler.worktree_created", "scheduler.worktree_removed",
-  "scheduler.dependencies_merged",
+  "scheduler.dependencies_merged", "scheduler.run_cancelled",
   "scheduler.pack_removed",
 ];
 
@@ -141,6 +141,25 @@ const attemptNumbers = (wsDir, taskId) => {
 // Which attempt directory this task should use now. An attempt whose workflow
 // stopped somewhere RESUMABLE — waiting on a person, or interrupted mid-flight —
 // is continued in place; anything else starts a fresh attempt.
+// Runs of this task that are still ACTIVE, read from the run records themselves.
+//
+// A stop has to reach runs that do not exist yet when the decision is made: a
+// task is claimed seconds before its run directory appears, so anything that
+// captures a run id up front misses precisely the runs that start while the
+// queue is stopping. Asking the disk each time does not.
+export function activeRunsFor(wsDir, taskId) {
+  const out = [];
+  let dirs = [];
+  try { dirs = readdirSync(WS.runsDir(wsDir)); } catch { return out; }
+  for (const d of dirs) {
+    try {
+      const r = JSON.parse(readFileSync(join(WS.runDir(wsDir, d), "run.json"), "utf8"));
+      if (String(r.task_id) === String(taskId) && r.state === "active") out.push(d);
+    } catch { /* a run without a readable record cannot be cancelled by id */ }
+  }
+  return out;
+}
+
 export function openAttempt(wsDir, taskId) {
   const nums = attemptNumbers(wsDir, taskId);
   const last = nums[nums.length - 1];
@@ -438,6 +457,9 @@ export async function runQueue({
 
   // Tasks currently running, by task id. Never larger than `parallel`.
   const inFlight = new Map();
+  // Runs already signalled, so a repeating sweep does not re-cancel them.
+  const cancelled = new Set();
+  let stopSweeper = null;
 
   // One more ready task to start, chosen from the state as it is RIGHT NOW.
   // It does NOT claim: `runOne` claims, synchronously, before it yields. So by
@@ -454,12 +476,40 @@ export async function runQueue({
   // Every stop condition must let the running workers finish and record what
   // they did. Abandoning a live run leaves a task RUNNING with no process, and
   // the next queue pass has to recover it as a stale lease.
+  // A stop that only WAITS is not a stop. When the queue ends because it ran out
+  // of time, lost its lease or blew a budget, every run still going is signalled
+  // to cancel - including ones that start DURING the drain. A task that merely
+  // failed does not trigger this: its siblings did nothing wrong.
+  const HARD_STOP = new Set(["MAX_DURATION_REACHED", "SCHEDULER_LEASE_LOST", "CONSECUTIVE_FAILURE_LIMIT", "PROJECT_BUDGET_EXCEEDED", "CANCELLED"]);
   const finishDraining = async (reason, failure = null) => {
+    if (HARD_STOP.has(reason)) {
+      const sweep = () => {
+        for (const taskId of inFlight.keys())
+          for (const runId of activeRunsFor(wsDir, taskId)) {
+            if (cancelled.has(runId)) continue;
+            const c = RUN.cancelRun(wsDir, runId, `scheduler stopped: ${reason}`);
+            if (c.ok) { cancelled.add(runId); emit("scheduler.run_cancelled", { run_id: runId, why: reason }, { taskId }); }
+          }
+      };
+      sweep();
+      stopSweeper = setInterval(sweep, 250);
+      if (typeof stopSweeper?.unref === "function") stopSweeper.unref();
+    }
     while (inFlight.size) {
       const r = await Promise.race(inFlight.values());
       inFlight.delete(r.task.id);
       if (r.outcome) { record.tasks.push(r.outcome); record.total_attempts += r.outcome.attempts; }
+      // A stopped run must not leave its task mid-flight. A task still RUNNING or
+      // CLAIMED with no process behind it is indistinguishable from a live one,
+      // and the next queue pass has to recover it as a stale lease.
+      const cur = TR.canonicalState((loadState(projectId).tasks ?? []).find((t) => t.id === Number(r.task.id)) ?? {});
+      if (["RUNNING", "CLAIMED"].includes(cur))
+        // NEEDS_DECISION, not FAILED: the task did nothing wrong, the queue ran out
+        // from under it. CANCELLED is an operator word and the machine refuses it here.
+        TR.transition(projectId, r.task.id, { to: "NEEDS_DECISION", actor: "scheduler",
+          reason: `the scheduler stopped (${reason}) while this task was still running` });
     }
+    if (stopSweeper) { clearInterval(stopSweeper); stopSweeper = null; }
     save();
     return finish(reason, failure);
   };
@@ -660,7 +710,17 @@ export async function runQueue({
           inFlight.set(more.id, runOne(more).then((r) => ({ task: more, ...r })));
         }
       }
-      const ran = await Promise.race(inFlight.values());
+      // The duration bound must race the WORK, not merely be re-checked between
+      // tasks: the loop does not come back round until something settles, so one
+      // long worker could otherwise run arbitrarily past the limit.
+      let timer = null;
+      const deadline = new Promise((res) => {
+        timer = setTimeout(() => res({ deadline: true }), Math.max(1, limitMs - (Date.now() - started)));
+        if (typeof timer?.unref === "function") timer.unref();
+      });
+      const ran = await Promise.race([...inFlight.values(), deadline]);
+      clearTimeout(timer);
+      if (ran.deadline) return finishDraining("MAX_DURATION_REACHED");
       inFlight.delete(ran.task.id);
       if (ran.reselect) continue;
       if (ran.fatal) return finishDraining("POLICY_VIOLATION", ran.fatal);
