@@ -644,3 +644,61 @@ test("--set and --revoke together is a contradiction, not a silent --revoke win"
     assert.equal(STATE.branchNamespace(fx.P), null, "neither side of the contradiction took effect");
   } finally { fx.done(); }
 });
+
+// ------------------------------------- a first push from inside the namespace
+
+test("a first push inside the namespace creates the remote branch and sets upstream", async () => {
+  const fx = fixture("ns-first-push");
+  try {
+    initWorkspace(fx);
+    const bare = withRemote(fx);
+    fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", "sch/task-*", "--approver", "test-operator");
+    const t = addTask(fx);
+    const alt = join(fx.home, "wt-" + t);
+    git(fx.repo, "worktree", "add", alt, "-b", `sch/task-${t}`, "HEAD");
+
+    const rec = await verifiedRun(fx, t, {
+      write: [{ path: "src/app.js", content: "// delivered from a worktree\n" }],
+    }, { workRoot: alt });
+    approve(fx, rec.run_id, { workRoot: alt });
+    const audit = recordGit();
+    const d = deliver(fx, rec.run_id, { workRoot: alt });
+    audit.stop();
+
+    assert.equal(d.state, "DELIVERED", JSON.stringify(d.failure ?? d));
+    const remoteRefs = execFileSync("git", ["ls-remote", "--heads", bare], { encoding: "utf8" });
+    assert.ok(remoteRefs.includes(`refs/heads/sch/task-${t}`), "the task branch must exist on the remote");
+    // The branch's whole history is not "outgoing": only what it adds on top of
+    // the branch it forked from, or a first push could never be exactly one commit.
+    assert.equal(art(fx, rec.run_id, "outgoing.json").ahead, 1);
+    assert.ok(audit.calls.some((c) => c.startsWith("push --set-upstream origin ")), audit.calls.join("\n"));
+    assert.ok(!audit.calls.some((c) => /--force/.test(c)), "nothing was forced");
+    const events = readFileSync(join(WS.deliveryDir(wsOf(fx), rec.run_id), "events.jsonl"), "utf8");
+    assert.match(events, /delivery\.remote_branch_created/);
+  } finally { fx.done(); }
+});
+
+test("a first push outside the namespace still stops with UPSTREAM_CHANGED", async () => {
+  const fx = fixture("ns-outside");
+  try {
+    initWorkspace(fx);
+    withRemote(fx);
+    fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", "sch/task-*", "--approver", "test-operator");
+    const t = addTask(fx);
+    const alt = join(fx.home, "wt-" + t);
+    git(fx.repo, "worktree", "add", alt, "-b", "hotfix/not-ours", "HEAD");
+
+    const rec = await verifiedRun(fx, t, {
+      write: [{ path: "src/app.js", content: "// off-namespace\n" }],
+    }, { workRoot: alt });
+    approve(fx, rec.run_id, { workRoot: alt });
+    const audit = recordGit();
+    const d = deliver(fx, rec.run_id, { workRoot: alt });
+    audit.stop();
+
+    assert.notEqual(d.state, "DELIVERED");
+    assert.equal(d.failure?.code ?? d.stop_reason, "UPSTREAM_CHANGED");
+    assert.match(d.failure.message, /explicit decision/);
+    assert.ok(!audit.calls.some((c) => c.startsWith("push ")), "no branch was created on the remote");
+  } finally { fx.done(); }
+});

@@ -289,7 +289,10 @@ test("guardrails: the forbidden git argv shapes are refused outright", () => {
   no(["worktree", "lock", "a"], /add, remove, list or prune/);
   no(["worktree"], /add, remove, list or prune/);
   // and the shapes the controller actually needs are allowed
+  // A first push may name its upstream. That is the ONLY push flag permitted,
+  // and it moves nothing — the force variants above are still refused.
   for (const args of [["add", "--", "src/a.js"], ["commit", "--file", "-"], ["push", "origin", "refs/heads/main:refs/heads/main"],
+                      ["push", "--set-upstream", "origin", "refs/heads/sch/task-1:refs/heads/sch/task-1"],
                       ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
                       ["status", "--porcelain=v2", "-z"], ["rev-parse", "HEAD"], ["restore", "--staged", "--", "src/a.js"],
                       ["worktree", "add", "/tmp/x", "-b", "sch/task-1", "HEAD"], ["worktree", "remove", "--force", "/tmp/x"],

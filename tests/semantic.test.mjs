@@ -37,7 +37,9 @@ const enableReview = (fx) => {
   writeFileSync(p, JSON.stringify(reg, null, 2));
 };
 const setWorkflow = (fx, id, tpl) => fx.cli("task-set", "--project", fx.P, String(id), "--workflow", tpl);
-const remoteCommits = (fx) => git(fx.bare, "log", "--oneline").trim().split("\n").filter(Boolean).length;
+// `--all`: a delivered commit lands on that task's own branch, not on the
+// remote's default branch, and the question here is what reached the remote.
+const remoteCommits = (fx) => git(fx.bare, "log", "--oneline", "--all").trim().split("\n").filter(Boolean).length;
 const phases = (fx, id) => {
   const at = SCHED.taskPhases(fx.P, id).attempts[0];
   return at ? PH.listPhases(at.dir) : [];
