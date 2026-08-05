@@ -491,13 +491,22 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
     // where there is no remote branch to measure against and a task branch's
     // whole history would otherwise read as outgoing. A task worktree is cut
     // from the main repository's HEAD, so the main repository's branch is the
-    // honest answer; the remote's default branch, then the target branch itself,
-    // are the fallbacks for a delivery made from the project checkout directly.
-    const mainBranch = C.gitOut(mainRoot, "rev-parse", "--abbrev-ref", "HEAD");
+    // first candidate; the remote's default branch and the target branch follow.
+    //
+    // The candidate is chosen by whether `<remote>/<candidate>` RESOLVES, not by
+    // whether it is a plausible name. A main checkout sitting on a local-only
+    // branch names something the remote has never heard of, and measuring
+    // against a ref that does not exist would make every first push report the
+    // branch's entire history as outgoing — fail-closed, but for a reason no
+    // operator could read off the message.
     const remoteDefault = C.gitOut(repoRoot, "symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`) ?? "";
-    const baseRemoteBranch = (mainBranch && mainBranch !== "HEAD" ? mainBranch : null)
-      ?? (remoteDefault.startsWith(`${remote}/`) ? remoteDefault.slice(remote.length + 1) : null)
-      ?? remoteBranch;
+    const baseCandidates = [
+      C.gitOut(mainRoot, "rev-parse", "--abbrev-ref", "HEAD"),
+      remoteDefault.startsWith(`${remote}/`) ? remoteDefault.slice(remote.length + 1) : null,
+      remoteBranch,
+    ];
+    const baseRemoteBranch = baseCandidates.find((b) =>
+      b && b !== "HEAD" && C.gitOut(repoRoot, "rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${b}`)) ?? remoteBranch;
 
     // A baseline recorded against a different branch or head is not this one.
     if (run.baseline?.repository?.branch && run.baseline.repository.branch !== branch)
@@ -720,8 +729,14 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
     // stale `refs/remotes/...` survives a branch being deleted upstream, and
     // trusting it would turn "the branch is gone" into an implicit re-creation.
     const ls = C.gitRun(repoRoot, ["ls-remote", "--heads", tx.remote, `refs/heads/${tx.remote_branch}`]);
-    const existsOnRemote = ls.ok && ls.stdout.trim() !== "";
-    const remoteHead = existsOnRemote ? C.gitOut(repoRoot, "rev-parse", "--verify", "--quiet", remoteRef) : null;
+    // An ls-remote that ERRORED answered nothing. Reading it as "the branch is
+    // absent" would send a branch the remote really does have down the
+    // first-push path, past the incoming and fast-forward checks.
+    if (!ls.ok)
+      return stop("FETCH_FAILED",
+        `git ls-remote ${tx.remote} failed (${ls.code}), so whether "${tx.remote_branch}" exists there is unknown. Commit ${hash} is NOT pushed: ${clamp(ls.stderr || ls.stdout, 1000)}`,
+        { commit: tx.commit });
+    const remoteHead = ls.stdout.trim() !== "" ? C.gitOut(repoRoot, "rev-parse", "--verify", "--quiet", remoteRef) : null;
     const localHead = C.gitOut(repoRoot, "rev-parse", "HEAD");
     let outgoing = [], incoming = [], mergeBase = null, ahead = 0, behind = 0;
     if (remoteHead) {
@@ -803,8 +818,9 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
       local_ref: `refs/heads/${tx.branch}`, remote_ref: `refs/heads/${tx.remote_branch}`,
       started_at: pushStart, ended_at: now(), exit_code: push.code, ok: push.ok,
       // A branch the remote has never seen has no remote head to range from, so
-      // the range starts at the commit it forked from.
-      pushed_range: `${remoteHead ?? mergeBase ?? "(no shared history)"}..${hash}`,
+      // the range starts at the commit it forked from. With no shared history
+      // there is no range at all, and this stays null rather than becoming prose.
+      pushed_range: (remoteHead ?? mergeBase) ? `${remoteHead ?? mergeBase}..${hash}` : null,
       stdout: clamp(push.stdout, 4000), stderr: clamp(push.stderr, 4000),
     };
     artifact("push.json", tx.push);
