@@ -12,6 +12,9 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixture, initWorkspace, addTask, fakeQueueEnv, runQueue, EXEC, RUN } from "./helpers.mjs";
+import { ROOT as _R, url as _u } from "./helpers.mjs";
+const PACK = await import(_u(_R + "/scripts/pack.mjs"));
+const WT = await import(_u(_R + "/scripts/worktree.mjs"));
 
 test("KNOWN GAP: a write outside the worktree is neither prevented nor detected", async () => {
   const fx = fixture("gap-outside");
@@ -120,4 +123,25 @@ test("a full queue run leaves the main working tree byte-identical", async () =>
     assert.equal(readFileSync(join(fx.repo, "src", "app.js"), "utf8"), appBefore);
     assert.equal(execFileSync("git", ["-C", fx.repo, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" }), before);
   } finally { fx.done(); }
+});
+
+test("the argv SCH launches a worker with suppresses the operator's catalogue", () => {
+  const args = PACK.workerArgs({ packPath: "X" });
+  assert.equal(args[args.indexOf("--setting-sources") + 1], "project");
+  assert.ok(args.includes("Skill(schedule)"));
+  assert.ok(!args.includes("--bare"));
+});
+
+test("KNOWN GAP: denying a built-in blocks invocation but not listing", () => {
+  // Probed against the real CLI: `--disallowed-tools "Skill(init)"` returns
+  // "Skill execution blocked by permission rules" on invocation, while the name
+  // still appears in the worker's skill list. So a denied built-in still costs
+  // context. There is no flag that removes it without removing the pack too.
+  //
+  // This asserts the SHAPE of the mitigation, not the CLI's behaviour — the
+  // suite is hermetic and never invokes a real model. If a future CLI stops
+  // listing denied skills, this comment is what tells you the README's residual
+  // can be deleted.
+  assert.ok(PACK.deniedBuiltins().length > 0,
+    "denial is by name, so the names are known and still listed");
 });

@@ -328,3 +328,10 @@ test("preflight-only: reports every failure at once and starts nothing", async (
   assert.ok(!existsSync(join(fx.repo, ".sch-loop", "runs")) || !existsSync(join(fx.repo, ".sch-loop", "runs", "RUN-")), "no run directory");
   fx.done();
 });
+
+test("PACK_UNAVAILABLE is a registered failure that asks a person, not a retry", () => {
+  assert.ok(RUN.FAILURES.includes("PACK_UNAVAILABLE"),
+    "a failure code the runner can emit must be in the taxonomy");
+  assert.equal(RUN.outcomeFor("PACK_UNAVAILABLE"), "NEEDS_DECISION",
+    "retrying cannot make an unavailable pack available, and running without one is the failure this prevents");
+});

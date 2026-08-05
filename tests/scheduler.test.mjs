@@ -14,8 +14,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { fixture, initWorkspace, addTask, withRemote, otherClone, fakeQueueEnv,
+import { fixture, initWorkspace, addTask, withRemote, otherClone, fakeQueueEnv, runQueue,
          recordGit, git, SCHED, HG, TR, TG, PH, STATE } from "./helpers.mjs";
+import { ROOT as _R, url as _u } from "./helpers.mjs";
+const PACK = await import(_u(_R + "/scripts/pack.mjs"));
+const WT = await import(_u(_R + "/scripts/worktree.mjs"));
 
 // A project whose delivery needs no signature — most tests are about the
 // scheduler, not about approval, and the approval tests turn it back on.
@@ -904,4 +907,33 @@ test("scheduler: a checkout cleared BETWEEN queue runs stops the resumed attempt
   assert.equal(r.failure.code, "WORKTREE_MISSING");
   assert.equal(existsSync(wtPath(fx, a)), false, "the branch must NOT be checked out again at its last commit");
   assert.equal(invocations(fx).length, 1, "and no second worker ran against a baseline that was never true");
+});
+
+test("the pack is removed with the worktree, and survives a FAILED task", async () => {
+  const fx = queueFixture("pack-lifecycle");
+  try {
+    const ok = addTask(fx);
+    const bad = addTask(fx, { title: "writes nothing" });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [ok]: { write: [{ path: "src/app.js", content: "// x\n" }] },
+        // A worker that changes nothing fails verification, and a failed task
+        // keeps its evidence.
+        [bad]: {},
+      }),
+      maxTasks: 2,
+    });
+    const st = states(fx);
+
+    // Delivered: the checkout is disposable and so is the pack.
+    assert.equal(st[ok], "DELIVERED", JSON.stringify(st));
+    assert.equal(WT.worktreeState({ projectId: fx.P, taskId: ok, repoRoot: fx.repo }).exists, false);
+    assert.equal(PACK.packState({ projectId: fx.P, taskId: ok }).exists, false,
+      "a pack must never outlive its worktree");
+
+    // Not delivered: both survive, because both are what a person examines.
+    assert.notEqual(st[bad], "DELIVERED", JSON.stringify(st));
+    assert.equal(PACK.packState({ projectId: fx.P, taskId: bad }).exists, true,
+      "a pack must not be reaped while the run is still evidence");
+  } finally { fx.done(); }
 });

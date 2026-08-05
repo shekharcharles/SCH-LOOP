@@ -195,6 +195,12 @@ scripts/skillsources.mjs  Governed EXTERNAL skill sources: full-commit pinning, 
                           sync, file/script/hook inventory, explainable risk classification,
                           static quality gate, conflict detection against SCH's own machinery,
                           and hash-bound, ROLE-SCOPED approval whose default is nothing.
+scripts/pack.mjs          The project-local CAPABILITY PACK: a generated plugin directory
+                          holding only the skills one task may use, built OUTSIDE the managed
+                          repository. Carries a skill's documents, refuses anything that can
+                          execute, and states the built-in policy plus the exact worker argv.
+                          A built-in on neither the allow nor the deny list is DENIED.
+                          Denying blocks INVOCATION, not listing — the names still appear.
 scripts/subprocess.mjs    The ONE bounded subprocess implementation: argv only (no shell),
                           explicit environment, bounded output, timeout, cancellation, and
                           process-TREE termination. Timeout is the MINIMUM of every bound.
@@ -742,6 +748,15 @@ Stated plainly, because a false claim here is worse than a missing feature.
   shared hooks directory is still caught: the metadata fingerprint resolves
   against the common dir, not the linked worktree's private git dir.
 
+- **A worker cannot see your global skills.** Each task gets a generated plugin
+  directory holding exactly the skills SCH approved for it, and the worker is
+  launched with `--setting-sources project` so nothing from `~/.claude` reaches
+  it. The pack lives beside the worktree, never inside your repository.
+- **A worker cannot invoke a built-in that schedules work or edits your config.**
+  `schedule`, `loop`, `init`, `update-config`, `fewer-permission-prompts` and
+  `run` are denied by argv; a built-in a future CLI ships that nobody has
+  classified is denied too.
+
 **Where the checkouts live, and what removes them.** The default root is
 `%LOCALAPPDATA%\sch-loop\worktrees` on Windows and
 `${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees` elsewhere.
@@ -763,6 +778,12 @@ and says so:
 - **A write outside the worktree is neither prevented nor detected.** Effect
   inspection compares the worktree before and after; anything else is invisible.
 - **Workers are not OS-sandboxed.** They run as your user with your PATH.
+- **Denied built-in skills still appear in the worker's skill listing.** Denial
+  blocks invocation, not listing, so roughly a dozen names remain as context
+  cost. No flag removes them without removing the pack as well.
+- **A skill that needs its own scripts cannot be packed.** Only `SKILL.md` and
+  its supporting documents are carried; hooks, scripts and nested plugin
+  manifests are refused and recorded in the pack's refusals.
 - **Network access is unrestricted.**
 - **A process that detaches into a new session survives the tree-kill.**
 - **The credential strip removes the *ambient* helper only.** A worker that
