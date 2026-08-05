@@ -70,7 +70,7 @@ const gate = (id, gates) => ({ id, kind: "GATE", handler: "gate-only", gates, ou
 // ------------------------------------------------------------- the templates
 
 const READINESS = ["project-workspace-valid", "dependency-graph-valid", "task-ready"];
-const EFFECTS = ["worker-effects-contained", "changed-paths-allowed", "forbidden-git-effects-absent"];
+const EFFECTS = ["worker-effects-contained", "worker-stayed-in-its-worktree", "changed-paths-allowed", "forbidden-git-effects-absent"];
 const VERIFY = ["required-verification-passed", "prompt-budget-valid", "secret-scan-passed"];
 
 export const TEMPLATES = {
