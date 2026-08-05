@@ -33,35 +33,53 @@ const projectId = flag("project") ?? die("need --project <id> — this controlle
 const runId = flag("run") ?? die("need --run <RUN-id> — this controller never selects a run");
 if (!/^RUN-/.test(runId)) die(`--run "${runId}" is not a run id`);
 
-// A dry run reports where the delivery stands without touching the repository.
-if (has("dry-run")) {
-  const d = readDelivery(projectId, runId);
-  console.log(JSON.stringify(d.ok
-    ? { state: d.transaction.state, approval: d.approval_status, commit_message: d.transaction.commit_message,
-        paths: d.transaction.verified_paths, commit: d.transaction.commit?.hash ?? null, failure: d.transaction.failure }
-    : d, null, 2));
-  process.exit(d.ok ? 0 : 1);
-}
+// This CLI's contract is structured JSON on every outcome — a supervisor daemon
+// parses it, and a stack trace on stdout is not a result. Resolving the project
+// and its workspace THROWS (an unregistered project, an uninitialized
+// workspace), so the throw is turned back into the same shape the controller
+// itself returns. Nothing is retried or guessed here; the failure is reported.
+const bail = (e) => {
+  console.log(JSON.stringify({
+    delivery_id: null, run_id: runId, project_id: projectId, state: "FAILED",
+    failure: { code: e?.code ?? "DELIVERY_CLI_FAILED", message: String(e?.message ?? e) },
+    note: "nothing was staged, committed or pushed — this stopped before touching any repository",
+  }, null, 2));
+  process.exit(1);
+};
 
-const taskId = readRun(projectId, runId)?.run?.task_id ?? null;
-const taskCheckout = taskId === null ? null : worktreePathFor(projectId, taskId);
-const workRoot = flag("work-root") ?? (taskCheckout && existsSync(taskCheckout) ? taskCheckout : null);
-if (workRoot) console.error(`delivering from ${workRoot}`);
+try {
 
-const r = deliverRun({ projectId, runId, workRoot, commitMessageOverride: flag("message") ?? null });
+  // A dry run reports where the delivery stands without touching the repository.
+  if (has("dry-run")) {
+    const d = readDelivery(projectId, runId);
+    console.log(JSON.stringify(d.ok
+      ? { state: d.transaction.state, approval: d.approval_status, commit_message: d.transaction.commit_message,
+          paths: d.transaction.verified_paths, commit: d.transaction.commit?.hash ?? null, failure: d.transaction.failure }
+      : d, null, 2));
+    process.exit(d.ok ? 0 : 1);
+  }
 
-console.log(JSON.stringify({
-  delivery_id: r.delivery_id, run_id: runId, project_id: projectId, work_root: workRoot,
-  state: r.state, failure: r.failure ?? null,
-  commit: r.commit ?? null, branch: r.branch ?? null,
-  remote: r.remote ?? null, remote_ref: r.remote_ref ?? null,
-  pushed_range: r.pushed_range ?? null,
-  delivery_dir: r.delivery_dir ?? null,
-  note: r.state === "DELIVERED"
-    ? "committed, pushed and verified on the remote; the task is marked delivered"
-    : "nothing was force-pushed, amended, reset or rewritten — inspect the delivery directory",
-}, null, 2));
+  const taskId = readRun(projectId, runId)?.run?.task_id ?? null;
+  const taskCheckout = taskId === null ? null : worktreePathFor(projectId, taskId);
+  const workRoot = flag("work-root") ?? (taskCheckout && existsSync(taskCheckout) ? taskCheckout : null);
+  if (workRoot) console.error(`delivering from ${workRoot}`);
 
-// 0 = DELIVERED. Distinct codes so a supervisor can tell "a person must look at
-// this" from "the code is wrong" without parsing the JSON.
-process.exit({ DELIVERED: 0, NEEDS_DECISION: 4, CANCELLED: 5 }[r.state] ?? 1);
+  const r = deliverRun({ projectId, runId, workRoot, commitMessageOverride: flag("message") ?? null });
+
+  console.log(JSON.stringify({
+    delivery_id: r.delivery_id, run_id: runId, project_id: projectId, work_root: workRoot,
+    state: r.state, failure: r.failure ?? null,
+    commit: r.commit ?? null, branch: r.branch ?? null,
+    remote: r.remote ?? null, remote_ref: r.remote_ref ?? null,
+    pushed_range: r.pushed_range ?? null,
+    delivery_dir: r.delivery_dir ?? null,
+    note: r.state === "DELIVERED"
+      ? "committed, pushed and verified on the remote; the task is marked delivered"
+      : "nothing was force-pushed, amended, reset or rewritten — inspect the delivery directory",
+  }, null, 2));
+
+  // 0 = DELIVERED. Distinct codes so a supervisor can tell "a person must look at
+  // this" from "the code is wrong" without parsing the JSON.
+  process.exit({ DELIVERED: 0, NEEDS_DECISION: 4, CANCELLED: 5 }[r.state] ?? 1);
+
+} catch (e) { bail(e); }
