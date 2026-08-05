@@ -129,7 +129,7 @@ function writeJson(path, obj) {
 // each other last-write-wins. mkdir is atomic on every OS, so we use a lock dir:
 // acquire → read → mutate → write → release. Stale locks (crashed holder) expire.
 const LOCK_TTL = 10000, LOCK_WAIT = 5000;
-function withFileLock(path, fn) {
+function withFileLock(path, fn, { failClosed = false } = {}) {
   const lock = path + ".lock";
   const start = Date.now();
   for (;;) {
@@ -138,7 +138,15 @@ function withFileLock(path, fn) {
       let age = Infinity;
       try { age = Date.now() - statSync(lock).mtimeMs; } catch { break; }
       if (age > LOCK_TTL) { try { rmSync(lock, { recursive: true, force: true }); } catch {} continue; }
-      if (Date.now() - start > LOCK_WAIT) break;           // give up waiting; proceed (availability > perfection)
+      if (Date.now() - start > LOCK_WAIT) {
+        // A CLI command prefers availability: proceed, accept last-write-wins.
+        // A state mutation must not - that is precisely the erased update this
+        // lock exists to prevent, and it shows up only under the contention
+        // that makes it likely.
+        if (failClosed)
+          throw Object.assign(new Error(`could not lock ${path} within ${LOCK_WAIT}ms - another writer is holding it`), { code: "STATE_LOCK_TIMEOUT" });
+        break;
+      }
       // busy-wait briefly (sync API by design — these are millisecond-scale ops)
       const until = Date.now() + 25; while (Date.now() < until);
     }
