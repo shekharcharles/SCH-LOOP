@@ -43,6 +43,7 @@ const onEvent = verbose
 const r = await runQueue({
   projectId,
   maxTasks: int("max-tasks", flag("max-tasks")),
+  maxParallel: int("max-parallel", flag("max-parallel")) ?? 1,
   maxDurationMs: int("max-duration-ms", flag("max-duration-ms")),
   phase: flag("phase") === undefined ? null : Number(flag("phase")),
   stopAfterTask: flag("stop-after-task") === undefined ? null : Number(flag("stop-after-task")),

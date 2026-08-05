@@ -11,6 +11,7 @@
 // at every pending human decision.
 
 import { test } from "node:test";
+const NL = String.fromCharCode(10);
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -48,6 +49,22 @@ const invocations = (fx) => {
 // `--all`, because a delivered commit lands on that task's own branch now, not
 // on the remote's default branch. The question every assertion below is asking
 // is still "what reached the remote", which is every ref it holds.
+// Wall-clock spans, one per worker process, paired by pid. Overlap between two
+// spans is the direct evidence that the queue ran them at the same time.
+const spans = (fx) => {
+  const p = join(fx.home, "behaviours", "spans.log");
+  if (!existsSync(p)) return [];
+  const by = new Map();
+  for (const line of readFileSync(p, "utf8").trim().split(String.fromCharCode(10)).filter(Boolean)) {
+    const r = JSON.parse(line);
+    const cur = by.get(r.pid) ?? { pid: r.pid, task_id: r.task_id };
+    if (r.start) cur.start = r.start;
+    if (r.end) cur.end = r.end;
+    by.set(r.pid, cur);
+  }
+  return [...by.values()].filter((s) => s.start && s.end).sort((a, b) => a.start - b.start);
+};
+
 const remoteLog = (fx) => git(fx.bare, "log", "--oneline", "--all").trim().split("\n").filter(Boolean);
 
 // ============================================================ 47–52. sequencing
@@ -984,5 +1001,73 @@ test("a commit that is not a dependency's and not an integration merge still sto
     assert.equal(states(fx)[a], "DELIVERED");
     assert.notEqual(states(fx)[b], "DELIVERED",
       "an extra commit nobody approved must still stop the delivery");
+  } finally { fx.done(); }
+});
+
+test("two independent tasks run concurrently under --max-parallel 2", async () => {
+  const fx = queueFixture("queue-parallel");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    const sig = join(fx.home, "barrier", "b-started");
+    // Task a cannot finish until task b starts. If the queue runs them one at a
+    // time, a waits forever and fails. Both delivering IS the overlap.
+    const rec = await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { waitForFile: sig, write: [{ path: "src/a.js", content: "// a" + NL }] },
+        [b]: { signalFile: sig, write: [{ path: "src/b.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 2,
+    });
+    const st = states(fx);
+    assert.equal(st[a], "DELIVERED", JSON.stringify(rec).slice(0, 300));
+    assert.equal(st[b], "DELIVERED", JSON.stringify(rec).slice(0, 300));
+  } finally { fx.done(); }
+});
+
+test("path-overlapping tasks never run concurrently, whatever the bound", async () => {
+  const fx = queueFixture("queue-overlap");
+  try {
+    // Both own the same path, so the graph must serialise them even at 4.
+    const a = addTask(fx, { title: "a", allow: "src/shared.js" });
+    const b = addTask(fx, { title: "b", allow: "src/shared.js" });
+    const sig = join(fx.home, "barrier", "peer-started");
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { waitForFile: sig, waitMs: 2500, write: [{ path: "src/shared.js", content: "// a" + NL }] },
+        [b]: { signalFile: sig, write: [{ path: "src/shared.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 4,
+    });
+    // a waits for b, and b can never be in flight beside it — so a must NOT
+    // deliver. If it did, two tasks owning the same file ran together.
+    assert.notEqual(states(fx)[a], "DELIVERED",
+      "two tasks owning the same path overlapped — that is data loss, not throughput");
+    const sp = spans(fx);
+    for (let i = 1; i < sp.length; i++)
+      assert.ok(sp[i - 1].end <= sp[i].start, "worker spans overlapped for path-owning tasks");
+  } finally { fx.done(); }
+});
+
+test("--max-parallel 1 runs tasks strictly one at a time", async () => {
+  const fx = queueFixture("queue-serial");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    const sig = join(fx.home, "barrier", "b-started");
+    // The SAME two tasks that both deliver at --max-parallel 2. At 1, task a
+    // waits for a worker that cannot exist yet, so it must fail. The pair is the
+    // proof that the bound decides, rather than the machine happening to be fast.
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { waitForFile: sig, waitMs: 2500, write: [{ path: "src/a.js", content: "// a" + NL }] },
+        [b]: { signalFile: sig, write: [{ path: "src/b.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 1,
+    });
+    assert.notEqual(states(fx)[a], "DELIVERED", "the default must remain sequential");
+    const sp = spans(fx);
+    for (let k = 1; k < sp.length; k++)
+      assert.ok(sp[k - 1].end <= sp[k].start, "two workers overlapped at --max-parallel 1");
   } finally { fx.done(); }
 });

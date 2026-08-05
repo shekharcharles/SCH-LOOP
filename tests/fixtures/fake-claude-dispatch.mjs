@@ -31,11 +31,20 @@ const attempt = process.env.SCH_ATTEMPT ?? "1";
 // fixture makes the planner write too, and the planner is read-only.
 const semantic = process.env.SCH_SEMANTIC || process.env.SCH_PHASE || "";
 
-try {
-  appendFileSync(join(dir, "invocations.log"),
-    JSON.stringify({ pid: process.pid, task_id: taskId, attempt, semantic,
-      run_id: process.env.SCH_RUN_ID ?? null, at: new Date().toISOString() }) + "\n");
-} catch { /* the log is evidence, not a dependency */ }
+const append = (file, rec) => {
+  try { appendFileSync(join(dir, file), JSON.stringify(rec) + String.fromCharCode(10)); }
+  catch { /* the log is evidence, not a dependency */ }
+};
+
+append("invocations.log", { pid: process.pid, task_id: taskId, attempt, semantic,
+  run_id: process.env.SCH_RUN_ID ?? null, at: new Date().toISOString() });
+
+// Wall-clock START and END, in their OWN file so the invocation log keeps
+// meaning exactly one line per worker. Two workers overlapping is the only
+// direct proof the queue ran them at the same time; a start-only record cannot
+// show it. Paired by pid, which is unique per worker process.
+append("spans.log", { pid: process.pid, task_id: taskId, start: Date.now() });
+process.on("exit", () => append("spans.log", { pid: process.pid, task_id: taskId, end: Date.now() }));
 
 const candidates = [
   join(dir, `task-${taskId}-${semantic}.json`),

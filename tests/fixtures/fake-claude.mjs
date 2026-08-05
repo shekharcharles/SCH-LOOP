@@ -55,6 +55,23 @@ if (b.commitExtra) {
   } catch { /* the guard is what this proves, not the commit */ }
 }
 
+// A BARRIER between two workers, which is how concurrency is proven without
+// timing anything. `signalFile` creates a file; `waitForFile` blocks until it
+// appears. A worker that waits can only finish if the signalling worker is
+// running AT THE SAME TIME - so 'both tasks succeeded' means they overlapped,
+// and 'the waiter timed out' means they did not. No sleeps, no clock reading.
+if (b.signalFile) { try { mkdirSync(dirname(b.signalFile), { recursive: true }); writeFileSync(b.signalFile, String(process.pid)); } catch {} }
+if (b.waitForFile) {
+  const deadline = Date.now() + (b.waitMs ?? 8000);
+  while (!existsSync(b.waitForFile)) {
+    if (Date.now() > deadline) {
+      console.error(`fake-claude: waited for "${b.waitForFile}" and it never appeared - no other worker ran while this one was alive`);
+      process.exit(4);
+    }
+    try { execFileSync(process.execPath, ["-e", "setTimeout(()=>{},50)"], { stdio: "ignore" }); } catch {}
+  }
+}
+
 if (b.selfCancel) {
   const d = join(cwd, ".sch-loop", "runs", process.env.SCH_RUN_ID ?? "unknown");
   mkdirSync(d, { recursive: true });
