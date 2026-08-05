@@ -33,6 +33,7 @@ import * as RUN from "./runner.mjs";
 import * as DEL from "./delivery.mjs";
 import * as CAND from "./candidate.mjs";
 import * as GRAPH from "./taskgraph.mjs";
+import * as PACK from "./pack.mjs";
 import * as TR from "./transitions.mjs";
 import * as PH from "./phases.mjs";
 import * as ENV from "./envelopes.mjs";
@@ -111,6 +112,7 @@ export const SCHEDULER_EVENTS = [
   "scheduler.task_failed", "scheduler.task_blocked", "scheduler.project_completed",
   "scheduler.stopped", "scheduler.cancelled", "scheduler.lease_acquired", "scheduler.lease_released",
   "scheduler.worktree_created", "scheduler.worktree_removed",
+  "scheduler.pack_removed",
 ];
 
 const now = () => new Date().toISOString();
@@ -585,6 +587,11 @@ export async function runQueue({
       if (outcome.state === "DELIVERED" || outcome.state === "CANCELLED") {
         const rm = WT.removeWorktree({ projectId, taskId: task.id, repoRoot });
         emit("scheduler.worktree_removed", { removed: rm.removed, path: rm.path ?? wt.path }, { taskId: task.id });
+        // The pack is disposable in exactly the same way, and kept on FAILED
+        // for the same reason the worktree is: it is part of what a person
+        // examines to see what the worker was actually given.
+        const rmp = PACK.removePack({ projectId, taskId: task.id });
+        emit("scheduler.pack_removed", { removed: rmp.removed, path: rmp.path }, { taskId: task.id });
       }
 
       record.tasks.push(outcome);
