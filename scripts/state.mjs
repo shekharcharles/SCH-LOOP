@@ -162,6 +162,27 @@ export const getProject = (id) => loadRegistry().projects.find((p) => p.id === i
 export const loadState = (id) => readJson(statePath(id), STATE_EMPTY);
 export const saveState = (id, s) => writeJson(statePath(id), s);
 
+// The ONLY safe way to change project state. `load -> mutate -> save` is a
+// read-modify-write, and every `await` between the read and the write is a
+// window where another writer's change is silently erased. `withFileLock`
+// already existed for exactly this reason, but it was applied to a single call
+// site on the REGISTRY path, wrapping the CLI dispatcher; project state - the
+// thing parallel workers actually mutate - had no lock at all.
+//
+// `fn` MUST be synchronous. An async fn returns a promise, the lock would be
+// released before the mutation finished, and the mutual exclusion this function
+// exists to provide would be gone.
+export function mutateState(projectId, fn) {
+  return withFileLock(statePath(projectId), () => {
+    const s = loadState(projectId);
+    const result = fn(s);
+    if (result && typeof result.then === "function")
+      throw Object.assign(new Error("mutateState requires a synchronous mutation - an async one releases the lock before the write lands"), { code: "STATE_MUTATION_ASYNC" });
+    saveState(projectId, s);
+    return result;
+  }, { failClosed: true });
+}
+
 export function event(state, msg) {
   state.events.unshift({ id: ++state.seq.event, ts: now(), msg });
   state.events = state.events.slice(0, 500); // ponytail: cap log
