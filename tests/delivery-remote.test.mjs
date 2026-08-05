@@ -678,6 +678,96 @@ test("a first push inside the namespace creates the remote branch and sets upstr
   } finally { fx.done(); }
 });
 
+// The operator's escape hatch. The UPSTREAM_CHANGED message points at it, so it
+// has to work on the runs the scheduler now produces — where the change is in
+// the task's checkout and not in the project repository at all.
+test("the manual delivery CLI delivers from the task's own checkout without being told where it is", async () => {
+  const fx = fixture("cli-work-root");
+  try {
+    initWorkspace(fx);
+    const bare = withRemote(fx);
+    const t = addTask(fx);
+    // Where the scheduler puts it, because that is what the CLI resolves.
+    const alt = join(fx.wt, fx.P, `task-${t}`);
+    git(fx.repo, "worktree", "add", alt, "-b", `sch/task-${t}`, "HEAD");
+
+    const rec = await verifiedRun(fx, t, {
+      write: [{ path: "src/app.js", content: "// delivered by hand\n" }],
+    }, { workRoot: alt });
+    approve(fx, rec.run_id, { workRoot: alt });
+
+    let out;
+    try {
+      out = execFileSync("node", [join(ROOT, "scripts", "sch-deliver-run.mjs"), "--project", fx.P, "--run", rec.run_id],
+        { encoding: "utf8", env: { ...process.env, SCH_HOME: fx.home, SCH_WORKTREE_ROOT: fx.wt, NODE_NO_WARNINGS: "1" } });
+    } catch (e) { assert.fail(`the CLI exited ${e.status}: ${e.stdout}${e.stderr}`); }
+
+    const r = JSON.parse(out);
+    assert.equal(r.state, "DELIVERED", out);
+    assert.equal(r.work_root, alt, "and it said which tree it delivered from");
+    assert.ok(execFileSync("git", ["ls-remote", "--heads", bare], { encoding: "utf8" }).includes(`refs/heads/sch/task-${t}`));
+  } finally { fx.done(); }
+});
+
+// The base is chosen by whether the ref RESOLVES, not by whether it is a
+// plausible name. An operator sitting on a local-only branch would otherwise
+// have every first push measured against a remote ref that does not exist, and
+// report the branch's whole history as outgoing forever.
+test("a main checkout on a local-only branch falls through to the remote's default", async () => {
+  const fx = fixture("ns-local-only-base");
+  try {
+    initWorkspace(fx);
+    withRemote(fx);
+    git(fx.repo, "remote", "set-head", "origin", "main");   // what a clone does for you
+    git(fx.repo, "checkout", "-q", "-b", "local-only");      // and never pushed
+    const t = addTask(fx);
+    const alt = join(fx.home, "wt-" + t);
+    git(fx.repo, "worktree", "add", alt, "-b", `sch/task-${t}`, "HEAD");
+
+    const rec = await verifiedRun(fx, t, {
+      write: [{ path: "src/app.js", content: "// forked from a local branch\n" }],
+    }, { workRoot: alt });
+    approve(fx, rec.run_id, { workRoot: alt });
+    const d = deliver(fx, rec.run_id, { workRoot: alt });
+
+    assert.equal(d.state, "DELIVERED", JSON.stringify(d.failure ?? d));
+    assert.equal(txOf(fx, rec.run_id).base_remote_branch, "main",
+      "\"local-only\" has no counterpart on the remote, so it is not the base");
+  } finally { fx.done(); }
+});
+
+// The fallback that decides what happens when there is no fork point at all.
+// Without it a repository with two unrelated roots would push a history nobody
+// examined; with it, the whole branch counts as outgoing and the one-commit gate
+// stops the delivery. The commit COUNT in the message is what pins it: drop the
+// fallback and this says "0 commit(s)" instead of "2".
+test("a branch with no shared history has no fork point, so its whole history is outgoing", async () => {
+  const fx = fixture("ns-unrelated-roots");
+  try {
+    initWorkspace(fx);
+    withRemote(fx);
+    const t = addTask(fx);
+    const alt = join(fx.home, "wt-" + t);
+    git(fx.repo, "worktree", "add", "--detach", alt, "HEAD");
+    // A root commit of its own: nothing it contains descends from anything the
+    // remote has, so `merge-base` with the base branch answers nothing.
+    git(alt, "checkout", "--orphan", `sch/task-${t}`);
+    git(alt, "commit", "-q", "-m", "unrelated root");
+
+    const rec = await verifiedRun(fx, t, {
+      write: [{ path: "src/app.js", content: "// from nowhere\n" }],
+    }, { workRoot: alt });
+    approve(fx, rec.run_id, { workRoot: alt });
+    const audit = recordGit();
+    const d = deliver(fx, rec.run_id, { workRoot: alt });
+    audit.stop();
+
+    assert.equal(d.failure?.code, "UNRELATED_OUTGOING_COMMITS", JSON.stringify(d.failure));
+    assert.match(d.failure.message, /^2 commit\(s\) would be pushed/);
+    assert.ok(!audit.calls.some((c) => c.startsWith("push ")), "nothing unexamined reached the remote");
+  } finally { fx.done(); }
+});
+
 test("a first push outside the namespace still stops with UPSTREAM_CHANGED", async () => {
   const fx = fixture("ns-outside");
   try {

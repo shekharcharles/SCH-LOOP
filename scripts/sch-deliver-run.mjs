@@ -9,11 +9,20 @@
 //   node scripts/sch-deliver-run.mjs --project <id> --run <RUN-id>
 //   node scripts/sch-deliver-run.mjs --project <id> --run <RUN-id> --dry-run
 //   node scripts/sch-deliver-run.mjs --project <id> --run <RUN-id> --message "fix(api): ..."
+//   node scripts/sch-deliver-run.mjs --project <id> --run <RUN-id> --work-root <path>
+//
+// The change lives in the task's own checkout, not the operator's working tree,
+// so that is where this delivers from — resolved out loud, and overridable with
+// --work-root. It is never guessed: if that checkout is gone, this runs against
+// the project repository and the candidate binding says so.
 //
 // Approval is REQUIRED by default, before the commit and again before the push:
 //   node scripts/state.mjs delivery-approve --project <id> --run <RUN-id> --approver <you>
 
+import { existsSync } from "node:fs";
 import { deliverRun, readDelivery } from "./delivery.mjs";
+import { readRun } from "./runner.mjs";
+import { worktreePathFor } from "./worktree.mjs";
 
 const argv = process.argv.slice(2);
 const flag = (name) => { const i = argv.indexOf("--" + name); return i === -1 ? undefined : argv[i + 1]; };
@@ -34,10 +43,15 @@ if (has("dry-run")) {
   process.exit(d.ok ? 0 : 1);
 }
 
-const r = deliverRun({ projectId, runId, commitMessageOverride: flag("message") ?? null });
+const taskId = readRun(projectId, runId)?.run?.task_id ?? null;
+const taskCheckout = taskId === null ? null : worktreePathFor(projectId, taskId);
+const workRoot = flag("work-root") ?? (taskCheckout && existsSync(taskCheckout) ? taskCheckout : null);
+if (workRoot) console.error(`delivering from ${workRoot}`);
+
+const r = deliverRun({ projectId, runId, workRoot, commitMessageOverride: flag("message") ?? null });
 
 console.log(JSON.stringify({
-  delivery_id: r.delivery_id, run_id: runId, project_id: projectId,
+  delivery_id: r.delivery_id, run_id: runId, project_id: projectId, work_root: workRoot,
   state: r.state, failure: r.failure ?? null,
   commit: r.commit ?? null, branch: r.branch ?? null,
   remote: r.remote ?? null, remote_ref: r.remote_ref ?? null,
