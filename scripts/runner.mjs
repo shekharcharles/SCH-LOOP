@@ -21,6 +21,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join, basename, resolve } from "node:path";
 import * as WS from "./workspace.mjs";
 import * as SK from "./skills.mjs";
+import * as PACK from "./pack.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
@@ -42,7 +43,7 @@ export const FAILURES = [
   "PATH_SCOPE_VIOLATION", "UNEXPECTED_FILE_CHANGE", "FORBIDDEN_GIT_EFFECT",
   "VERIFICATION_FAILURE", "VERIFICATION_TIMEOUT", "UNSAFE_VERIFICATION_COMMAND",
   "AMBIGUOUS_EVIDENCE", "BUDGET_EXCEEDED", "POLICY_VIOLATION", "LEASE_CONFLICT",
-  "LEASE_LOST", "CANCELLED",
+  "LEASE_LOST", "CANCELLED", "PACK_UNAVAILABLE",
 ];
 
 // Which outcome each failure produces. A worker-created git effect is
@@ -52,6 +53,10 @@ export const FAILURES = [
 const FAILURE_OUTCOME = {
   AGENT_TIMEOUT: "RETRYABLE", PROCESS_TRANSIENT: "RETRYABLE",
   ENVIRONMENT_MISSING: "NEEDS_DECISION", SKILL_NOT_APPROVED: "NEEDS_DECISION",
+  // NEEDS_DECISION, not RETRYABLE: a worker launched without its pack would
+  // silently fall back to whatever the CLI finds, which is the exact failure
+  // this containment exists to prevent, and retrying does not change it.
+  PACK_UNAVAILABLE: "NEEDS_DECISION",
   SKILL_HASH_STALE: "NEEDS_DECISION", PATH_POLICY_MISSING: "NEEDS_DECISION",
   FORBIDDEN_GIT_EFFECT: "NEEDS_DECISION", AMBIGUOUS_EVIDENCE: "NEEDS_DECISION",
   BUDGET_EXCEEDED: "NEEDS_DECISION", CANCELLED: "CANCELLED",
@@ -945,6 +950,20 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
     bad("POLICY_VIOLATION", `invalid SCH_PROMPT_MAX_CHARS "${env.SCH_PROMPT_MAX_CHARS}" — must be at least 2000`);
   ctx.promptMax = promptMax;
 
+  // The catalogue the worker will actually have. Built before the worker is
+  // prepared, because a run whose pack failed must never reach a spawn.
+  if (task && failures.length === 0) {
+    const built = PACK.buildPack({
+      projectId, taskId, skills: ctx.skills?.selected ?? [],
+      root: PACK.packsRoot(env),
+    });
+    if (!built.ok) bad("PACK_UNAVAILABLE", built.message);
+    else ctx.pack = {
+      path: built.path, manifest_name: built.manifest.name,
+      entries: built.entries, refusals: built.refusals,
+    };
+  }
+
   return { ok: failures.length === 0, failures, ctx, preparePromise: exec.prepare() };
 }
 
@@ -1073,9 +1092,15 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
   }
   ev("run.preflight_completed", { checks: "all passed" });
 
-  const { project: proj, task, policy, skills, executor: exec, promptMax, baselineRepo } = pre.ctx;
+  const { project: proj, task, policy, skills, executor: exec, promptMax, baselineRepo, pack } = pre.ctx;
   wsDir = pre.ctx.wsDir; repoRoot = pre.ctx.repoRoot;
   if (!runPath) { runPath = WS.runDir(wsDir, runId); mkdirSync(runPath, { recursive: true }); record.run_dir = runPath; }
+
+  // What this worker was actually given, on the record and on disk. A pack whose
+  // contents nobody can read afterwards is indistinguishable from no containment.
+  record = { ...record, pack };
+  write("run.json", record);
+  write("pack.json", pack);
 
   // ---- lease
   const lease = acquireLease(wsDir, { projectId, taskId, runId });
@@ -1141,6 +1166,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     const cancelFile = join(runPath, "CANCEL");
     const worker = await exec.execute({
       cwd: repoRoot, prompt: compiled.text, identity,
+      extraArgs: PACK.workerArgs({ packPath: pack.path }),
       isCancelled: () => existsSync(cancelFile),
       onEvent: (type, payload) => ev(type, payload),
     });
@@ -1425,7 +1451,7 @@ export function readRun(projectId, runId) {
   return {
     dir, run: load("run.json"), baseline: load("baseline.json"), handoff: load("handoff.json"),
     effects: load("git-effects.json"), verification: load("verification.json"),
-    prompt_manifest: load("prompt-manifest.json"), preflight: load("preflight.json"),
+    prompt_manifest: load("prompt-manifest.json"), preflight: load("preflight.json"), pack: load("pack.json"),
     context_manifest: load("context-manifest.json"), agent_config: load("agent-config.json"), usage: load("usage.json"),
     // The binding the delivery controller checks the working tree against.
     // Absent on runs that predate it — those are simply not deliverable.
