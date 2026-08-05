@@ -1071,3 +1071,55 @@ test("--max-parallel 1 runs tasks strictly one at a time", async () => {
       assert.ok(sp[k - 1].end <= sp[k].start, "two workers overlapped at --max-parallel 1");
   } finally { fx.done(); }
 });
+
+test("one task failing does not cancel its in-flight siblings", async () => {
+  const fx = queueFixture("queue-isolation");
+  try {
+    const a = addTask(fx, { title: "fails", allow: "src/a.js" });
+    const b = addTask(fx, { title: "succeeds", allow: "src/b.js" });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: {},                                    // writes nothing → fails verification
+        [b]: { write: [{ path: "src/b.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 2,
+    });
+    const st = states(fx);
+    assert.notEqual(st[a], "DELIVERED", JSON.stringify(st));
+    assert.equal(st[b], "DELIVERED",
+      "a sibling's failure must not take down a task that did its job");
+  } finally { fx.done(); }
+});
+
+test("a stop reaches every in-flight run, leaving none RUNNING", async () => {
+  const fx = queueFixture("queue-halt");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, { [a]: { selfCancel: true }, [b]: { selfCancel: true } }),
+      maxTasks: 2, maxParallel: 2,
+    });
+    for (const id of [a, b])
+      assert.notEqual(states(fx)[id], "RUNNING",
+        `task #${id} was left RUNNING — a stop that reaches one worker is not a stop`);
+  } finally { fx.done(); }
+});
+
+test("a duration limit signals the workers still running, it does not just outlive them", async () => {
+  const fx = queueFixture("queue-hardstop");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    // This worker waits 20s for a signal that never comes. The queue's own limit
+    // is 1.5s, so the only way this run ends promptly is an actual cancel
+    // reaching a worker that was ALREADY running.
+    const t0 = Date.now();
+    const rec = await runQueue(fx, {
+      env: fakeQueueEnv(fx, { [a]: { waitForFile: join(fx.home, "never-appears"), waitMs: 20000 } }),
+      maxTasks: 1, maxParallel: 1, maxDurationMs: 1500,
+    });
+    assert.equal(rec.stop_reason, "MAX_DURATION_REACHED", JSON.stringify(rec).slice(0, 300));
+    assert.ok(Date.now() - t0 < 18000, "the queue waited for the worker instead of stopping it");
+    assert.notEqual(states(fx)[a], "RUNNING", "a stopped run must not be left RUNNING");
+  } finally { fx.done(); }
+});
