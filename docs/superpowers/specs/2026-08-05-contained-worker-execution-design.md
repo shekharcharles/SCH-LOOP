@@ -110,11 +110,17 @@ unapproved work in it is unrecoverable, and no scheduler decision is worth that.
 
 ## 4. Worker environment
 
-The credential strip belongs in the **worker's environment**, never in the
+The credential strip belongs in the environment of **every bounded child SCH
+spawns** — the worker and the verification commands alike — never in the
 worktree's git configuration. The delivery controller runs in that same worktree
 and still has to authenticate a push.
 
-Added to the worker environment:
+Verification is not an exception to be argued about later: a task's `--verify` is
+typically `npm test`, and the worker wrote those test files. A credential the
+worker cannot reach directly but can reach through the test command it authored
+is not stripped at all.
+
+Added to that environment:
 
 ```
 GIT_CONFIG_COUNT=1
@@ -124,7 +130,7 @@ GIT_CONFIG_VALUE_0=
 
 An empty value disables the configured `manager` helper for that process only.
 
-Removed from the executor's environment allowlist for worker processes:
+Removed from the executor's environment allowlist for every such child process:
 `GH_TOKEN`, `GITHUB_TOKEN`, `GIT_ASKPASS`, `SSH_AUTH_SOCK`, `SSH_AGENT_PID`.
 `SCH_HOME` is already withheld and stays withheld.
 

@@ -92,11 +92,21 @@ never overlap.
 
 **`/sch-run` is the LEGACY in-session path.** Never run it and the queue against
 one project at once: while a scheduler holds the lease, `task-set --status` is
-refused in code and names the scheduler. **Workers are still not OS-sandboxed**,
-post-run inspection cannot see writes outside the repository or network calls,
-and git credentials remain reachable — so fully unattended operation is not
-supported. Parallel worktrees, fan-out/fan-in and worker containment are the NEXT
-milestone and do not exist.
+refused in code and names the scheduler.
+
+**Worker containment, both halves.** A worker now runs in a disposable worktree
+on `sch/task-<n>`, outside the repository and outside `SCH_HOME`; your working
+tree is byte-identical after a queue run. It gets no ambient git credential
+helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/`SSH_AUTH_SOCK`/
+`SSH_AGENT_PID` — verification children included. Only the delivery controller
+pushes, and only inside a branch namespace an operator authorized for that
+project. But **workers are still not OS-sandboxed**: a write outside the worktree
+is neither prevented nor detected, the network is unrestricted, a detached
+process survives the tree-kill, the credential strip only removes the *ambient*
+helper, and all projects share one worktree root. So fully unattended operation
+is still not supported — the blast radius is narrower, it is not isolation. See
+`tests/containment.test.mjs` and README → *Worker containment*. Parallel
+worktrees and fan-out/fan-in are the NEXT milestone and do not exist.
 
 **Interval:** ask the engine, don't guess —
 `state.mjs interval-advice --project <id>` (also shown on the dashboard). A pass
