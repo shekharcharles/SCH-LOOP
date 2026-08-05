@@ -126,8 +126,15 @@ is neither prevented nor detected, the network is unrestricted, a detached
 process survives the tree-kill, the credential strip only removes the *ambient*
 helper, and all projects share one worktree root. So fully unattended operation
 is still not supported — the blast radius is narrower, it is not isolation. See
-`tests/containment.test.mjs` and README → *Worker containment*. Parallel
-worktrees and fan-out/fan-in are the NEXT milestone and do not exist.
+`tests/containment.test.mjs` and README -> *Worker containment*.
+
+**Parallel execution exists.** `--max-parallel N` on the queue runs up to N ready
+tasks at once; the default is 1 and behaves exactly as it always did. Two tasks
+whose allowed paths overlap are NEVER in flight together - claiming a task makes
+it own its paths, which makes everything overlapping un-ready. A dependent task's
+worktree is branched from the default branch and merged with each delivered
+dependency's branch before any worker starts, so it builds on their code rather
+than beside it. Distributed workers still do not exist.
 
 **Interval:** ask the engine, don't guess —
 `state.mjs interval-advice --project <id>` (also shown on the dashboard). A pass
