@@ -709,6 +709,27 @@ test("the manual delivery CLI delivers from the task's own checkout without bein
   } finally { fx.done(); }
 });
 
+// A supervisor daemon parses this CLI. A stack trace on stdout is not a result,
+// and resolving the workspace is the one step in it that throws rather than
+// returning a failure — an unregistered project or a repository where
+// `workspace-init` was never run.
+test("the manual delivery CLI reports an unresolvable workspace as JSON, not a stack trace", () => {
+  const fx = fixture("cli-no-workspace");
+  try {
+    let out = "", status = 0;
+    try {
+      out = execFileSync("node", [join(ROOT, "scripts", "sch-deliver-run.mjs"), "--project", fx.P, "--run", "RUN-20260101-000000-ABCD"],
+        { encoding: "utf8", env: { ...process.env, SCH_HOME: fx.home, NODE_NO_WARNINGS: "1" } });
+    } catch (e) { out = String(e.stdout ?? ""); status = e.status; }
+
+    assert.equal(status, 1, `expected the failure exit code, got ${status}: ${out}`);
+    const r = JSON.parse(out);                                  // the contract: parseable, always
+    assert.equal(r.state, "FAILED");
+    assert.equal(r.failure.code, "WORKSPACE_INVALID");
+    assert.match(r.failure.message, /workspace-init/, "and it says how to fix it");
+  } finally { fx.done(); }
+});
+
 // The base is chosen by whether the ref RESOLVES, not by whether it is a
 // plausible name. An operator sitting on a local-only branch would otherwise
 // have every first push measured against a remote ref that does not exist, and

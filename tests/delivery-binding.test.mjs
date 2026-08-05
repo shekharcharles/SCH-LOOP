@@ -334,3 +334,26 @@ test("state machine: transitions are closed, forward-only and actor-checked", ()
   assert.equal(DEL.canTransition("CREATED", "PREFLIGHT", "the-model").ok, false, "only named actors may move a delivery");
   assert.deepEqual(DEL.ACTORS, ["controller", "approval", "cancel"]);
 });
+
+// ------------------------------------------------- what contains --work-root
+
+// `resolveTarget` does not compare `git rev-parse --git-common-dir` between the
+// work root it was handed and the project repository, so an arbitrary
+// `--work-root` is contained by this instead: the candidate's repository
+// identity is derived from the RESOLVED PATH, so a run verified in one checkout
+// cannot be delivered from another — `INTERNAL_STATE_CONFLICT`. The day that
+// identity becomes content-derived, two checkouts of one repository start
+// matching and this test is what says so.
+test("repository_identity is path-derived, which is what contains an arbitrary --work-root", () => {
+  const fx = fixture("candidate-identity-path");
+  try {
+    const linked = join(fx.home, "linked-checkout");
+    git(fx.repo, "worktree", "add", linked, "-b", "sch/task-1", "HEAD");
+    const args = { projectId: fx.P, taskId: 1, runId: "RUN-20260101-000000-AAAA" };
+    const main = CAND.computeCandidate({ ...args, repoRoot: fx.repo });
+    const alt = CAND.computeCandidate({ ...args, repoRoot: linked });
+    assert.equal(main.ok, true); assert.equal(alt.ok, true);
+    assert.notEqual(main.candidate.repository_identity, alt.candidate.repository_identity,
+      "two checkouts of ONE repository must not share an identity, or a work-root swap goes unnoticed");
+  } finally { fx.done(); }
+});
