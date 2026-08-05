@@ -161,13 +161,14 @@ const server = createServer(async (req, res) => {
     const back = (id) => { res.writeHead(303, { location: id ? "/?project=" + encodeURIComponent(id) : "/" }); res.end(); };
     if (url.pathname === "/inbox") {
       const project = p.get("project"), text = (p.get("text") || "").trim();
-      if (project && text && getProject(project)) { const s = loadState(project); s.inbox.unshift({ id: ++s.seq.inbox, text, status: "new", createdAt: new Date().toISOString() }); event(s, `inbox +: ${text.slice(0, 60)}`); saveState(project, s); }
+      if (project && text && getProject(project)) { mutateState(project, (s) => { s.inbox.unshift({ id: ++s.seq.inbox, text, status: "new", createdAt: new Date().toISOString() }); event(s, `inbox +: ${text.slice(0, 60)}`); }); }
       return back(project);
     }
     if (url.pathname === "/answer") {
       const project = p.get("project"), id = Number(p.get("id")), text = (p.get("text") || "").trim();
       if (getProject(project) && text) {
-        const s = loadState(project); const t = s.tasks.find((x) => x.id === id);
+        mutateState(project, (s) => {
+        const t = s.tasks.find((x) => x.id === id);
         if (t) {
           // Preserve the QUESTION — overwriting notes with the answer destroyed the
           // option list, leaving a bare letter the loop could not resolve.
@@ -177,28 +178,29 @@ const server = createServer(async (req, res) => {
           t.notes = "ANSWERED: " + text + (t.question ? "\n\nQUESTION ASKED: " + t.question : "");
           t.updatedAt = new Date().toISOString();
           event(s, `task #${id} answered "${text.slice(0, 40)}" -> requeued p1`);
-          saveState(project, s);
         }
+        });
       }
       return back(p.get("back") === "home" ? null : project);
     }
     if (url.pathname === "/inbox-del") {
       const project = p.get("project"), id = Number(p.get("id"));
       if (getProject(project)) {
-        const s = loadState(project);
-        const item = s.inbox.find((i) => i.id === id);
-        if (item) { s.inbox = s.inbox.filter((i) => i.id !== id); event(s, `inbox item #${id} deleted: ${item.text.slice(0, 60)}`); saveState(project, s); }
+        mutateState(project, (s) => {
+          const item = s.inbox.find((i) => i.id === id);
+          if (item) { s.inbox = s.inbox.filter((i) => i.id !== id); event(s, `inbox item #${id} deleted: ${item.text.slice(0, 60)}`); }
+        });
       }
       return back(project);
     }
     if (url.pathname === "/task") {
       const project = p.get("project"), id = Number(p.get("id")), action = p.get("action");
-      if (getProject(project)) { const s = loadState(project); const t = s.tasks.find((x) => x.id === id); if (t) { if (action === "requeue") t.status = "queued"; else if (action === "bump") { t.phase = 0; t.priority = 1; } else if (action === "hold") t.status = "blocked"; else if (action === "close") t.status = "superseded"; t.updatedAt = new Date().toISOString(); event(s, `dashboard: task #${id} ${action}`); saveState(project, s); } }
+      if (getProject(project)) { mutateState(project, (s) => { const t = s.tasks.find((x) => x.id === id); if (t) { if (action === "requeue") t.status = "queued"; else if (action === "bump") { t.phase = 0; t.priority = 1; } else if (action === "hold") t.status = "blocked"; else if (action === "close") t.status = "superseded"; t.updatedAt = new Date().toISOString(); event(s, `dashboard: task #${id} ${action}`); } }); }
       return back(project);
     }
     if (url.pathname === "/scope") {
       const id = p.get("project"), action = p.get("action"); const reg = loadRegistry(); const proj = reg.projects.find((x) => x.id === id);
-      if (proj) { proj.scope = proj.scope || { targets: [], outOfScope: [], halt: false }; if (action === "halt") proj.scope.halt = true; else if (action === "resume") proj.scope.halt = false; else if (action === "disarm") proj.scope.authorized = false; else if (action === "arm") proj.scope.authorized = true; saveRegistry(reg); const s = loadState(id); event(s, `dashboard: scope ${action}`); saveState(id, s); }
+      if (proj) { proj.scope = proj.scope || { targets: [], outOfScope: [], halt: false }; if (action === "halt") proj.scope.halt = true; else if (action === "resume") proj.scope.halt = false; else if (action === "disarm") proj.scope.authorized = false; else if (action === "arm") proj.scope.authorized = true; saveRegistry(reg); mutateState(id, (s) => { event(s, `dashboard: scope ${action}`); }); }
       return back(id);
     }
     return forbid(res);

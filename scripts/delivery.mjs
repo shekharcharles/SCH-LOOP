@@ -90,6 +90,8 @@ export const DELIVERY_FAILURES = [
 // Everything a person must look at is NEEDS_DECISION; everything simply wrong is
 // FAILED. Nothing is retried automatically, because every one of these is
 // resolved by changing the world, not by trying the same thing again.
+const INTEGRATION_SUBJECT = /^sch: integrate task #[0-9]+$/;
+
 const FAILURE_OUTCOME = {
   APPROVAL_REQUIRED: "NEEDS_DECISION", APPROVAL_EXPIRED: "NEEDS_DECISION",
   APPROVAL_INVALIDATED: "NEEDS_DECISION", VERIFIED_DIFF_CHANGED: "NEEDS_DECISION",
@@ -751,14 +753,29 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
       // stays outgoing so the one-commit check below still fails closed.
       const baseRef = `${tx.remote}/${tx.base_remote_branch}`;
       mergeBase = C.gitOut(repoRoot, "merge-base", "HEAD", baseRef);
-      outgoing = (C.gitOut(repoRoot, "rev-list", mergeBase ? `${mergeBase}..HEAD` : "HEAD") ?? "").split("\n").filter(Boolean);
+      // A task built on its dependencies carries their commits. Those are
+      // already delivered, on their own remote branches - subtracting them is
+      // what stops a fan-in from looking like smuggled history.
+      const depRefs = (task?.deps ?? [])
+        .map((d) => `${tx.remote}/${WT.branchNameFor(Number(d))}`)
+        .filter((r) => C.gitOut(repoRoot, "rev-parse", "--verify", "--quiet", r));
+      const revArgs = [...(mergeBase ? [`${mergeBase}..HEAD`] : ["HEAD"]), ...(depRefs.length ? ["--not", ...depRefs] : [])];
+      outgoing = (C.gitOut(repoRoot, "rev-list", ...revArgs) ?? "").split("\n").filter(Boolean);
       ahead = outgoing.length;
     }
+    // SCH's own integration merges are part of the base a dependent task was
+    // given, not work it smuggled in. Recognised by BOTH the exact subject SCH
+    // writes AND by having two parents - a subject alone is forgeable by a worker.
+    const isIntegrationMerge = (c) =>
+      INTEGRATION_SUBJECT.test(C.gitOut(repoRoot, "show", "-s", "--format=%s", c) ?? "")
+      && ((C.gitOut(repoRoot, "rev-list", "--parents", "-n", "1", c) ?? "").trim().split(/\s+/).length === 3);
+    const unrelated = outgoing.filter((c) => !isIntegrationMerge(c));
     artifact("outgoing.json", {
       inspected_at: now(), remote: tx.remote, remote_branch: tx.remote_branch, remote_ref: remoteRef,
       remote_head: remoteHead, local_head: localHead, merge_base: mergeBase, ahead, behind,
       outgoing: outgoing.map((c) => ({ hash: c, subject: C.gitOut(repoRoot, "show", "-s", "--format=%s", c) })),
       incoming: incoming.map((c) => ({ hash: c, subject: C.gitOut(repoRoot, "show", "-s", "--format=%s", c) })),
+      integration: outgoing.filter(isIntegrationMerge),
     });
     ev("delivery.outgoing_inspected", { ahead, behind, outgoing, incoming, remote_head: remoteHead });
 
@@ -782,12 +799,12 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
       if (mergeBase !== remoteHead)
         return stop("NON_FAST_FORWARD", `the local branch has diverged from ${tx.remote}/${tx.remote_branch} (merge base ${mergeBase}) — refusing to push`, { commit: tx.commit });
     }
-    if (outgoing.length !== 1)
+    if (unrelated.length !== 1)
       return stop("UNRELATED_OUTGOING_COMMITS",
-        `${outgoing.length} commit(s) would be pushed but exactly one — the delivery commit — is permitted: ${outgoing.map((c) => c.slice(0, 8)).join(", ")}. Commit ${hash} is NOT pushed.`,
+        `${unrelated.length} commit(s) would be pushed but exactly one — the delivery commit — is permitted: ${unrelated.map((c) => c.slice(0, 8)).join(", ")}. Commit ${hash} is NOT pushed.`,
         { commit: tx.commit });
-    if (outgoing[0] !== hash)
-      return stop("UNRELATED_OUTGOING_COMMITS", `the single outgoing commit is ${outgoing[0]}, not this delivery's commit ${hash}`, { commit: tx.commit });
+    if (unrelated[0] !== hash)
+      return stop("UNRELATED_OUTGOING_COMMITS", `the single unrelated commit is ${unrelated[0]}, not this delivery's commit ${hash}`, { commit: tx.commit });
 
     // ------------------------------------------------- 10. APPROVAL TO PUSH
     if (policy.approval_before_push) {
@@ -968,6 +985,7 @@ export function deliveryProjection(projectId, { limit = 10 } = {}) {
       staged_paths: staging?.staged?.map((e) => e.path) ?? [],
       commit: tx.commit?.hash ?? null,
       outgoing_commits: outgoing?.outgoing?.map((c) => c.hash) ?? [],
+      integration_commits: outgoing?.integration ?? [],
       incoming_commits: outgoing?.incoming?.map((c) => c.hash) ?? [],
       push: tx.push ? { ok: tx.push.ok, exit_code: tx.push.exit_code, pushed_range: tx.push.pushed_range } : null,
       remote_verification: tx.remote_verification ? { ok: (tx.remote_verification.problems ?? []).length === 0, remote_head: tx.remote_verification.remote_head } : null,

@@ -356,13 +356,11 @@ completion.
 
 ### Planned, and NOT implemented
 
-Parallel execution in Git worktrees · fan-out / fan-in and integration joins ·
-path-ownership leases · OS-level worker sandboxing · authenticated dashboard
-writes · a full SCH MCP · automatic knowledge ingestion · distributed workers ·
-Temporal (evaluation only) · migrating state authority into SQLite. The queue
-scheduler runs **one task at a time** — each in its own disposable worktree, but
-never two at once — and stops at a defined terminal condition. Nothing here is
-unattended-safe yet: see
+OS-level worker sandboxing · authenticated dashboard writes · a full SCH MCP ·
+automatic knowledge ingestion · distributed workers · Temporal (evaluation only)
+· migrating state authority into SQLite. The queue scheduler runs **one task at a
+time by default**; `--max-parallel N` runs up to N, and stops at a defined
+terminal condition either way. Nothing here is unattended-safe yet: see
 [Worker containment](#worker-containment-what-is-and-is-not-true).
 
 ## 🧪 Supervised external single-task runner
@@ -757,6 +755,19 @@ Stated plainly, because a false claim here is worse than a missing feature.
   `run` are denied by argv; a built-in a future CLI ships that nobody has
   classified is denied too.
 
+- **Independent tasks can run concurrently; tasks sharing files cannot.** With
+  `--max-parallel N` the scheduler runs up to N ready tasks at once. Two tasks
+  whose `allowedPaths` overlap are never in flight together — claiming a task
+  makes it own its paths, which makes everything overlapping un-ready. The
+  default is 1, and at 1 the behaviour is what it always was.
+- **A task starts from its dependencies' work.** A dependent task's worktree is
+  branched from the default branch and then merged with each delivered
+  dependency's branch, in task-id order, before any worker starts. A conflict
+  stops the task at `DEPENDENCY_MERGE_CONFLICT` before a model is ever invoked.
+- **A stop reaches the workers that are already running.** Running out of time,
+  losing the scheduler lease or blowing a budget cancels every live run and
+  leaves no task pretending to be RUNNING.
+
 **Where the checkouts live, and what removes them.** The default root is
 `%LOCALAPPDATA%\sch-loop\worktrees` on Windows and
 `${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees` elsewhere.
@@ -778,6 +789,12 @@ and says so:
 - **A write outside the worktree is neither prevented nor detected.** Effect
   inspection compares the worktree before and after; anything else is invisible.
 - **Workers are not OS-sandboxed.** They run as your user with your PATH.
+- **Parallelism multiplies uncontained workers.** N workers means N processes
+  with your PATH and your network. Every containment caveat here applies N times
+  over, so raise `--max-parallel` deliberately.
+- **SCH merges dependency branches automatically.** This is the one merge it
+  performs, into a disposable per-task checkout, refusing anything that does not
+  apply cleanly. Nothing is ever merged into your branches on your behalf.
 - **Denied built-in skills still appear in the worker's skill listing.** Denial
   blocks invocation, not listing, so roughly a dozen names remain as context
   cost. No flag removes them without removing the pack as well.

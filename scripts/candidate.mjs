@@ -27,6 +27,26 @@ const sha = (s) => createHash("sha256").update(s).digest("hex");
 // Argv shapes SCH must never produce against a managed project. Checked on
 // EVERY call rather than trusted to code review: `git add -A` is one careless
 // edit away from staging an operator's unrelated work into a pushed commit.
+// The ONE merge SCH performs, carved out of the blanket refusal above and kept
+// deliberately unusable for anything else.
+//
+// A task's dependencies are code it is expected to build on. Constructing that
+// starting tree requires merging each delivered dependency's branch into the
+// task's fresh branch. That is not the thing the blanket rule protects against:
+// nothing is integrated into the operator's branches, no conflict is resolved
+// silently (a conflict aborts and stops the task), and the result lives only in
+// a disposable per-task checkout.
+//
+// The shape is pinned exactly: `merge --no-ff -m <msg> sch/task-<n>`. Any other
+// merge - a different flag, a fast-forward, an operator branch, a bare `merge` -
+// is still refused.
+const DEP_BRANCH = /^sch\/task-\d+$/;
+const isDependencyIntegration = (a) =>
+  (a.length === 5 && a[0] === "merge" && a[1] === "--no-ff" && a[2] === "-m" && DEP_BRANCH.test(a[4]))
+  // Aborting only ever restores the tree to what it was. Refusing it would
+  // leave a conflicted checkout behind on the one path that must clean up.
+  || (a.length === 2 && a[0] === "merge" && a[1] === "--abort");
+
 const FORBIDDEN_ARGV = [
   [(a) => a[0] === "add" && a.slice(1).some((x) => ["-A", "--all", "--no-ignore-removal", "-u", "--update"].includes(x)),
     "git add -A / --all / -u stages files nobody approved"],
@@ -44,7 +64,7 @@ const FORBIDDEN_ARGV = [
     "a wildcard refspec, or one that deletes a remote ref, is never used"],
   [(a) => a[0] === "reset" && a.includes("--hard"),
     "git reset --hard destroys work the operator may not have finished"],
-  [(a) => ["rebase", "cherry-pick", "revert", "filter-branch", "merge", "clean", "stash"].includes(a[0]),
+  [(a) => ["rebase", "cherry-pick", "revert", "filter-branch", "merge", "clean", "stash"].includes(a[0]) && !isDependencyIntegration(a),
     "rebase, cherry-pick, revert, filter-branch, merge, clean and stash are never run automatically"],
   [(a) => a[0] === "worktree" && !["add", "remove", "list", "prune"].includes(a[1]),
     "git worktree is only ever used to add, remove, list or prune a task's checkout"],

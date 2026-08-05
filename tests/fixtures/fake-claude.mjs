@@ -29,12 +29,49 @@ if (b.promptTo) writeFileSync(b.promptTo, prompt);
 // secrets never reach the worker".
 if (b.envTo) writeFileSync(b.envTo, JSON.stringify(process.env, null, 2));
 
+// Proof, from inside the worktree, that a dependency's work is actually present.
+// A task that merely RAN after its dependency proves nothing; a task that can
+// read its dependency's file proves the fan-in.
+if (b.requireFile && !existsSync(join(cwd, b.requireFile))) {
+  console.error(`fake-claude: required file "${b.requireFile}" is absent - this worktree does not contain its dependency's work`);
+  process.exit(3);
+}
+
 // The argument vector this worker actually received — the evidence for "the
 // containment flags reached the process", not merely the run record.
 if (b.argvTo) writeFileSync(b.argvTo, JSON.stringify(process.argv.slice(2), null, 2));
 
 // Ask to be cancelled: exactly what an operator pressing cancel looks like from
 // the worker's side. The runner polls for this file.
+// A worker that makes its own commit behind SCH's back. Used to prove the
+// outgoing-commit rule still catches history nobody approved.
+if (b.commitExtra) {
+  const f = join(cwd, b.commitExtra.path);
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, b.commitExtra.content);
+  try {
+    execFileSync("git", ["-C", cwd, "add", "--", b.commitExtra.path], { stdio: "ignore" });
+    execFileSync("git", ["-C", cwd, "-c", "user.email=w@w", "-c", "user.name=w", "commit", "-q", "-m", "worker's own commit"], { stdio: "ignore" });
+  } catch { /* the guard is what this proves, not the commit */ }
+}
+
+// A BARRIER between two workers, which is how concurrency is proven without
+// timing anything. `signalFile` creates a file; `waitForFile` blocks until it
+// appears. A worker that waits can only finish if the signalling worker is
+// running AT THE SAME TIME - so 'both tasks succeeded' means they overlapped,
+// and 'the waiter timed out' means they did not. No sleeps, no clock reading.
+if (b.signalFile) { try { mkdirSync(dirname(b.signalFile), { recursive: true }); writeFileSync(b.signalFile, String(process.pid)); } catch {} }
+if (b.waitForFile) {
+  const deadline = Date.now() + (b.waitMs ?? 8000);
+  while (!existsSync(b.waitForFile)) {
+    if (Date.now() > deadline) {
+      console.error(`fake-claude: waited for "${b.waitForFile}" and it never appeared - no other worker ran while this one was alive`);
+      process.exit(4);
+    }
+    try { execFileSync(process.execPath, ["-e", "setTimeout(()=>{},50)"], { stdio: "ignore" }); } catch {}
+  }
+}
+
 if (b.selfCancel) {
   const d = join(cwd, ".sch-loop", "runs", process.env.SCH_RUN_ID ?? "unknown");
   mkdirSync(d, { recursive: true });

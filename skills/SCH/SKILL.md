@@ -140,13 +140,17 @@ change task status at all — `task-set` refuses and names the scheduler. Use
 `/SCH run` for supervised in-session work; use `/SCH queue` when the queue should
 execute itself. Never run both against one project at the same time.
 
-Still **not implemented**: parallel execution in Git worktrees, fan-out/fan-in
-and integration joins, path-ownership leases, OS-level worker sandboxing, the
-authenticated dashboard, the SCH MCP, distributed workers. If asked for any of
+Parallel execution exists: `--max-parallel N` (default 1) runs several ready
+tasks at once, never two that own the same paths, and a dependent task starts
+from its dependencies' delivered work.
+
+Still **not implemented**: OS-level worker sandboxing, the authenticated
+dashboard, the SCH MCP, distributed workers. If asked for any of
 those, say plainly that they are planned and name the next milestone:
 
-> Implement isolated parallel task execution using Git worktrees, path ownership
-> leases, fan-out/fan-in, deterministic integration nodes, and conflict-safe joins.
+> Give the worker an OS boundary: a sandboxed process that cannot write outside
+> its worktree, cannot reach the network unless the task says so, and cannot
+> outlive the run that started it.
 
 **Workers are contained, not sandboxed.** Each task **the queue runs** gets a
 disposable worktree on `sch/task-<n>` outside the repository and outside

@@ -11,6 +11,7 @@
 // at every pending human decision.
 
 import { test } from "node:test";
+const NL = String.fromCharCode(10);
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -48,6 +49,22 @@ const invocations = (fx) => {
 // `--all`, because a delivered commit lands on that task's own branch now, not
 // on the remote's default branch. The question every assertion below is asking
 // is still "what reached the remote", which is every ref it holds.
+// Wall-clock spans, one per worker process, paired by pid. Overlap between two
+// spans is the direct evidence that the queue ran them at the same time.
+const spans = (fx) => {
+  const p = join(fx.home, "behaviours", "spans.log");
+  if (!existsSync(p)) return [];
+  const by = new Map();
+  for (const line of readFileSync(p, "utf8").trim().split(String.fromCharCode(10)).filter(Boolean)) {
+    const r = JSON.parse(line);
+    const cur = by.get(r.pid) ?? { pid: r.pid, task_id: r.task_id };
+    if (r.start) cur.start = r.start;
+    if (r.end) cur.end = r.end;
+    by.set(r.pid, cur);
+  }
+  return [...by.values()].filter((s) => s.start && s.end).sort((a, b) => a.start - b.start);
+};
+
 const remoteLog = (fx) => git(fx.bare, "log", "--oneline", "--all").trim().split("\n").filter(Boolean);
 
 // ============================================================ 47–52. sequencing
@@ -79,9 +96,15 @@ test("scheduler: two dependent tasks run sequentially, child never first, one fr
 
   // 88: exactly one commit per task on the remote, in order
   const log = remoteLog(fx);
-  assert.equal(log.length, 4, "initial + workspace + one commit per delivered task");
-  assert.match(log[0], /second/);
-  assert.match(log[1], /first/);
+  // Task b depends on a, so b's branch legitimately carries ONE integration
+  // merge in addition to the two delivery commits. Counting raw commits would
+  // hide which of those grew.
+  const integration = log.filter((l) => /sch: integrate task #/.test(l));
+  assert.equal(integration.length, 1, "b built on a, so exactly one integration merge");
+  const work = log.filter((l) => !/sch: integrate task #/.test(l));
+  assert.equal(work.length, 4, "initial + workspace + one commit per delivered task");
+  assert.match(work[0], /second/);
+  assert.match(work[1], /first/);
 });
 
 test("scheduler: a restart after the first task picks up exactly where it left off", async (t) => {
@@ -588,7 +611,9 @@ test("scheduler: the next task is selected only after the previous one is on the
   const timeline = [];
   await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 5, onEvent: (e) => {
     if (["scheduler.task_claimed", "scheduler.task_delivered"].includes(e.type))
-      timeline.push(`${e.type.replace("scheduler.task_", "")}:${e.task_id}:${remoteLog(fx).length}`);
+      // Integration merges are excluded: this timeline is about WHEN a task's
+      // own commit reached the remote, not how many objects the merge added.
+      timeline.push(`${e.type.replace("scheduler.task_", "")}:${e.task_id}:${remoteLog(fx).filter((l) => !/sch: integrate task #/.test(l)).length}`);
   } });
 
   assert.deepEqual(timeline, [`claimed:${a}:2`, `delivered:${a}:3`, `claimed:${b}:3`, `delivered:${b}:4`],
@@ -935,5 +960,166 @@ test("the pack is removed with the worktree, and survives a FAILED task", async 
     assert.notEqual(st[bad], "DELIVERED", JSON.stringify(st));
     assert.equal(PACK.packState({ projectId: fx.P, taskId: bad }).exists, true,
       "a pack must not be reaped while the run is still evidence");
+  } finally { fx.done(); }
+});
+
+test("a queued task builds on its delivered dependency's code", async () => {
+  const fx = queueFixture("queue-fanin");
+  try {
+    const a = addTask(fx, { title: "writes the module", allow: "src/dep.js" });
+    const b = addTask(fx, { title: "uses the module", allow: "src/uses.js", deps: String(a) });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { write: [{ path: "src/dep.js", content: "// dep\n" }] },
+        // This worker refuses to run unless the dependency's file is present in
+        // its own worktree — the fan-in, proven from the inside.
+        [b]: { requireFile: "src/dep.js", write: [{ path: "src/uses.js", content: "// uses\n" }] },
+      }),
+      maxTasks: 2,
+    });
+    const st = states(fx);
+    assert.equal(st[a], "DELIVERED", JSON.stringify(st));
+    assert.equal(st[b], "DELIVERED", JSON.stringify(st));
+  } finally { fx.done(); }
+});
+
+test("a commit that is not a dependency's and not an integration merge still stops the push", async () => {
+  const fx = queueFixture("queue-fanin-smuggle");
+  try {
+    const a = addTask(fx, { title: "writes the module", allow: "src/dep.js" });
+    const b = addTask(fx, { title: "uses the module", allow: "src/uses.js", deps: String(a) });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { write: [{ path: "src/dep.js", content: "// dep\n" }] },
+        // A worker that commits on its own branch behind SCH's back. Loosening
+        // the outgoing rule for fan-in must not have made room for this.
+        [b]: { requireFile: "src/dep.js", commitExtra: { path: "src/smuggled.js", content: "// not approved\n" },
+               write: [{ path: "src/uses.js", content: "// uses\n" }] },
+      }),
+      maxTasks: 2,
+    });
+    assert.equal(states(fx)[a], "DELIVERED");
+    assert.notEqual(states(fx)[b], "DELIVERED",
+      "an extra commit nobody approved must still stop the delivery");
+  } finally { fx.done(); }
+});
+
+test("two independent tasks run concurrently under --max-parallel 2", async () => {
+  const fx = queueFixture("queue-parallel");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    const sig = join(fx.home, "barrier", "b-started");
+    // Task a cannot finish until task b starts. If the queue runs them one at a
+    // time, a waits forever and fails. Both delivering IS the overlap.
+    const rec = await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { waitForFile: sig, write: [{ path: "src/a.js", content: "// a" + NL }] },
+        [b]: { signalFile: sig, write: [{ path: "src/b.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 2,
+    });
+    const st = states(fx);
+    assert.equal(st[a], "DELIVERED", JSON.stringify(rec).slice(0, 300));
+    assert.equal(st[b], "DELIVERED", JSON.stringify(rec).slice(0, 300));
+  } finally { fx.done(); }
+});
+
+test("path-overlapping tasks never run concurrently, whatever the bound", async () => {
+  const fx = queueFixture("queue-overlap");
+  try {
+    // Both own the same path, so the graph must serialise them even at 4.
+    const a = addTask(fx, { title: "a", allow: "src/shared.js" });
+    const b = addTask(fx, { title: "b", allow: "src/shared.js" });
+    const sig = join(fx.home, "barrier", "peer-started");
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { waitForFile: sig, waitMs: 2500, write: [{ path: "src/shared.js", content: "// a" + NL }] },
+        [b]: { signalFile: sig, write: [{ path: "src/shared.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 4,
+    });
+    // a waits for b, and b can never be in flight beside it — so a must NOT
+    // deliver. If it did, two tasks owning the same file ran together.
+    assert.notEqual(states(fx)[a], "DELIVERED",
+      "two tasks owning the same path overlapped — that is data loss, not throughput");
+    const sp = spans(fx);
+    for (let i = 1; i < sp.length; i++)
+      assert.ok(sp[i - 1].end <= sp[i].start, "worker spans overlapped for path-owning tasks");
+  } finally { fx.done(); }
+});
+
+test("--max-parallel 1 runs tasks strictly one at a time", async () => {
+  const fx = queueFixture("queue-serial");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    const sig = join(fx.home, "barrier", "b-started");
+    // The SAME two tasks that both deliver at --max-parallel 2. At 1, task a
+    // waits for a worker that cannot exist yet, so it must fail. The pair is the
+    // proof that the bound decides, rather than the machine happening to be fast.
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { waitForFile: sig, waitMs: 2500, write: [{ path: "src/a.js", content: "// a" + NL }] },
+        [b]: { signalFile: sig, write: [{ path: "src/b.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 1,
+    });
+    assert.notEqual(states(fx)[a], "DELIVERED", "the default must remain sequential");
+    const sp = spans(fx);
+    for (let k = 1; k < sp.length; k++)
+      assert.ok(sp[k - 1].end <= sp[k].start, "two workers overlapped at --max-parallel 1");
+  } finally { fx.done(); }
+});
+
+test("one task failing does not cancel its in-flight siblings", async () => {
+  const fx = queueFixture("queue-isolation");
+  try {
+    const a = addTask(fx, { title: "fails", allow: "src/a.js" });
+    const b = addTask(fx, { title: "succeeds", allow: "src/b.js" });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: {},                                    // writes nothing → fails verification
+        [b]: { write: [{ path: "src/b.js", content: "// b" + NL }] },
+      }),
+      maxTasks: 2, maxParallel: 2,
+    });
+    const st = states(fx);
+    assert.notEqual(st[a], "DELIVERED", JSON.stringify(st));
+    assert.equal(st[b], "DELIVERED",
+      "a sibling's failure must not take down a task that did its job");
+  } finally { fx.done(); }
+});
+
+test("a stop reaches every in-flight run, leaving none RUNNING", async () => {
+  const fx = queueFixture("queue-halt");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, { [a]: { selfCancel: true }, [b]: { selfCancel: true } }),
+      maxTasks: 2, maxParallel: 2,
+    });
+    for (const id of [a, b])
+      assert.notEqual(states(fx)[id], "RUNNING",
+        `task #${id} was left RUNNING — a stop that reaches one worker is not a stop`);
+  } finally { fx.done(); }
+});
+
+test("a duration limit signals the workers still running, it does not just outlive them", async () => {
+  const fx = queueFixture("queue-hardstop");
+  try {
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    // This worker waits 20s for a signal that never comes. The queue's own limit
+    // is 1.5s, so the only way this run ends promptly is an actual cancel
+    // reaching a worker that was ALREADY running.
+    const t0 = Date.now();
+    const rec = await runQueue(fx, {
+      env: fakeQueueEnv(fx, { [a]: { waitForFile: join(fx.home, "never-appears"), waitMs: 20000 } }),
+      maxTasks: 1, maxParallel: 1, maxDurationMs: 1500,
+    });
+    assert.equal(rec.stop_reason, "MAX_DURATION_REACHED", JSON.stringify(rec).slice(0, 300));
+    assert.ok(Date.now() - t0 < 18000, "the queue waited for the worker instead of stopping it");
+    assert.notEqual(states(fx)[a], "RUNNING", "a stopped run must not be left RUNNING");
   } finally { fx.done(); }
 });
