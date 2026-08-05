@@ -149,9 +149,11 @@ those, say plainly that they are planned and name the next milestone:
 on `sch/task-<n>` outside the repository and outside `SCH_HOME`, with no ambient
 git credential helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/
 `SSH_AUTH_SOCK`/`SSH_AGENT_PID` — verification commands included — and only the
-delivery controller pushes, inside an authorized branch namespace. But a write
-outside the worktree, a network call or a detached background process is still
-invisible to effect inspection, the credential strip only removes the *ambient*
+delivery controller pushes, inside an authorized branch namespace. Effect
+inspection still reaches the shared `.git`, so a worker's own worktree and a hook
+installed into the shared hooks directory are both caught. But a write outside
+the worktree, a network call or a detached background process is still
+invisible to it, the credential strip only removes the *ambient*
 helper, and none of this is an OS boundary. Fully unattended operation is
 therefore still not supported. Never claim otherwise, never imply parallel
 execution works, and never simulate it.
