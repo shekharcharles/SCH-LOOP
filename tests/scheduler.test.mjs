@@ -79,9 +79,15 @@ test("scheduler: two dependent tasks run sequentially, child never first, one fr
 
   // 88: exactly one commit per task on the remote, in order
   const log = remoteLog(fx);
-  assert.equal(log.length, 4, "initial + workspace + one commit per delivered task");
-  assert.match(log[0], /second/);
-  assert.match(log[1], /first/);
+  // Task b depends on a, so b's branch legitimately carries ONE integration
+  // merge in addition to the two delivery commits. Counting raw commits would
+  // hide which of those grew.
+  const integration = log.filter((l) => /sch: integrate task #/.test(l));
+  assert.equal(integration.length, 1, "b built on a, so exactly one integration merge");
+  const work = log.filter((l) => !/sch: integrate task #/.test(l));
+  assert.equal(work.length, 4, "initial + workspace + one commit per delivered task");
+  assert.match(work[0], /second/);
+  assert.match(work[1], /first/);
 });
 
 test("scheduler: a restart after the first task picks up exactly where it left off", async (t) => {
@@ -588,7 +594,9 @@ test("scheduler: the next task is selected only after the previous one is on the
   const timeline = [];
   await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 5, onEvent: (e) => {
     if (["scheduler.task_claimed", "scheduler.task_delivered"].includes(e.type))
-      timeline.push(`${e.type.replace("scheduler.task_", "")}:${e.task_id}:${remoteLog(fx).length}`);
+      // Integration merges are excluded: this timeline is about WHEN a task's
+      // own commit reached the remote, not how many objects the merge added.
+      timeline.push(`${e.type.replace("scheduler.task_", "")}:${e.task_id}:${remoteLog(fx).filter((l) => !/sch: integrate task #/.test(l)).length}`);
   } });
 
   assert.deepEqual(timeline, [`claimed:${a}:2`, `delivered:${a}:3`, `claimed:${b}:3`, `delivered:${b}:4`],
@@ -935,5 +943,46 @@ test("the pack is removed with the worktree, and survives a FAILED task", async 
     assert.notEqual(st[bad], "DELIVERED", JSON.stringify(st));
     assert.equal(PACK.packState({ projectId: fx.P, taskId: bad }).exists, true,
       "a pack must not be reaped while the run is still evidence");
+  } finally { fx.done(); }
+});
+
+test("a queued task builds on its delivered dependency's code", async () => {
+  const fx = queueFixture("queue-fanin");
+  try {
+    const a = addTask(fx, { title: "writes the module", allow: "src/dep.js" });
+    const b = addTask(fx, { title: "uses the module", allow: "src/uses.js", deps: String(a) });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { write: [{ path: "src/dep.js", content: "// dep\n" }] },
+        // This worker refuses to run unless the dependency's file is present in
+        // its own worktree — the fan-in, proven from the inside.
+        [b]: { requireFile: "src/dep.js", write: [{ path: "src/uses.js", content: "// uses\n" }] },
+      }),
+      maxTasks: 2,
+    });
+    const st = states(fx);
+    assert.equal(st[a], "DELIVERED", JSON.stringify(st));
+    assert.equal(st[b], "DELIVERED", JSON.stringify(st));
+  } finally { fx.done(); }
+});
+
+test("a commit that is not a dependency's and not an integration merge still stops the push", async () => {
+  const fx = queueFixture("queue-fanin-smuggle");
+  try {
+    const a = addTask(fx, { title: "writes the module", allow: "src/dep.js" });
+    const b = addTask(fx, { title: "uses the module", allow: "src/uses.js", deps: String(a) });
+    await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { write: [{ path: "src/dep.js", content: "// dep\n" }] },
+        // A worker that commits on its own branch behind SCH's back. Loosening
+        // the outgoing rule for fan-in must not have made room for this.
+        [b]: { requireFile: "src/dep.js", commitExtra: { path: "src/smuggled.js", content: "// not approved\n" },
+               write: [{ path: "src/uses.js", content: "// uses\n" }] },
+      }),
+      maxTasks: 2,
+    });
+    assert.equal(states(fx)[a], "DELIVERED");
+    assert.notEqual(states(fx)[b], "DELIVERED",
+      "an extra commit nobody approved must still stop the delivery");
   } finally { fx.done(); }
 });
