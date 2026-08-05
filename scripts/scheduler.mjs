@@ -534,13 +534,35 @@ export async function runQueue({
       // A worker never runs in the operator's working tree. One worktree per
       // TASK — every attempt reuses it, so a retry inherits the previous
       // attempt's uncommitted work exactly as it did before.
+      //
+      // Three ways a task can fail to get a contained place to run. Every one of
+      // them is a question for a person: there is no second-best directory to
+      // run the worker in, and running it somewhere else is the whole thing this
+      // refuses to do.
+      const noWorktree = (code, message) => {
+        emit("scheduler.task_blocked", { failure: code, message: clamp(message, 300) }, { taskId: task.id });
+        TR.transition(projectId, task.id, { to: "NEEDS_DECISION", actor: "scheduler", reason: clamp(message, 400) });
+        return finish("NEEDS_DECISION", { code, message });
+      };
+
+      // A PARKED attempt is being CONTINUED, and the change it produced lives in
+      // that checkout, uncommitted. If the checkout is gone — a reboot, a temp
+      // reaper, someone tidying scratch space — `ensureWorktree` would find the
+      // branch and check it out AT ITS LAST COMMIT, and every phase downstream
+      // would then grade a change that no longer exists and report the work as
+      // absent rather than lost. This is the realistic way that happens; the
+      // in-attempt retry `runAttempt` guards is the rarer one.
+      if (parked && !WT.worktreeState({ projectId, taskId: task.id, repoRoot }).exists)
+        return noWorktree("WORKTREE_MISSING",
+          `the worktree for task #${task.id} is gone but its attempt is still open — that attempt's uncommitted work cannot be reconstructed, and SCH will not fabricate a baseline by checking the branch out again`);
+
       const base = (WS.git(repoRoot, "rev-parse", "HEAD") ?? "").trim();
+      if (!base)
+        return noWorktree("WORKTREE_CREATE_FAILED",
+          `${repoRoot} has no commit at HEAD — an unborn branch, or git could not be run there. A task worktree is branched from HEAD, so there is nothing to branch from.`);
+
       const wt = WT.ensureWorktree({ projectId, taskId: task.id, repoRoot, base });
-      if (!wt.ok) {
-        emit("scheduler.task_blocked", { failure: wt.code, message: clamp(wt.message, 300) }, { taskId: task.id });
-        TR.transition(projectId, task.id, { to: "NEEDS_DECISION", actor: "scheduler", reason: clamp(wt.message, 400) });
-        return finish("NEEDS_DECISION", { code: wt.code, message: wt.message });
-      }
+      if (!wt.ok) return noWorktree(wt.code, wt.message);
       if (wt.created) emit("scheduler.worktree_created", { path: wt.path, branch: wt.branch, base }, { taskId: task.id });
 
       const outcome = await executeTask({
@@ -811,6 +833,12 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
   // A LATER attempt whose checkout has gone is not a fresh start. Attempt 1's
   // change was carried forward in that tree, so recreating it would hand the
   // worker a baseline that was never true and call the missing work absent.
+  // In-loop cover only — `runQueue` catches the case where the checkout vanished
+  // between two scheduler runs, which is where `ensureWorktree` would rebuild it.
+  // WORKTREE_MISSING is deliberately absent from both failure classes:
+  // `executeTask` routes NEEDS_DECISION before `classifyFailure` is consulted, so
+  // adding it would be dead data — but an edit to that branch would silently turn
+  // this into UNCLASSIFIED, so classify it here if this ever stops short-circuiting.
   const wtNow = WT.worktreeState({ projectId, taskId, repoRoot });
   if (!wtNow.exists && attempt > 1)
     return { outcome: "NEEDS_DECISION", run_id: null, attempt, started_at: startedAt, ended_at: now(),

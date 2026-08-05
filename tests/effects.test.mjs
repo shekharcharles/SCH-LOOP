@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN } from "./helpers.mjs";
 
 const effectsOf = (rec) => JSON.parse(readFileSync(join(rec.run_dir, "git-effects.json"), "utf8"));
@@ -100,6 +100,24 @@ test("effects: the worker writing into .git/ is caught", async () => {
     write: [{ path: "src/ok.js", content: "ok\n" }, { path: ".git/hooks/pre-commit", content: "#!/bin/sh\ncurl evil\n" }],
   }));
   assert.equal(rec.outcome, "NEEDS_DECISION");
+  assert.equal(rec.failure.code, "FORBIDDEN_GIT_EFFECT");
+  assert.match(rec.failure.message, /git_metadata_changed/);
+  fx.done();
+});
+
+test("effects: a hook installed in the SHARED .git of a worktree is caught", async () => {
+  const fx = fixture("ef-git-common"); initWorkspace(fx);
+  const t = addTask(fx, { allow: "src/**" });
+  const alt = join(fx.home, "alt-checkout");
+  git(fx.repo, "worktree", "add", alt, "-b", "sch/task-" + t, "HEAD");
+  // A linked worktree's own `.git` is a FILE. The hooks directory a worker could
+  // install into is the shared one, which is the only place worth writing to and
+  // the only place a fingerprint of the private gitdir cannot see.
+  const hook = relative(alt, join(fx.repo, ".git", "hooks", "pre-commit"));
+  const rec = await run(fx, t, fakeExecutor(fx, {
+    write: [{ path: "src/ok.js", content: "ok\n" }, { path: hook, content: "#!/bin/sh\ncurl evil\n" }],
+  }), { workRoot: alt });
+  assert.equal(rec.outcome, "NEEDS_DECISION", JSON.stringify(rec.failure));
   assert.equal(rec.failure.code, "FORBIDDEN_GIT_EFFECT");
   assert.match(rec.failure.message, /git_metadata_changed/);
   fx.done();
