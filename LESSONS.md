@@ -9,3 +9,4 @@
 - Guarding a repository property by asking the FILESYSTEM → ask git's index instead (`ls-files -s` modes); `core.symlinks=false` is the Windows default and materialises a symlink as a plain file, so an lstat-based guard is inert on the platform the engine runs on.
 - A test command killed by my own tool timeout → measure with `--test-timeout` before calling it hung; a slow file and a hung file are indistinguishable from a killed command.
 - Adding code that writes outside the repository → give the test fixture an env override for that root in the same change, or the first test run pollutes the operator's real machine.
+- Patching source through a shell heredoc → use raw strings for the replacement text; the heredoc collapses `\n` before the interpreter sees it and writes real newlines into string literals.

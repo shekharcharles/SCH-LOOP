@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, WS, SECRET_ENV, FAKE_CLAUDE } from "./helpers.mjs";
+import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, WS, SECRET_ENV, FAKE_CLAUDE, ROOT } from "./helpers.mjs";
 
 const runsOf = (fx) => readdirSync(join(fx.repo, ".sch-loop", "runs"));
 const artifact = (rec, name) => readFileSync(join(rec.run_dir, name), "utf8");
@@ -396,5 +396,42 @@ test("a pack that cannot be built fails the run closed — no worker starts", as
     });
     assert.notEqual(rec.outcome, "VERIFIED");
     assert.equal(rec.failure?.code, "PACK_UNAVAILABLE");
+  } finally { fx.done(); }
+});
+
+test("a recommended skill is indexed by name, a required skill is injected in full", async () => {
+  const fx = fixture("skill-bucket-split");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx, { category: "planning" });
+    // A recommended skill must actually be selected, or the loop below asserts
+    // nothing and the test passes on an empty list.
+    fx.cli("profile-set", "--project", fx.P, "--task-type", "planning", "--recommended", "sch-plan");
+    const promptTo = join(fx.home, "prompt.txt");
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      promptTo, write: [{ path: "src/app.js", content: "// ok\n" }],
+    }));
+    assert.equal(rec.outcome, "VERIFIED", rec.failure?.message);
+
+    const prompt = readFileSync(promptTo, "utf8");
+    const manifest = JSON.parse(readFileSync(join(rec.run_dir, "prompt-manifest.json"), "utf8"));
+    assert.equal(typeof manifest.skills_injected_chars, "number",
+      "the prompt manifest must account for what injection cost");
+    assert.equal(typeof manifest.skills_indexed_count, "number");
+
+    // Whatever this fixture's recommendation engine selects, a recommended skill
+    // contributes its invocation id and not its body.
+    const rec2 = (manifest.skills ?? []).filter((x) => x.bucket === "recommended");
+    assert.ok(rec2.length > 0, "the fixture must actually select a recommended skill");
+    assert.equal(manifest.skills_indexed_count, rec2.length);
+    for (const s of rec2) {
+      assert.ok(prompt.includes(s.skill_id), "a recommended skill must still be named to the worker");
+      assert.ok(s.indexed === true, "a recommended skill must be indexed, not injected");
+    }
+    // The body of the indexed skill must not be in the prompt at all.
+    const body = readFileSync(join(ROOT, "skills", "sch-plan", "SKILL.md"), "utf8");
+    const marker = body.split(/\r?\n/).filter((l) => l.trim().length > 40).pop() ?? "";
+    assert.ok(marker.length > 40 && !prompt.includes(marker.trim()),
+      "an indexed skill's instructions must not be injected — it loads from the pack");
   } finally { fx.done(); }
 });
