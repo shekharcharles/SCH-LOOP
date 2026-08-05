@@ -24,7 +24,7 @@ import * as SK from "./skills.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
-import { ClaudeCliExecutor, buildEnv, redactEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
+import { ClaudeCliExecutor, buildEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
 import { getProject, loadState, saveState, auditLog, event as stateEvent } from "./state.mjs";
 
 // ------------------------------------------------------------- vocabulary
@@ -1152,7 +1152,10 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       exit_code: worker.exit_code, signal: worker.signal, timed_out: worker.timed_out,
       cancelled: worker.cancelled, cleanup: worker.cleanup,
       stdout: worker.stdout_evidence, stderr: worker.stderr_evidence,
-      environment_names: Object.keys(redactEnv(buildEnv(env, { SCH_RUN_ID: runId }))).sort(),
+      // From the executor, which built it — not recomputed here. Recomputing it
+      // is how this record came to omit the GIT_CONFIG_* credential strip and
+      // the SCH identity vars the child actually got.
+      environment_names: worker.environment_names ?? [],
     });
     ev("run.worker_output_recorded", { stdout: worker.stdout_evidence, stderr: worker.stderr_evidence });
 

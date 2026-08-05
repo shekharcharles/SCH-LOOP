@@ -222,6 +222,12 @@ export class ClaudeCliExecutor extends AgentExecutor {
       stdout: "", stderr: "", exit_code: null, signal: null,
       timed_out: false, cancelled: false, cleanup: null,
       stdout_evidence: null, stderr_evidence: null,
+      // Filled in below from the environment actually handed to the child. The
+      // run record used to recompute this from a DIFFERENT extra object, so
+      // worker.json described an environment no process ever received — a wrong
+      // answer to "did this worker have GH_TOKEN?", on the one surface that
+      // question is asked. Names only: values are never recorded here.
+      environment_names: [],
     };
     if (!prep.ok) {
       return { ...base, ended_at: new Date().toISOString(), ok: false, failure: prep.problems[0] };
@@ -241,6 +247,7 @@ export class ClaudeCliExecutor extends AgentExecutor {
       SCH_PHASE: identity.phase_id,
       SCH_SEMANTIC: identity.semantic,
     });
+    base.environment_names = Object.keys(env).sort();
 
     const out = sink(this.maxOutputBytes), err = sink(this.maxOutputBytes);
     let child;
