@@ -379,8 +379,7 @@ test("a run writes evidence to the main workspace while working in workRoot", as
     git(fx.repo, "worktree", "add", alt, "-b", "sch/task-" + t, "HEAD");
 
     const rec = await run(fx, t, fakeExecutor(fx, {
-      edits: [{ path: "src/app.js", content: "// edited in the alternate checkout\n" }],
-      handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+      write: [{ path: "src/app.js", content: "// edited in the alternate checkout\n" }],
     }), { workRoot: alt });
 
     assert.equal(rec.outcome, "VERIFIED");
@@ -474,8 +473,7 @@ test("the queue works in a worktree and leaves the main tree untouched", async (
 
     await runQueue(fx, {
       env: fakeQueueEnv(fx, { [t]: {
-        edits: [{ path: "src/app.js", content: "// built by the queue\n" }],
-        handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+        write: [{ path: "src/app.js", content: "// built by the queue\n" }],
       } }),
       maxTasks: 1,
     });
@@ -768,8 +766,7 @@ test("a first push inside the namespace creates the remote branch and sets upstr
     git(fx.repo, "worktree", "add", alt, "-b", `sch/task-${t}`, "HEAD");
 
     const rec = await verifiedRun(fx, t, {
-      edits: [{ path: "src/app.js", content: "// delivered from a worktree\n" }],
-      handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+      write: [{ path: "src/app.js", content: "// delivered from a worktree\n" }],
     });
     approve(fx, rec.run_id);
     const d = deliver(fx, rec.run_id, { workRoot: alt });
@@ -791,8 +788,7 @@ test("a first push outside the namespace still stops with UPSTREAM_CHANGED", asy
     git(fx.repo, "worktree", "add", alt, "-b", "hotfix/not-ours", "HEAD");
 
     const rec = await verifiedRun(fx, t, {
-      edits: [{ path: "src/app.js", content: "// off-namespace\n" }],
-      handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+      write: [{ path: "src/app.js", content: "// off-namespace\n" }],
     });
     approve(fx, rec.run_id);
     const d = deliver(fx, rec.run_id, { workRoot: alt });
@@ -936,8 +932,7 @@ test("KNOWN GAP: a write outside the worktree is neither prevented nor detected"
     await runQueue(fx, {
       env: fakeQueueEnv(fx, { [t]: {
         writeAbsolute: [{ path: victim, content: "a worker wrote here\n" }],
-        edits: [{ path: "src/app.js", content: "// in scope\n" }],
-        handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+        write: [{ path: "src/app.js", content: "// in scope\n" }],
       } }),
       maxTasks: 1,
     });
@@ -963,9 +958,8 @@ test("a worker that creates its own worktree trips worktrees_changed", async () 
     const t = addTask(fx);
     const res = await runQueue(fx, {
       env: fakeQueueEnv(fx, { [t]: {
-        gitCommands: [["worktree", "add", join(fx.home, "worker-own-wt"), "-b", "worker-branch", "HEAD"]],
-        edits: [{ path: "src/app.js", content: "// and a worktree of my own\n" }],
-        handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+        git: [["worktree", "add", join(fx.home, "worker-own-wt"), "-b", "worker-branch", "HEAD"]],
+        write: [{ path: "src/app.js", content: "// and a worktree of my own\n" }],
       } }),
       maxTasks: 1,
     });
@@ -984,8 +978,7 @@ test("a full queue run leaves the main working tree byte-identical", async () =>
 
     await runQueue(fx, {
       env: fakeQueueEnv(fx, { [t]: {
-        edits: [{ path: "src/app.js", content: "// queue built this\n" }],
-        handoff: { status: "COMPLETE", summary: "done", files_changed: ["src/app.js"] },
+        write: [{ path: "src/app.js", content: "// queue built this\n" }],
       } }),
       maxTasks: 1,
     });
@@ -999,7 +992,7 @@ test("a full queue run leaves the main working tree byte-identical", async () =>
 Two behaviour keys must be supported by `tests/fixtures/fake-claude.mjs`. Read that file; if either is absent, add it mirroring how the existing `edits` key is handled:
 
 - `writeAbsolute: [{ path, content }]` — writes to that absolute path, outside the worktree.
-- `gitCommands: [[...argv]]` — runs `git -C <cwd> ...argv` in the worker's own working directory, so a test can make the worker attempt a git operation SCH must catch.
+- `git: [[...argv]]` — runs `git -C <cwd> ...argv` in the worker's own working directory, so a test can make the worker attempt a git operation SCH must catch.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
