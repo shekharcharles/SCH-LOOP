@@ -519,7 +519,13 @@ export async function runQueue({
       // is re-claimed to continue that attempt, not to start a new one. The
       // difference matters: continuing skips the worker, restarting runs a second
       // one over a working tree that already holds the first one's change.
-      const parked = openAttempt(wsDir, task.id).resume;
+      const att = openAttempt(wsDir, task.id);
+      const parked = att.resume;
+      // Has this task ever run before? `resume` only answers "is the last attempt
+      // still open"; an attempt that COMPLETED and failed leaves a record and a
+      // checkout full of uncommitted work, and answers `false`. A first claim has
+      // no attempt directory at all, so `attempt` is 1 and this stays false.
+      const ranBefore = att.resume || att.attempt > 1;
       const claim = TR.transition(projectId, task.id, {
         to: "CLAIMED", actor: "scheduler", reason: `scheduler ${id} ${parked ? "re-claimed to continue its open attempt" : "claimed this task"}`,
         expectVersion: task.stateVersion ?? 0, causation: lastEventId,
@@ -545,16 +551,19 @@ export async function runQueue({
         return finish("NEEDS_DECISION", { code, message });
       };
 
-      // A PARKED attempt is being CONTINUED, and the change it produced lives in
-      // that checkout, uncommitted. If the checkout is gone — a reboot, a temp
-      // reaper, someone tidying scratch space — `ensureWorktree` would find the
-      // branch and check it out AT ITS LAST COMMIT, and every phase downstream
-      // would then grade a change that no longer exists and report the work as
-      // absent rather than lost. This is the realistic way that happens; the
-      // in-attempt retry `runAttempt` guards is the rarer one.
-      if (parked && !WT.worktreeState({ projectId, taskId: task.id, repoRoot }).exists)
+      // ANY earlier attempt left its change in that checkout, uncommitted. If the
+      // checkout is gone — a reboot, a temp reaper, someone tidying scratch space
+      // — `ensureWorktree` would find the branch and check it out AT ITS LAST
+      // COMMIT, and every phase downstream would then grade a change that no
+      // longer exists and report the work as absent rather than lost.
+      //
+      // Not just PARKED attempts: an attempt that ran to a failure is closed, so
+      // `resume` is false, and before M6 that work sat in the main tree and
+      // survived. Requeueing such a task with the checkout cleared in between is
+      // the same silent loss, reached by a shorter path.
+      if (ranBefore && !WT.worktreeState({ projectId, taskId: task.id, repoRoot }).exists)
         return noWorktree("WORKTREE_MISSING",
-          `the worktree for task #${task.id} is gone but its attempt is still open — that attempt's uncommitted work cannot be reconstructed, and SCH will not fabricate a baseline by checking the branch out again`);
+          `the worktree for task #${task.id} is gone but attempt ${att.resume ? att.attempt : att.attempt - 1} already ran in it — that attempt's uncommitted work cannot be reconstructed, and SCH will not fabricate a baseline by checking the branch out again`);
 
       const base = (WS.git(repoRoot, "rev-parse", "HEAD") ?? "").trim();
       if (!base)
