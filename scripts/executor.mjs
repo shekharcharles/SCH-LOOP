@@ -55,7 +55,9 @@ export const ENV_ALLOW = [
 //
 // This removes the AMBIENT credential helper — it does not stop a worker that
 // deliberately re-adds one with `git -c credential.helper=manager` or `git config --local`.
-// For that reason, SCH also does not allow workers to commit or push.
+// For that reason, SCH inspects the repository after every run and fails it on
+// FORBIDDEN_GIT_EFFECT if a worker committed or pushed — detection after the
+// fact, not prevention.
 //
 // This is set on the ENVIRONMENT, never in the worktree's git config: the
 // delivery controller runs in that same worktree and still has to push.

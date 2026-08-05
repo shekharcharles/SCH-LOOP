@@ -327,12 +327,13 @@ test("a run writes evidence to the main workspace while working in workRoot", as
 
     const rec = await run(fx, t, fakeExecutor(fx, {
       write: [{ path: "src/app.js", content: "// edited in the alternate checkout\n" }],
-      handoff: { summary: "done", files_reported_changed: ["src/app.js"] },
     }), { workRoot: alt });
 
     assert.equal(rec.outcome, "VERIFIED", JSON.stringify(rec.failure));
     assert.ok(existsSync(join(fx.repo, ".sch-loop", "runs", rec.run_id)),
       "evidence must land in the MAIN repository workspace, not the alternate checkout");
+    assert.ok(!existsSync(join(alt, ".sch-loop", "runs", rec.run_id)),
+      "no run evidence in the disposable checkout");
     assert.equal(readFileSync(join(alt, "src", "app.js"), "utf8"), "// edited in the alternate checkout\n");
     assert.equal(readFileSync(join(fx.repo, "src", "app.js"), "utf8"), "// app\n",
       "the main working tree must be untouched");

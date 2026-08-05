@@ -19,8 +19,9 @@
 //     Typed envelopes cross phase boundaries.
 //     Named gates define acceptance.
 //
-// ONE TASK AT A TIME. No worktrees, no parallelism, no fan-out. Every task gets
-// a fresh worker process, is verified independently, is committed and pushed by
+// ONE TASK AT A TIME. No parallelism, no fan-out — the worktree a task gets is
+// where its worker runs, not a second task running beside the first. Every task
+// gets a fresh worker process, is verified independently, is committed and pushed by
 // the existing delivery controller, and becomes DELIVERED only after that
 // controller has proved the commit on the remote with its own fetch.
 
@@ -42,6 +43,7 @@ import * as ROLES from "./roles.mjs";
 import * as USAGE from "./usage.mjs";
 import * as EV from "./evidence.mjs";
 import * as SEM from "./semantic.mjs";
+import * as WT from "./worktree.mjs";
 import { loadState, saveState, getProject, auditLog, event as stateEvent } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
@@ -108,6 +110,7 @@ export const SCHEDULER_EVENTS = [
   "scheduler.human_gate_created", "scheduler.task_awaiting_delivery", "scheduler.task_delivered",
   "scheduler.task_failed", "scheduler.task_blocked", "scheduler.project_completed",
   "scheduler.stopped", "scheduler.cancelled", "scheduler.lease_acquired", "scheduler.lease_released",
+  "scheduler.worktree_created", "scheduler.worktree_removed",
 ];
 
 const now = () => new Date().toISOString();
@@ -528,10 +531,30 @@ export async function runQueue({
       }
       emit("scheduler.task_claimed", { state_version: claim.state_version }, { taskId: task.id });
 
+      // A worker never runs in the operator's working tree. One worktree per
+      // TASK — every attempt reuses it, so a retry inherits the previous
+      // attempt's uncommitted work exactly as it did before.
+      const base = (WS.git(repoRoot, "rev-parse", "HEAD") ?? "").trim();
+      const wt = WT.ensureWorktree({ projectId, taskId: task.id, repoRoot, base });
+      if (!wt.ok) {
+        emit("scheduler.task_blocked", { failure: wt.code, message: clamp(wt.message, 300) }, { taskId: task.id });
+        TR.transition(projectId, task.id, { to: "NEEDS_DECISION", actor: "scheduler", reason: clamp(wt.message, 400) });
+        return finish("NEEDS_DECISION", { code: wt.code, message: wt.message });
+      }
+      if (wt.created) emit("scheduler.worktree_created", { path: wt.path, branch: wt.branch, base }, { taskId: task.id });
+
       const outcome = await executeTask({
-        projectId, taskId: task.id, wsDir, repoRoot, project, schedulerId: id, dir,
+        projectId, taskId: task.id, wsDir, repoRoot, workRoot: wt.path, project, schedulerId: id, dir,
         env, executor, emit, db, budgets, record,
       });
+
+      // The checkout is disposable; the BRANCH is the record and survives it. It
+      // is kept on FAILED on purpose — a failed task's tree is the evidence
+      // someone has to look at.
+      if (outcome.state === "DELIVERED" || outcome.state === "CANCELLED") {
+        const rm = WT.removeWorktree({ projectId, taskId: task.id, repoRoot });
+        emit("scheduler.worktree_removed", { removed: rm.removed, path: rm.path ?? wt.path }, { taskId: task.id });
+      }
 
       record.tasks.push(outcome);
       record.total_attempts += outcome.attempts;
@@ -633,7 +656,7 @@ function recordWorkflowOnTask(projectId, taskId, { workflowId, wf }) {
 
 // -------------------------------------------------------- one task, one graph
 
-async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedulerId, dir, env, executor, emit, db, budgets, record }) {
+async function executeTask({ projectId, taskId, wsDir, repoRoot, workRoot, project, schedulerId, dir, env, executor, emit, db, budgets, record }) {
   const state0 = loadState(projectId);
   const task0 = (state0.tasks ?? []).find((t) => t.id === Number(taskId));
   const retryPolicy = task0?.retryPolicy ?? {};
@@ -676,7 +699,7 @@ async function executeTask({ projectId, taskId, wsDir, repoRoot, project, schedu
     mkdirSync(aDir, { recursive: true });
 
     const result = await runAttempt({
-      projectId, taskId, attempt, wsDir, repoRoot, project, schedulerId, aDir,
+      projectId, taskId, attempt, wsDir, repoRoot, workRoot, project, schedulerId, aDir,
       env, executor, emit, db, budgets, record, resume: open.resume,
       previousAttempt: attempts[attempts.length - 1] ?? lastAttemptRecord(wsDir, taskId, attempt), repairsUsed,
       workflowSelection: wf, workflowId,
@@ -781,9 +804,18 @@ function lastAttemptRecord(wsDir, taskId, currentAttempt) {
 
 const SEM_REVIEW_REQUIRED = new Set(["BUILD_REVIEW", "SECURITY_REVIEW"]);
 
-async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project, schedulerId, aDir, env, executor, emit, db, budgets, record, previousAttempt, repairsUsed, resume = false, workflowSelection = null, workflowId = null }) {
+async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoot, project, schedulerId, aDir, env, executor, emit, db, budgets, record, previousAttempt, repairsUsed, resume = false, workflowSelection = null, workflowId = null }) {
   const startedAt = now();
-  const ctx = { project_id: projectId, task_id: taskId, repo_root: repoRoot, ws_dir: wsDir };
+  const ctx = { project_id: projectId, task_id: taskId, repo_root: repoRoot, work_root: workRoot, ws_dir: wsDir };
+
+  // A LATER attempt whose checkout has gone is not a fresh start. Attempt 1's
+  // change was carried forward in that tree, so recreating it would hand the
+  // worker a baseline that was never true and call the missing work absent.
+  const wtNow = WT.worktreeState({ projectId, taskId, repoRoot });
+  if (!wtNow.exists && attempt > 1)
+    return { outcome: "NEEDS_DECISION", run_id: null, attempt, started_at: startedAt, ended_at: now(),
+      failure: { code: "WORKTREE_MISSING",
+        message: `the worktree for task ${taskId} is gone but attempt ${attempt} is in flight — the previous attempt's carried-forward work cannot be reconstructed, and SCH will not fabricate a baseline by recreating it` } };
   let runId = null, runRec = null, commit = null, planArtifact = null;
 
   // A RESUMED attempt does not run its worker again. The change it produced is
@@ -956,6 +988,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, project
         ...((ctx.effects?.paths ?? []).map((x) => x.path)),
       ])];
       const rec = await RUN.runTask({
+        workRoot,
         projectId, taskId, env, executor, attempt,
         allowDirtyPaths: carried.length ? carried : null,
         roleConfig, policyOverride: eff.policy, planEnvelope, semanticHandler: semanticId,
