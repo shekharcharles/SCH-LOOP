@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { fixture, ROOT, url } from "./helpers.mjs";
 
 const PACK = await import(url(join(ROOT, "scripts", "pack.mjs")));
+const SK = await import(url(join(ROOT, "scripts", "skills.mjs")));
 
 // A skill on disk, shaped the way the registry reports one.
 function skillOnDisk(dir, id, body, { bucket = "recommended" } = {}) {
@@ -222,4 +223,23 @@ test("a built-in on both lists is denied — deny outranks allow", () => {
   const policy = { version: 1, allow: ["run"], deny: ["run"], known: ["run"] };
   assert.deepEqual(PACK.deniedBuiltins(policy), ["run"],
     "a name on both lists is an editing mistake; the safe reading is the restrictive one");
+});
+
+test("a CRLF checkout of an approved skill is not mistaken for a tampered one", () => {
+  const fx = fixture("pack-crlf");
+  const root = join(fx.home, "packs");
+  try {
+    const body = "---\nname: crlf\ndescription: d\n---\nline one\nline two\n";
+    const dir = join(fx.home, "sk", "crlf");
+    mkdirSync(dir, { recursive: true });
+    // What git hands a Windows checkout. The approval hash was taken over the
+    // normalised text, so packing must normalise too or nothing ever packs.
+    writeFileSync(join(dir, "SKILL.md"), body.replace(/\n/g, "\r\n"));
+    const r = PACK.buildPack({
+      projectId: fx.P, taskId: 9, root,
+      skills: [{ skill_id: "crlf", name: "crlf", bucket: "required",
+        source_path: join(dir, "SKILL.md"), content_hash: SK.contentHash(body) }],
+    });
+    assert.equal(r.ok, true, r.message);
+  } finally { fx.done(); }
 });

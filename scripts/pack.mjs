@@ -30,7 +30,12 @@ export function packPathFor(projectId, taskId, { root = packsRoot() } = {}) {
   return join(resolve(root), slug(projectId), `task-${slug(taskId)}`);
 }
 
-const hash = (text) => createHash("sha256").update(text).digest("hex").slice(0, 32);
+// MUST match `contentHash` in skills.mjs exactly — that is the hash a skill was
+// approved under, and this compares against it. It normalises line endings
+// first: without that, every CRLF checkout reads as tampered-with. Kept local
+// rather than imported so this module stays a leaf; tests/pack.test.mjs pins the
+// two against each other so they cannot drift apart.
+const hash = (text) => createHash("sha256").update(String(text).replace(/\r\n/g, "\n")).digest("hex").slice(0, 32);
 
 // A skill is instructions, and most real skills split those instructions across
 // supporting documents — `references/*.md` is the common shape. Those are
