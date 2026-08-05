@@ -100,7 +100,9 @@ tree is byte-identical after a queue run. It gets no ambient git credential
 helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/`SSH_AUTH_SOCK`/
 `SSH_AGENT_PID` — verification children included. Only the delivery controller
 pushes, and only inside a branch namespace an operator authorized for that
-project. But **workers are still not OS-sandboxed**: a write outside the worktree
+project. Effect inspection still reaches the **shared `.git`**: a worker's own
+worktree and a hook installed into the shared hooks directory are both caught.
+But **workers are still not OS-sandboxed**: a write outside the worktree
 is neither prevented nor detected, the network is unrestricted, a detached
 process survives the tree-kill, the credential strip only removes the *ambient*
 helper, and all projects share one worktree root. So fully unattended operation

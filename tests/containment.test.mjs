@@ -11,7 +11,7 @@ import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fixture, initWorkspace, addTask, fakeQueueEnv, runQueue, EXEC } from "./helpers.mjs";
+import { fixture, initWorkspace, addTask, fakeQueueEnv, runQueue, EXEC, RUN } from "./helpers.mjs";
 
 test("KNOWN GAP: a write outside the worktree is neither prevented nor detected", async () => {
   const fx = fixture("gap-outside");
@@ -32,12 +32,27 @@ test("KNOWN GAP: a write outside the worktree is neither prevented nor detected"
     // containment arriving — delete this test and say so in the README.
     assert.equal(existsSync(victim), true,
       "nothing prevents a worker from writing outside its worktree");
-    assert.ok(!JSON.stringify(res).includes("outside-the-worktree.canary"),
+    // "Not detected" is asserted against `git-effects.json` — the artifact effect
+    // inspection actually writes — and NOT against the scheduler's return value,
+    // whose contents depend on which path the run stopped on and which would go
+    // vacuous the moment that changed. The in-scope write is the POSITIVE
+    // CONTROL, read from the same file in the same breath: it proves this is
+    // reading the artifact, so "the canary is absent" means undetected rather
+    // than unread.
+    const runId = res.tasks[0].attempt_records[0].run_id;
+    const effects = JSON.stringify(RUN.readRun(fx.P, runId).effects);
+    assert.ok(effects.includes("src/app.js"),
+      "positive control: the in-worktree write IS in git-effects.json");
+    assert.ok(!effects.includes("outside-the-worktree.canary"),
       "effect inspection compares the worktree only; a write outside it is invisible");
   } finally { fx.done(); rmSync(outside, { recursive: true, force: true }); }
 });
 
-test("a worker cannot push: no credential helper is available to it", () => {
+// Not "a worker cannot push" — this proves no AMBIENT helper or token is
+// constructed for a bounded child, which is a different and smaller claim. A
+// worker that re-adds one with `git -c credential.helper=…` is not stopped, and
+// the README says so.
+test("no ambient credential helper or token reaches a bounded child", () => {
   const env = EXEC.buildEnv(process.env, EXEC.GIT_CREDENTIAL_STRIP);
   assert.equal(env.GIT_CONFIG_VALUE_0, "");
   assert.equal(env.GITHUB_TOKEN, undefined);
