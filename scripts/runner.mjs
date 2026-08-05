@@ -1539,6 +1539,14 @@ export function runProjection(projectId, { limit = 10 } = {}) {
       started_at: r.started_at, ended_at: r.ended_at, duration_ms: r.duration_ms,
       worker_state: r.worker ? (r.worker.timed_out ? "TIMED_OUT" : r.worker.cancelled ? "CANCELLED" : `exit ${r.worker.exit_code}`) : "not started",
       selected_skills: manifest?.skills?.map((s) => s.skill_id) ?? [],
+      // What the worker was actually GIVEN, not merely what was recommended.
+      // Names, counts and refusals only - a skill body is instructions, and
+      // instructions never go over the wire, exactly as prompts do not.
+      pack: r.pack ? {
+        manifest_name: r.pack.manifest_name ?? null,
+        skills: (r.pack.entries ?? []).map((e) => e.skill_id),
+        refusals: (r.pack.refusals ?? []).map((x) => ({ path: x.path ?? String(x), why: x.why ?? null })),
+      } : null,
       prompt_characters: manifest?.total_characters ?? null,
       verification: r.verification ?? null, effects: r.effects ?? null,
       outcome: r.outcome, failure: r.failure,

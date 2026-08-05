@@ -6,8 +6,8 @@
 // hide it from the local LAN.
 
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
-import { readFileSync, existsSync, watch } from "node:fs";
+import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
@@ -34,7 +34,10 @@ const ROOT = process.env.SCH_HOME || join(dirname(fileURLToPath(import.meta.url)
 const PROJECTS_DIR = join(ROOT, "projects");
 const REGISTRY = join(ROOT, "projects.json");
 const PORT = process.env.SCH_PORT || 4600;
-const BIND = process.env.SCH_BIND || "0.0.0.0";
+// Loopback by default. Listening on every interface is now an explicit choice
+// (SCH_BIND=0.0.0.0), not something that happens to whoever starts the server.
+// Authentication makes that choice defensible; it does not make it automatic.
+const BIND = process.env.SCH_BIND || "127.0.0.1";
 const json = (res, b) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
 
 // ---- data shapes pushed to clients ----
@@ -137,6 +140,59 @@ setInterval(() => clients.forEach((c) => { try { c.res.write(": ping\n\n"); } ca
 // CSRF: same-origin headers alone are spoofable by a non-browser client on the
 // tailnet. Every mutating form carries this per-process token; a POST without it
 // is rejected. Rotates on restart (a stale tab simply reloads).
+// AUTHENTICATION, which CSRF is not.
+//
+// CSRF stops a third-party site driving this dashboard through the operator's
+// browser. It does nothing about a client that simply connects - and this server
+// can halt a project, disarm scope and answer a blocked question. So every
+// request must carry a shared secret, and anything without one is refused
+// before it learns that any project exists.
+//
+// Stored, not rotated per start: a token that changes on every restart cannot be
+// bookmarked on a phone, and an operator who has to re-copy a secret hourly ends
+// up disabling the check.
+const TOKEN_FILE = join(ROOT, "dashboard-token");
+function loadOrCreateToken() {
+  try {
+    const t = readFileSync(TOKEN_FILE, "utf8").trim();
+    if (t.length >= 32) return t;
+  } catch { /* first start */ }
+  const t = randomBytes(32).toString("hex");
+  mkdirSync(dirname(TOKEN_FILE), { recursive: true });
+  writeFileSync(TOKEN_FILE, t + String.fromCharCode(10), { mode: 0o600 });
+  try { chmodSync(TOKEN_FILE, 0o600); } catch { /* best effort off POSIX */ }
+  return t;
+}
+const TOKEN = loadOrCreateToken();
+
+// Hashed before comparing so the lengths always match: timingSafeEqual throws on
+// a length mismatch, and that throw is itself a signal.
+const sha = (s) => createHash("sha256").update(String(s)).digest();
+const tokenOk = (given) => {
+  if (!given) return false;
+  try { return timingSafeEqual(sha(given), sha(TOKEN)); } catch { return false; }
+};
+const cookieToken = (req) => {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === "sch_token") return decodeURIComponent(v.join("="));
+  }
+  return null;
+};
+const presentedToken = (req, url) => {
+  const h = req.headers.authorization ?? "";
+  if (h.toLowerCase().startsWith("bearer ")) return h.slice(7).trim();
+  return url.searchParams.get("token") ?? cookieToken(req);
+};
+// 401 and NOTHING else. A refusal that names projects or counts tasks has
+// already answered the question the caller was not allowed to ask.
+const unauthorized = (res) => {
+  res.writeHead(401, { "content-type": "text/plain", "www-authenticate": "Bearer" });
+  res.end("unauthorized");
+};
+
 const CSRF = randomUUID();
 const sameOrigin = (req) => { const h = req.headers.host, s = req.headers.origin || req.headers.referer; if (!h || !s) return false; try { return new URL(s).host === h; } catch { return false; } };
 const forbid = (res) => { res.writeHead(403); res.end("forbidden"); };
@@ -145,6 +201,20 @@ const body = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/favicon.ico") { res.writeHead(204); res.end(); return; }
+
+  // Before anything else, including the event stream.
+  if (!tokenOk(presentedToken(req, url))) return unauthorized(res);
+  // A token that arrived in the query becomes a cookie and leaves the URL, so it
+  // stops appearing in browser history, bookmarks and any proxy log.
+  if (url.searchParams.get("token")) {
+    url.searchParams.delete("token");
+    res.writeHead(302, {
+      "set-cookie": `sch_token=${encodeURIComponent(TOKEN)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`,
+      location: url.pathname + (url.searchParams.toString() ? "?" + url.searchParams : ""),
+    });
+    res.end();
+    return;
+  }
 
   if (url.pathname === "/events") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -443,7 +513,12 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE.replace("__CSRF__", CSRF)); return; }
   res.writeHead(404); res.end("not found");
 });
-server.listen(PORT, BIND, () => console.log(`SCH Loop dashboard (live) on http://${BIND}:${PORT}`));
+server.listen(Number(PORT), BIND, () => {
+  // The port ACTUALLY bound, which is not PORT when PORT is 0.
+  const p = server.address()?.port ?? PORT;
+  console.log(`SCH Loop dashboard (live) on http://${BIND}:${p}`);
+  console.log(`open it with: http://${BIND}:${p}/?token=${TOKEN}`);
+});
 
 const PAGE = `<!doctype html>
 <html lang="en"><head>
