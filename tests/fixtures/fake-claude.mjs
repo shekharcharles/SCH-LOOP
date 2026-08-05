@@ -72,6 +72,16 @@ if (b.waitForFile) {
   }
 }
 
+// A worker that writes OUTSIDE its own worktree - the thing the containment
+// story says is neither prevented nor detected. Used to prove it is at least
+// detected now. The path is absolute and supplied by the test.
+if (b.writeOutside) {
+  for (const w of [].concat(b.writeOutside)) {
+    try { mkdirSync(dirname(w.path), { recursive: true }); writeFileSync(w.path, w.content ?? 'escaped'); }
+    catch { /* the detection is what is under test, not this write */ }
+  }
+}
+
 if (b.selfCancel) {
   const d = join(cwd, ".sch-loop", "runs", process.env.SCH_RUN_ID ?? "unknown");
   mkdirSync(d, { recursive: true });

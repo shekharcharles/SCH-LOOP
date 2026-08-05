@@ -168,9 +168,9 @@ installed into the shared hooks directory are both caught. A worker sees only th
 holding SCH-approved skills, launched with `--setting-sources project`, so the
 operator's global catalogue never reaches it, and built-ins that schedule work or
 edit configuration are denied by argv. A denied built-in is still listed to the
-worker, and a skill needing its own scripts cannot be packed. But a write outside
-the worktree, a network call or a detached background process is still
-invisible to it, the credential strip only removes the *ambient*
+worker, and a skill needing its own scripts cannot be packed. A write into the main repository or another task's checkout is DETECTED and
+fails the run as `OUTSIDE_WORKTREE_WRITE`. A write anywhere ELSE, a network
+call or a detached background process is still invisible to it, the credential strip only removes the *ambient*
 helper, and none of this is an OS boundary. Fully unattended operation is
 therefore still not supported. Never claim otherwise, never imply parallel
 execution works, and never simulate it.

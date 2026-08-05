@@ -9,6 +9,8 @@ import { test } from "node:test";
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, WS, SECRET_ENV, FAKE_CLAUDE, ROOT } from "./helpers.mjs";
+import { url } from "./helpers.mjs";
+const WT = await import(url(join(ROOT, "scripts", "worktree.mjs")));
 
 const runsOf = (fx) => readdirSync(join(fx.repo, ".sch-loop", "runs"));
 const artifact = (rec, name) => readFileSync(join(rec.run_dir, name), "utf8");
@@ -433,5 +435,39 @@ test("a recommended skill is indexed by name, a required skill is injected in fu
     const marker = body.split(/\r?\n/).filter((l) => l.trim().length > 40).pop() ?? "";
     assert.ok(marker.length > 40 && !prompt.includes(marker.trim()),
       "an indexed skill's instructions must not be injected — it loads from the pack");
+  } finally { fx.done(); }
+});
+
+test("a worker that writes into the main repository fails the run", async () => {
+  const fx = fixture("escape-main");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const made = WT.ensureWorktree({ projectId: fx.P, taskId: t, repoRoot: fx.repo, base });
+    assert.equal(made.ok, true, made.message);
+    const wt = made.path;
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      writeOutside: [{ path: join(fx.repo, "src", "escaped.js"), content: "// not mine\n" }],
+      write: [{ path: "src/app.js", content: "// mine\n" }],
+    }), { workRoot: wt });
+    assert.equal(rec.outcome, "NEEDS_DECISION", JSON.stringify(rec.failure));
+    assert.equal(rec.failure?.code, "OUTSIDE_WORKTREE_WRITE", JSON.stringify(rec.failure));
+  } finally { fx.done(); }
+});
+
+test("a worker that stays in its worktree passes the same check", async () => {
+  const fx = fixture("escape-none");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const base = git(fx.repo, "rev-parse", "HEAD").trim();
+    const made = WT.ensureWorktree({ projectId: fx.P, taskId: t, repoRoot: fx.repo, base });
+    assert.equal(made.ok, true, made.message);
+    const wt = made.path;
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      write: [{ path: "src/app.js", content: "// mine\n" }],
+    }), { workRoot: wt });
+    assert.notEqual(rec.failure?.code, "OUTSIDE_WORKTREE_WRITE", JSON.stringify(rec.failure));
   } finally { fx.done(); }
 });

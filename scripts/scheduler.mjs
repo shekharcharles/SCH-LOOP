@@ -241,7 +241,7 @@ export const TASK_WORKFLOW = [
   { id: "parse-builder-envelope", kind: "CODE", output_schema: "BuilderEnvelopeV1", gates: ["handoff-valid"] },
   { id: "inspect-effects", kind: "CODE", output_schema: "CodeResultEnvelopeV1", gates: [] },
   { id: "effects-gate", kind: "GATE", output_schema: "GateReportEnvelopeV1",
-    gates: ["worker-effects-contained", "changed-paths-allowed", "forbidden-git-effects-absent"] },
+    gates: ["worker-effects-contained", "worker-stayed-in-its-worktree", "changed-paths-allowed", "forbidden-git-effects-absent"] },
   { id: "verify", kind: "CODE", output_schema: "CodeResultEnvelopeV1", gates: [] },
   { id: "verification-gate", kind: "GATE", output_schema: "GateReportEnvelopeV1",
     gates: ["required-verification-passed", "prompt-budget-valid", "secret-scan-passed"] },
