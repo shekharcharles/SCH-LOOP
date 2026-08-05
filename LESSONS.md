@@ -1,0 +1,5 @@
+# Lessons
+
+- A RED test whose assertion can be satisfied by an unrelated failure is not evidence → assert the specific failure code, and check the RED output names the failure your change will actually fix.
+- A shared test fixture that writes to a machine-global path (LOCALAPPDATA, XDG_STATE_HOME) collides between tests and litters the operator's disk → give every fixture its own root through the env var the code already reads, and delete it in teardown.
+- Before threading a new "where the work happens" root through a pipeline, grep every consumer of the old root in that pipeline — the ones you miss fail as drift or mismatch far downstream, not at the call you changed.
