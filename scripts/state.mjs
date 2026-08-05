@@ -14,7 +14,9 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, appendF
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import * as SK from "./skills.mjs";
+import * as WT from "./worktree.mjs";
 
 // Skills actually invoked in Claude Code's session transcripts since `sinceMs`.
 // Ground truth the agent cannot fake — used to hard-gate completion.
@@ -263,6 +265,20 @@ export function markDelivered(projectId, taskId, provenance) {
   saveState(projectId, s);
   auditLog({ kind: "delivery", project: projectId, task: String(taskId), ...t.delivery, event: "task-delivered" });
   return { ok: true, task: t };
+}
+
+// Creating a remote branch is an explicit decision. It stays explicit — but the
+// decision is made ONCE PER PROJECT over a namespace, not once per task. A gate
+// per task would make the queue stop on every single first push, which is the
+// autonomy this milestone exists to enable.
+export function branchNamespace(projectId) {
+  const st = loadState(projectId);
+  const ns = st?.delivery?.branch_namespace ?? null;
+  return ns && ns.pattern ? ns : null;
+}
+
+export function branchInNamespace(projectId, branch) {
+  return WT.branchMatchesNamespace(branchNamespace(projectId), branch);
 }
 
 // A finding is one tested class: either a validated issue (with evidence) or a
@@ -1761,6 +1777,33 @@ const commands = {
     if (!r.ok) die(`${r.failure.code} — ${r.failure.message}`);
     out(r);
   },
+  // Moves the "creating a remote branch is explicit" gate from per-branch to
+  // per-project: one operator authorization over a NAMESPACE, so a per-task
+  // branch's first push does not stop the queue on every single task.
+  "delivery-branch-namespace"({ flags }) {
+    const id = pid(flags);
+    const s = loadState(id);
+    if (flags.revoke === "true") {
+      delete (s.delivery ??= {}).branch_namespace;
+      event(s, "branch namespace authorization revoked");
+      saveState(id, s);
+      return out("revoked");
+    }
+    if (!flags.set) return out(branchNamespace(id));
+    const pattern = String(flags.set);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*\*?$/.test(pattern) || (pattern.match(/\*/g) ?? []).length > 1)
+      die(`"${pattern}" is not a usable branch namespace — one trailing "*" at most`);
+    const rec = {
+      id: "BNS-" + randomUUID().slice(0, 8), pattern,
+      authorized_by: flags.approver ?? die("need --approver <name> — an authorization nobody signed is not one"),
+      authorized_at: now(),
+    };
+    (s.delivery ??= {}).branch_namespace = rec;
+    event(s, `branch namespace authorized: "${pattern}" by ${rec.authorized_by}`);
+    saveState(id, s);
+    auditLog({ kind: "delivery", project: id, event: "branch_namespace_authorized", ...rec });
+    out(rec.id);
+  },
   // Promote a run's raw handoff into the durable, trackable record. Separate
   // from the run on purpose: an attempt is not automatically worth keeping, and
   // one untracked file per attempt is litter, not history.
@@ -2209,7 +2252,7 @@ const AUDITED = new Set(["project-add", "set-project", "scope-set", "scope-arm-f
   "finding-add", "finding-set", "inbox-add", "inbox-mark",
   "coverage-add", "coverage-set", "session-set", "session-fail",
   "skill-discover", "skill-trust", "profile-set", "workspace-init", "run-cancel",
-  "delivery-approve", "delivery-cancel", "handoff-promote",
+  "delivery-approve", "delivery-cancel", "delivery-branch-namespace", "handoff-promote",
   "task-transition", "scheduler-cancel", "human-gate-decide", "human-gate-open",
   "skill-source-add", "skill-source-sync", "skill-source-disable",
   "external-skill-review", "external-skill-approve", "external-skill-disable"]);

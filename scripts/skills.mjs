@@ -672,7 +672,7 @@ export const SCH_COMMANDS = [
   { name: "runs", status: "implemented", routes_to: "state.mjs run-list / run-get / run-cancel", summary: "supervised run history, evidence and cancellation for one project" },
   { name: "deliver", status: "implemented", routes_to: "sch-deliver-run.mjs --project <id> --run <RUN-id>", summary: "stage, commit, push and remotely verify ONE verified run, then stop", note: "approval is required by default; the task becomes `delivered` only after the commit is verified on the remote" },
   { name: "approve-delivery", status: "implemented", routes_to: "state.mjs delivery-approve --run <RUN-id> --approver <name>", summary: "sign off one delivery — bound to its exact diff, branch, remote and message" },
-  { name: "deliveries", status: "implemented", routes_to: "state.mjs delivery-status / delivery-list / delivery-cancel", summary: "delivery transactions, their state, approval and evidence" },
+  { name: "deliveries", status: "implemented", routes_to: "state.mjs delivery-status / delivery-list / delivery-cancel / delivery-branch-namespace", summary: "delivery transactions, their state, approval and evidence", note: "delivery-branch-namespace authorizes an entire branch namespace (e.g. \"sch/task-*\") once per project, so a per-task branch's first push does not need a separate human gate" },
   { name: "review", status: "implemented", routes_to: "skill:sch-review", summary: "fresh-context review of one task's branch" },
   { name: "learn", status: "implemented", routes_to: "skill:sch-learn", summary: "distill reusable lessons into the pack knowledge base" },
   { name: "graph", status: "implemented", routes_to: "graph.mjs", summary: "query the project knowledge graph" },

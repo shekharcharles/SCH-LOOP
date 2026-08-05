@@ -46,6 +46,18 @@ export function branchNameFor(taskId) {
   return `${BRANCH_PREFIX}${taskId}`;
 }
 
+// Pure: takes the authorization record, not a project id. Delivery and state
+// both need this, and neither should have to import the other to get it.
+export function branchMatchesNamespace(ns, branch) {
+  if (!ns || !ns.pattern) return false;
+  const b = String(branch ?? "");
+  // A ref name is not a path. Anything readable as traversal, a wildcard, or a
+  // second ref is refused before the pattern is consulted.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(b) || b.includes("..") || b.endsWith("/") || b.endsWith(".lock")) return false;
+  const rx = new RegExp("^" + ns.pattern.split("*").map((s) => s.replace(/[.+^${}()|[\]\\?]/g, "\\$&")).join("[^/]*") + "$");
+  return rx.test(b);
+}
+
 export function worktreeState({ projectId, taskId, repoRoot, root = worktreesRoot() }) {
   const path = worktreePathFor(projectId, taskId, { root });
   const branch = branchNameFor(taskId);

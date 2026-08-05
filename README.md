@@ -122,6 +122,9 @@ scripts/skills.mjs        Skill registry: read-only discovery of installed skill
 scripts/workspace.mjs     The canonical per-project `.sch-loop/` workspace: init, versioned
                           manifest, path containment, symlink/junction refusal, narrow
                           runtime ignore rules (the durable record stays trackable).
+scripts/worktree.mjs      The disposable per-task worktree: a worker gets its own checkout on
+                          its own `sch/task-<n>` branch, outside the repository and outside
+                          SCH_HOME, created once and reused (never recreated) across retries.
 scripts/candidate.mjs     The delivery candidate: every changed path as CONTENT identity
                           (porcelain v2 + blob hashes), canonical hashing, and the git
                           argv guard that refuses add -A / commit -a / force / reset --hard.
@@ -273,6 +276,7 @@ run-list [--limit n] | run-get --run <RUN-id> | run-cancel --run <RUN-id>
 handoff-promote --run <RUN-id>                 (raw run handoff → the durable record)
 delivery-status --run <RUN-id> | delivery-list | delivery-cancel --run <RUN-id>
 delivery-approve --run <RUN-id> --approver <name> [--message "..."] [--reject true]
+delivery-branch-namespace --project <id> [--set "sch/task-*" --approver <you>] [--revoke true]
 sch-run-task.mjs --project <id> --task <n> [--preflight-only]   (one supervised run)
 sch-deliver-run.mjs --project <id> --run <RUN-id> [--dry-run]   (one Git delivery)
 graph-validate | graph-show [--format markdown]      (the task graph + false-edge audit)

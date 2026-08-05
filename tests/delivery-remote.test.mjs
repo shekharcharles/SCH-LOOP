@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync 
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { fixture, initWorkspace, addTask, fakeExecutor, run, git, verifiedRun, withRemote,
-         otherClone, approve, deliver, recordGit, DEL, WS, RUN, ROOT } from "./helpers.mjs";
+         otherClone, approve, deliver, recordGit, DEL, WS, RUN, ROOT, STATE } from "./helpers.mjs";
 
 const FEATURE = { write: [{ path: "src/feature.js", content: "export const feature = 1;\n" }] };
 const wsOf = (fx) => join(fx.repo, ".sch-loop");
@@ -588,4 +588,39 @@ test("events: delivery evidence is versioned, identity-stamped and bounded", asy
   assert.equal(events[0].type, "delivery.created");
   assert.equal(events[events.length - 1].type, "delivery.delivered");
   fx.done();
+});
+
+// --------------------------------------------- branch namespace authorization
+
+test("a project has no branch namespace until an operator sets one", () => {
+  const fx = fixture("ns-default");
+  try {
+    assert.equal(STATE.branchNamespace(fx.P), null);
+    assert.equal(STATE.branchInNamespace(fx.P, "sch/task-1"), false);
+  } finally { fx.done(); }
+});
+
+test("an authorized namespace admits only branches that match it", () => {
+  const fx = fixture("ns-set");
+  try {
+    fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", "sch/task-*", "--approver", "test-operator");
+    const ns = STATE.branchNamespace(fx.P);
+    assert.equal(ns.pattern, "sch/task-*");
+    assert.equal(ns.authorized_by, "test-operator");
+    assert.ok(ns.id, "an authorization must have an id so a delivery can cite it");
+    assert.equal(STATE.branchInNamespace(fx.P, "sch/task-12"), true);
+    assert.equal(STATE.branchInNamespace(fx.P, "main"), false);
+    assert.equal(STATE.branchInNamespace(fx.P, "release/1.0"), false);
+    assert.equal(STATE.branchInNamespace(fx.P, "sch/task-1/../../main"), false);
+  } finally { fx.done(); }
+});
+
+test("revoking the namespace closes it again", () => {
+  const fx = fixture("ns-revoke");
+  try {
+    fx.cli("delivery-branch-namespace", "--project", fx.P, "--set", "sch/task-*", "--approver", "test-operator");
+    fx.cli("delivery-branch-namespace", "--project", fx.P, "--revoke", "true");
+    assert.equal(STATE.branchNamespace(fx.P), null);
+    assert.equal(STATE.branchInNamespace(fx.P, "sch/task-1"), false);
+  } finally { fx.done(); }
 });
