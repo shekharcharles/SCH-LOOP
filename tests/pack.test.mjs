@@ -127,6 +127,27 @@ test("buildPack is idempotent and replaces a stale pack rather than merging into
   } finally { fx.done(); }
 });
 
+test("carryDecision fails closed on an extension this build does not recognise", () => {
+  assert.equal(PACK.carryDecision("notes.xyz").carry, false, "an unrecognised extension must be refused, not carried");
+  assert.equal(PACK.carryDecision("README").carry, false, "no extension at all must be refused, not carried");
+  assert.equal(PACK.carryDecision("references/detail.md").carry, true, "a known document extension is still carried");
+});
+
+test("buildPack refuses a file with an unrecognised extension beside a skill", () => {
+  const fx = fixture("pack-unknown-ext");
+  const root = join(fx.home, "packs");
+  const src = join(fx.home, "src-skills");
+  try {
+    const s = skillOnDisk(src, "epsilon", "epsilon body");
+    writeFileSync(join(src, "epsilon", "notes.xyz"), "unrecognised file type\n");
+    const r = PACK.buildPack({ projectId: fx.P, taskId: 1, skills: [s], root });
+    assert.equal(r.ok, true, r.message);
+    assert.equal(existsSync(join(r.path, "skills", "epsilon", "notes.xyz")), false,
+      "an unrecognised extension must be refused, not carried");
+    assert.ok(r.refusals.some((x) => /notes\.xyz/.test(x.path) && /unrecognised extension/.test(x.why)));
+  } finally { fx.done(); }
+});
+
 test("a symlink beside a skill is refused rather than followed off disk", () => {
   const fx = fixture("pack-symlink");
   const root = join(fx.home, "packs");
