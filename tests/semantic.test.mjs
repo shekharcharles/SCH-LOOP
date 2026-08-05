@@ -135,8 +135,11 @@ test("SCOUT: a scout that modifies the repository FAILS as a role-policy violati
   assert.notEqual(r.stop_reason, "PROJECT_COMPLETED");
   assert.equal(r.tasks[0].failure.code, "ROLE_POLICY_VIOLATION");
   assert.match(r.tasks[0].failure.message, /read-only and has no write authorization/);
-  // evidence preserved: the file is STILL THERE. Nothing was reverted.
-  assert.equal(readFileSync(join(fx.repo, "src", "scout-was-here.js"), "utf8"), "// oops\n");
+  // evidence preserved: the file is STILL THERE. Nothing was reverted — and it
+  // is in the task's own checkout, which is where the scout was running.
+  assert.equal(readFileSync(join(fx.wt, fx.P, `task-${a}`, "src", "scout-was-here.js"), "utf8"), "// oops\n");
+  assert.equal(existsSync(join(fx.repo, "src", "scout-was-here.js")), false,
+    "an unauthorized write never reaches the operator's working tree");
   assert.equal(remoteCommits(fx), 2, "nothing reached the remote");
   const scout = phases(fx, a).find((x) => x.phase_id === "scout");
   assert.equal(scout.state, "FAILED");

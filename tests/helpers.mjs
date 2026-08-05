@@ -55,6 +55,12 @@ export function fixture(name, { register = true, commit = true } = {}) {
   const tag = `${name}-${process.pid}-${++n}`;
   const home = mkdtempSync(join(tmpdir(), "sch-home-" + tag + "-"));
   const repo = mkdtempSync(join(tmpdir(), "sch-repo-" + tag + "-"));
+  // Per-fixture worktree root. Every fixture registers the same project id, so
+  // sharing the machine's real worktree root would make two tests collide on
+  // `proj/task-1` — and would leave checkouts on the operator's disk pointing at
+  // deleted repositories. Outside `home` as well as outside `repo`, because that
+  // is where a worker's scratch space is required to live.
+  const wt = mkdtempSync(join(tmpdir(), "sch-wt-" + tag + "-"));
   const P = "proj";
 
   git(repo, "init", "-q", "-b", "main");
@@ -76,6 +82,7 @@ export function fixture(name, { register = true, commit = true } = {}) {
   // Only SCH's own built-in skills are discoverable: the operator's installed
   // skills can neither influence nor break a test.
   process.env.SCH_HOME = home;
+  process.env.SCH_WORKTREE_ROOT = wt;
   process.env.SCH_SKILL_ROOTS = "builtin:" + join(ROOT, "skills");
   for (const [k, v] of Object.entries(SECRET_ENV)) process.env[k] = v;
 
@@ -83,11 +90,11 @@ export function fixture(name, { register = true, commit = true } = {}) {
     { encoding: "utf8", env: { ...process.env, SCH_HOME: home, NODE_NO_WARNINGS: "1" } }).trim();
 
   return {
-    home, repo, P, cli,
+    home, repo, wt, P, cli,
     state: () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8")),
     wsDir: () => join(repo, ".sch-loop"),
     bare: null,
-    done: function () { for (const d of [home, repo, this.bare].filter(Boolean)) { try { rmSync(d, { recursive: true, force: true }); } catch {} } },
+    done: function () { for (const d of [wt, home, repo, this.bare].filter(Boolean)) { try { rmSync(d, { recursive: true, force: true }); } catch {} } },
   };
 }
 

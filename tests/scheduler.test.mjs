@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fixture, initWorkspace, addTask, withRemote, otherClone, fakeQueueEnv,
          recordGit, git, SCHED, HG, TR, TG, PH, STATE } from "./helpers.mjs";
@@ -759,4 +759,69 @@ test("scheduler: no real model, no network, and only reads inside the fixture", 
 
   // the real registry is untouched
   assert.ok(fx.home.includes("sch-home-"), "everything happened under a throwaway SCH_HOME");
+});
+
+// ============================================================ the task worktree
+
+const wtPath = (fx, taskId) => join(fx.wt, fx.P, `task-${taskId}`);
+
+test("scheduler: the queue works in a worktree and leaves the main tree untouched", async (t) => {
+  const fx = fixture("sched-wt"); t.after(() => fx.done());
+  initWorkspace(fx);
+  const a = addTask(fx);
+  const before = readFileSync(join(fx.repo, "src", "app.js"), "utf8");
+  const status = git(fx.repo, "status", "--porcelain", "--untracked-files=all");
+
+  await SCHED.runQueue({
+    projectId: fx.P, maxTasks: 1,
+    env: fakeQueueEnv(fx, { [a]: { write: [{ path: "src/app.js", content: "// built by the queue\n" }] } }),
+  });
+
+  assert.equal(readFileSync(join(fx.repo, "src", "app.js"), "utf8"), before,
+    "the operator's working tree must be byte-identical after a queue run");
+  assert.equal(git(fx.repo, "status", "--porcelain", "--untracked-files=all"), status,
+    "and nothing may be added, staged or left untracked in it either");
+  const branches = git(fx.repo, "for-each-ref", "--format=%(refname:short)", "refs/heads");
+  assert.ok(branches.includes(`sch/task-${a}`), "the task branch must exist");
+  assert.equal(readFileSync(join(wtPath(fx, a), "src", "app.js"), "utf8"), "// built by the queue\n",
+    "the change lives in the disposable checkout, which is kept because the task did not deliver");
+});
+
+test("scheduler: a worktree that cannot be created stops the task instead of running the worker", async (t) => {
+  const fx = fixture("sched-wt-blocked"); t.after(() => fx.done());
+  initWorkspace(fx);
+  const a = addTask(fx);
+  // Something that is not a git worktree already occupies the path. SCH will not
+  // delete it, so the task stops for a person rather than running anywhere else.
+  mkdirSync(wtPath(fx, a), { recursive: true });
+  writeFileSync(join(wtPath(fx, a), "someones-file.txt"), "not mine to delete\n");
+
+  const r = await SCHED.runQueue({ projectId: fx.P, env: fakeQueueEnv(fx, {}), maxTasks: 1 });
+  assert.equal(r.stop_reason, "NEEDS_DECISION");
+  assert.equal(r.failure.code, "WORKTREE_NOT_A_WORKTREE");
+  assert.equal(states(fx)[a], "NEEDS_DECISION");
+  assert.equal(invocations(fx).length, 0, "no worker may start when there is nowhere contained to run it");
+});
+
+test("scheduler: a worktree missing mid-attempt is NEEDS_DECISION and is not recreated", async (t) => {
+  const fx = fixture("sched-wt-missing"); t.after(() => fx.done());
+  initWorkspace(fx);
+  const a = addTask(fx, {
+    title: "flaky", allow: "src/**",
+    verify: `${process.execPath.replace(/\\/g, "/")} -e process.exit(require("fs").existsSync("src/fixed.js")?0:1)`,
+  });
+  const dir = join(fx.home, "behaviours");
+  const env = fakeQueueEnv(fx, {});
+  writeFileSync(join(dir, `task-${a}-attempt-1.json`), JSON.stringify({ write: [{ path: "src/broken.js", content: "// nope\n" }] }));
+  writeFileSync(join(dir, `task-${a}-attempt-2.json`), JSON.stringify({ write: [{ path: "src/fixed.js", content: "// yes\n" }] }));
+
+  // Attempt 1 fails its verification, and the checkout disappears before attempt
+  // 2 starts — an interrupted run, or a person clearing scratch space.
+  const onEvent = (e) => { if (e.type === "scheduler.retry_scheduled") rmSync(wtPath(fx, a), { recursive: true, force: true }); };
+
+  const r = await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1, onEvent });
+  assert.equal(r.stop_reason, "NEEDS_DECISION", JSON.stringify(r.failure));
+  assert.equal(r.failure.code, "WORKTREE_MISSING");
+  assert.equal(invocations(fx).length, 1, "attempt 2's worker must not start on a fabricated baseline");
+  assert.equal(existsSync(wtPath(fx, a)), false, "and the checkout is not recreated");
 });

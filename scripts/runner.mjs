@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rea
 import { execFileSync } from "node:child_process";
 import { runProcess, effectiveTimeout } from "./subprocess.mjs";
 import { createHash, randomBytes } from "node:crypto";
-import { join, basename } from "node:path";
+import { join, basename, resolve } from "node:path";
 import * as WS from "./workspace.mjs";
 import * as SK from "./skills.mjs";
 import { computeCandidate } from "./candidate.mjs";
@@ -738,6 +738,13 @@ export function redactPrompt(text) {
 
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 
+// Path equality with the same case folding `contains` uses, so a Windows path
+// that differs only in case is the same directory rather than an escape.
+const sameDir = (a, b) => Boolean(a && b && WS.contains(a, b) && WS.contains(b, a));
+// The shared object store. A linked worktree and its main repository report the
+// same one; two unrelated repositories never do.
+const gitCommonDir = (dir) => { const o = gt(dir, "rev-parse", "--git-common-dir"); return o ? WS.real(resolve(dir, o)) : null; };
+
 // Everything that must hold before a worker is started. Collects ALL failures
 // rather than stopping at the first — the operator should see the whole list.
 export function preflight({ projectId, taskId, env = process.env, executor = null, runId = null, allowDirtyPaths = null, policyOverride = null, workRoot = null }) {
@@ -759,6 +766,17 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
   ctx.repoRoot = workRoot ? WS.repositoryRoot(workRoot) : ws.root;
   if (workRoot && !ctx.repoRoot)
     bad("WORKSPACE_INVALID", `workRoot ${workRoot} is not a git repository`);
+  // A workRoot is checked the same way `resolveRepository` checks a registered
+  // path, and for the same reason. `repositoryRoot` answers "which repository is
+  // this path in", so a SUBDIRECTORY of the operator's repository resolves to
+  // the repository itself — and the worker would run in the very tree this
+  // milestone exists to keep it out of. It must also belong to the registered
+  // repository: any git repository on the machine otherwise runs the worker
+  // while this project's evidence is written to this project's workspace.
+  else if (workRoot && !sameDir(ctx.repoRoot, WS.real(workRoot)))
+    bad("WORKSPACE_INVALID", `workRoot ${workRoot} is not a repository root — its root is ${ctx.repoRoot}`);
+  else if (workRoot && ws.root && !sameDir(gitCommonDir(ctx.repoRoot), gitCommonDir(ws.root)))
+    bad("WORKSPACE_INVALID", `workRoot ${workRoot} is a different repository from project "${projectId}" (${ws.root}) — a workRoot must be that repository or one of its worktrees`);
 
   // execution mode
   const profile = SK.readProfile(project);
