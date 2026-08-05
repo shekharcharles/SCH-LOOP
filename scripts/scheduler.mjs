@@ -112,6 +112,7 @@ export const SCHEDULER_EVENTS = [
   "scheduler.task_failed", "scheduler.task_blocked", "scheduler.project_completed",
   "scheduler.stopped", "scheduler.cancelled", "scheduler.lease_acquired", "scheduler.lease_released",
   "scheduler.worktree_created", "scheduler.worktree_removed",
+  "scheduler.dependencies_merged",
   "scheduler.pack_removed",
 ];
 
@@ -575,6 +576,14 @@ export async function runQueue({
       const wt = WT.ensureWorktree({ projectId, taskId: task.id, repoRoot, base });
       if (!wt.ok) return noWorktree(wt.code, wt.message);
       if (wt.created) emit("scheduler.worktree_created", { path: wt.path, branch: wt.branch, base }, { taskId: task.id });
+      // Only on creation. A resumed worktree already carries its dependencies'
+      // work, and merging again would add an empty merge on every retry.
+      if (wt.created && (task.deps ?? []).length) {
+        const fan = WT.mergeDependencies({ worktreePath: wt.path, repoRoot, deps: task.deps });
+        if (!fan.ok) return noWorktree(fan.code, fan.message);
+        if (fan.merged.length)
+          emit("scheduler.dependencies_merged", { merged: fan.merged }, { taskId: task.id });
+      }
 
       const outcome = await executeTask({
         projectId, taskId: task.id, wsDir, repoRoot, workRoot: wt.path, project, schedulerId: id, dir,
@@ -1396,7 +1405,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
     }
 
     ctx.delivery = read;
-    ctx.transaction = read.ok ? { ...read.transaction, outgoing: read.outgoing?.outgoing ?? [], incoming: read.outgoing?.incoming ?? [], remote_verification: read.remote_verification ?? read.transaction.remote_verification ?? null } : null;
+    ctx.transaction = read.ok ? { ...read.transaction, outgoing: read.outgoing?.outgoing ?? [], incoming: read.outgoing?.incoming ?? [], integration_commits: read.outgoing?.integration ?? [], remote_verification: read.remote_verification ?? read.transaction.remote_verification ?? null } : null;
     ctx.approval = read.ok
       ? { state: read.approval_status, approver: read.transaction.approval?.approver ?? null, at: read.transaction.approval?.at ?? null, why: read.transaction.failure?.message ?? null }
       : { state: "PENDING", why: read.failure?.message ?? "no delivery transaction" };
@@ -1463,7 +1472,7 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
     const d = commit ? { state: "DELIVERED", commit: { hash: commit } } : DEL.deliverRun({ projectId, runId, workRoot });
     const read = DEL.readDelivery(projectId, runId);
     ctx.delivery = read;
-    ctx.transaction = read.ok ? { ...read.transaction, outgoing: read.outgoing?.outgoing ?? [], incoming: read.outgoing?.incoming ?? [], remote_verification: read.remote_verification ?? read.transaction.remote_verification ?? null } : null;
+    ctx.transaction = read.ok ? { ...read.transaction, outgoing: read.outgoing?.outgoing ?? [], incoming: read.outgoing?.incoming ?? [], integration_commits: read.outgoing?.integration ?? [], remote_verification: read.remote_verification ?? read.transaction.remote_verification ?? null } : null;
     try { if (db && read.ok) PROJ.upsertDeliveryReference(db, projectId, { ...read.transaction, approval_status: read.approval_status, commit: read.transaction.commit?.hash ?? null }); } catch {}
     if (d.state !== "DELIVERED") {
       // The delivery controller stopped. It never force-pushed, never rewrote
