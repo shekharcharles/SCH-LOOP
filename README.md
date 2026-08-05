@@ -360,7 +360,7 @@ completion.
 
 ### Planned, and NOT implemented
 
-OS-level worker sandboxing · authenticated dashboard writes · a full SCH MCP ·
+OS-level worker sandboxing · a full SCH MCP ·
 automatic knowledge ingestion · distributed workers · Temporal (evaluation only)
 · migrating state authority into SQLite. The queue scheduler runs **one task at a
 time by default**; `--max-parallel N` runs up to N, and stops at a defined
@@ -750,6 +750,11 @@ Stated plainly, because a false claim here is worse than a missing feature.
   shared hooks directory is still caught: the metadata fingerprint resolves
   against the common dir, not the linked worktree's private git dir.
 
+- **The dashboard authenticates every request.** A shared token, stored at
+  `$SCH_HOME/dashboard-token`, must arrive as a bearer header, a `?token=`
+  query (which becomes a cookie and leaves the URL) or that cookie. Anything
+  else gets 401 and learns nothing — not even which projects exist. The server
+  now binds `127.0.0.1` by default; `SCH_BIND=0.0.0.0` is an explicit choice.
 - **A worker cannot see your global skills.** Each task gets a generated plugin
   directory holding exactly the skills SCH approved for it, and the worker is
   launched with `--setting-sources project` so nothing from `~/.claude` reaches
