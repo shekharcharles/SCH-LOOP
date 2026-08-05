@@ -195,6 +195,12 @@ scripts/skillsources.mjs  Governed EXTERNAL skill sources: full-commit pinning, 
                           sync, file/script/hook inventory, explainable risk classification,
                           static quality gate, conflict detection against SCH's own machinery,
                           and hash-bound, ROLE-SCOPED approval whose default is nothing.
+scripts/pack.mjs          The project-local CAPABILITY PACK: a generated plugin directory
+                          holding only the skills one task may use, built OUTSIDE the managed
+                          repository. Carries a skill's documents, refuses anything that can
+                          execute, and states the built-in policy plus the exact worker argv.
+                          A built-in on neither the allow nor the deny list is DENIED.
+                          Denying blocks INVOCATION, not listing — the names still appear.
 scripts/subprocess.mjs    The ONE bounded subprocess implementation: argv only (no shell),
                           explicit environment, bounded output, timeout, cancellation, and
                           process-TREE termination. Timeout is the MINIMUM of every bound.

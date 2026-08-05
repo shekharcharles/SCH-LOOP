@@ -186,3 +186,34 @@ test("removePack deletes the pack and reports it", () => {
     assert.equal(PACK.packState({ projectId: fx.P, taskId: 1, root }).exists, false);
   } finally { fx.done(); }
 });
+
+test("built-ins that persist, mutate config or schedule work are denied by default", () => {
+  const denied = PACK.deniedBuiltins();
+  for (const name of ["schedule", "loop", "init", "update-config", "fewer-permission-prompts", "run"])
+    assert.ok(denied.includes(name), `${name} must be denied: it persists state, mutates config, or schedules work`);
+  for (const name of ["dataviz", "simplify", "claude-api", "review", "security-review"])
+    assert.ok(!denied.includes(name), `${name} only reads or advises and should stay available`);
+});
+
+test("a built-in on neither list is denied", () => {
+  const policy = { version: 1, allow: ["known-safe"], deny: ["known-bad"], known: ["known-safe", "known-bad", "brand-new"] };
+  assert.ok(PACK.deniedBuiltins(policy).includes("brand-new"),
+    "an unrecognised capability is not a safe one");
+});
+
+test("workerArgs names the pack, restricts setting sources, and denies each built-in", () => {
+  const args = PACK.workerArgs({ packPath: "C:/packs/p/task-1" });
+  const i = args.indexOf("--plugin-dir");
+  assert.ok(i >= 0, "the pack must be passed to the worker");
+  assert.equal(args[i + 1], "C:/packs/p/task-1");
+
+  const j = args.indexOf("--setting-sources");
+  assert.ok(j >= 0, "the operator's global catalogue must be suppressed");
+  assert.equal(args[j + 1], "project");
+
+  for (const name of PACK.deniedBuiltins())
+    assert.ok(args.includes(`Skill(${name})`), `${name} must be denied by argv`);
+
+  assert.ok(!args.includes("--bare"),
+    "--bare forces ANTHROPIC_API_KEY and would break subscription auth");
+});
