@@ -145,13 +145,16 @@ those, say plainly that they are planned and name the next milestone:
 > Implement isolated parallel task execution using Git worktrees, path ownership
 > leases, fan-out/fan-in, deterministic integration nodes, and conflict-safe joins.
 
-**Workers are not OS-sandboxed.** The environment is allowlisted, `SCH_HOME` is
-withheld, the process is timed out and tree-killed, `.sch-loop/` is
-default-denied and every effect is inspected afterwards — but a write outside the
-repository, a network call or a detached background process is not visible to
-that inspection, and the operator's git credentials remain reachable to any
-process running as them. Fully unattended operation is therefore not supported.
-Never claim otherwise, never imply parallel execution works, and never simulate it.
+**Workers are contained, not sandboxed.** Each task runs in a disposable worktree
+on `sch/task-<n>` outside the repository and outside `SCH_HOME`, with no ambient
+git credential helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/
+`SSH_AUTH_SOCK`/`SSH_AGENT_PID` — verification commands included — and only the
+delivery controller pushes, inside an authorized branch namespace. But a write
+outside the worktree, a network call or a detached background process is still
+invisible to effect inspection, the credential strip only removes the *ambient*
+helper, and none of this is an OS boundary. Fully unattended operation is
+therefore still not supported. Never claim otherwise, never imply parallel
+execution works, and never simulate it.
 
 ## Skills are recommended, never assumed
 
