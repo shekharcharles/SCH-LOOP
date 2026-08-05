@@ -145,12 +145,19 @@ test("hooks, scripts and nested manifests beside a skill are refused, and record
     writeFileSync(join(d, ".claude-plugin", "plugin.json"),
       JSON.stringify({ name: "evil", hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo pwned" }] }] } }));
 
+    // A supporting document the SKILL.md would reference.
+    mkdirSync(join(d, "references"), { recursive: true });
+    writeFileSync(join(d, "references", "detail.md"), "# the detail gamma refers to\n");
+
     const r = PACK.buildPack({ projectId: fx.P, taskId: 1, skills: [s], root });
     assert.equal(r.ok, true, r.message);
     assert.equal(existsSync(join(r.path, "skills", "gamma", "install.sh")), false,
       "a script beside a skill must not be copied into the pack");
     assert.equal(existsSync(join(r.path, "skills", "gamma", ".claude-plugin")), false,
       "a nested plugin manifest must not be copied into the pack");
+    assert.equal(readFileSync(join(r.path, "skills", "gamma", "references", "detail.md"), "utf8"),
+      "# the detail gamma refers to\n",
+      "a supporting DOCUMENT must be carried — a SKILL.md pointing at a missing file is a broken skill");
     assert.ok(r.refusals.length >= 2, "every refusal is recorded, not silently dropped");
     assert.ok(r.refusals.some((x) => /install\.sh/.test(x.path)));
 
@@ -246,9 +253,32 @@ export function packPathFor(projectId, taskId, { root = packsRoot() } = {}) {
 
 const hash = (text) => createHash("sha256").update(text).digest("hex").slice(0, 32);
 
-// Everything beside a SKILL.md that could execute, or could redefine the plugin.
-// A skill is instructions; anything else in its directory is not carried.
-const CARRIED = new Set(["SKILL.md"]);
+// A skill is instructions, and most real skills split those instructions across
+// supporting documents — `references/*.md` is the common shape. Those are
+// carried, because a packed skill whose SKILL.md points at a file that is not
+// there is a broken skill.
+//
+// What is never carried is anything that could EXECUTE or could redefine the
+// plugin: scripts, binaries, and any nested `.claude-plugin/`. That is the
+// surface the generated-manifest rule exists to close, and copying a shell
+// script into the worker's reach would reopen it by the side door.
+const DOCUMENT_EXT = new Set([".md", ".txt", ".json", ".yaml", ".yml", ".csv"]);
+const EXECUTABLE_EXT = new Set([".sh", ".bash", ".zsh", ".ps1", ".psm1", ".bat", ".cmd",
+                                ".js", ".mjs", ".cjs", ".ts", ".py", ".rb", ".pl", ".exe", ".dll", ".so"]);
+const REFUSED_DIRS = new Set([".claude-plugin", "hooks", "bin", "scripts"]);
+
+// Fail closed: an extension this build does not recognise is refused, not
+// carried. A new file type is not a safe one.
+export function carryDecision(relPath) {
+  const parts = relPath.split(/[/\\]/);
+  if (parts.some((p) => REFUSED_DIRS.has(p)))
+    return { carry: false, why: `"${parts.find((p) => REFUSED_DIRS.has(p))}/" can execute or redefine the plugin` };
+  const dot = parts[parts.length - 1].lastIndexOf(".");
+  const ext = dot < 0 ? "" : parts[parts.length - 1].slice(dot).toLowerCase();
+  if (EXECUTABLE_EXT.has(ext)) return { carry: false, why: `${ext} is executable` };
+  if (DOCUMENT_EXT.has(ext)) return { carry: true, why: null };
+  return { carry: false, why: ext ? `unrecognised extension ${ext}` : "no extension" };
+}
 
 export function buildPack({ projectId, taskId, skills = [], root = packsRoot() }) {
   const path = packPathFor(projectId, taskId, { root });
@@ -287,15 +317,35 @@ export function buildPack({ projectId, taskId, skills = [], root = packsRoot() }
       mkdirSync(dest, { recursive: true });
       writeFileSync(join(dest, "SKILL.md"), text);
 
-      // Record what was left behind, by name, so "this skill needs its scripts"
-      // is a reportable fact rather than a silent behaviour change.
+      // Walk the skill's directory and carry its supporting DOCUMENTS, so a
+      // SKILL.md that says "read references/foo.md" finds it. Everything that
+      // could execute is refused and recorded by name, so "this skill needs its
+      // scripts" is a reportable fact rather than a silent degradation.
       const srcDir = s.source_path.replace(/[/\\][^/\\]+$/, "");
-      let siblings = [];
-      try { siblings = readdirSync(srcDir); } catch { siblings = []; }
-      for (const f of siblings) {
-        if (CARRIED.has(f)) continue;
-        refusals.push({ skill_id: s.skill_id, path: join(srcDir, f), why: "only SKILL.md is carried into a pack" });
-      }
+      const walk = (rel) => {
+        let listing = [];
+        try { listing = readdirSync(join(srcDir, rel), { withFileTypes: true }); } catch { return; }
+        for (const d of listing) {
+          const child = rel ? join(rel, d.name) : d.name;
+          if (child === "SKILL.md") continue;                 // already written
+          const decision = carryDecision(child);
+          if (d.isDirectory()) {
+            if (!decision.carry && REFUSED_DIRS.has(d.name)) {
+              refusals.push({ skill_id: s.skill_id, path: child, why: decision.why });
+              continue;
+            }
+            walk(child);
+            continue;
+          }
+          if (!decision.carry) {
+            refusals.push({ skill_id: s.skill_id, path: child, why: decision.why });
+            continue;
+          }
+          mkdirSync(join(dest, child).replace(/[/\\][^/\\]+$/, ""), { recursive: true });
+          writeFileSync(join(dest, child), readFileSync(join(srcDir, child)));
+        }
+      };
+      walk("");
       entries.push({ skill_id: s.skill_id, name: s.name, bucket: s.bucket, reason: s.reason,
                      content_hash: s.content_hash ?? hash(text), invocation_id: `${manifest.name}:${slug(s.skill_id)}` });
     }

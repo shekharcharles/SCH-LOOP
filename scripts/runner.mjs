@@ -21,6 +21,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { join, basename, resolve } from "node:path";
 import * as WS from "./workspace.mjs";
 import * as SK from "./skills.mjs";
+import * as PACK from "./pack.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
@@ -42,7 +43,7 @@ export const FAILURES = [
   "PATH_SCOPE_VIOLATION", "UNEXPECTED_FILE_CHANGE", "FORBIDDEN_GIT_EFFECT",
   "VERIFICATION_FAILURE", "VERIFICATION_TIMEOUT", "UNSAFE_VERIFICATION_COMMAND",
   "AMBIGUOUS_EVIDENCE", "BUDGET_EXCEEDED", "POLICY_VIOLATION", "LEASE_CONFLICT",
-  "LEASE_LOST", "CANCELLED",
+  "LEASE_LOST", "CANCELLED", "PACK_UNAVAILABLE",
 ];
 
 // Which outcome each failure produces. A worker-created git effect is
@@ -52,6 +53,10 @@ export const FAILURES = [
 const FAILURE_OUTCOME = {
   AGENT_TIMEOUT: "RETRYABLE", PROCESS_TRANSIENT: "RETRYABLE",
   ENVIRONMENT_MISSING: "NEEDS_DECISION", SKILL_NOT_APPROVED: "NEEDS_DECISION",
+  // NEEDS_DECISION, not RETRYABLE: a worker launched without its pack would
+  // silently fall back to whatever the CLI finds, which is the exact failure
+  // this containment exists to prevent, and retrying does not change it.
+  PACK_UNAVAILABLE: "NEEDS_DECISION",
   SKILL_HASH_STALE: "NEEDS_DECISION", PATH_POLICY_MISSING: "NEEDS_DECISION",
   FORBIDDEN_GIT_EFFECT: "NEEDS_DECISION", AMBIGUOUS_EVIDENCE: "NEEDS_DECISION",
   BUDGET_EXCEEDED: "NEEDS_DECISION", CANCELLED: "CANCELLED",
@@ -600,7 +605,28 @@ const MANDATORY = new Set(["safety-kernel", "task", "acceptance-criteria", "allo
 // Compaction order: the least load-bearing context goes first.
 const COMPACT_ORDER = ["knowledge", "previous-handoff", "dependencies", "skills", "plan"];
 
-export function compilePrompt({ identity, task, policy, skills, dependencies = [], previousHandoff = null, knowledge = [], maxChars = DEFAULT_PROMPT_MAX_CHARS, procedures = [], planEnvelope = null, semanticHandler = null, promptTemplate = "worker@1", workflow = null, role = null, taskStateVersion = null, redactionApplied = false }) {
+// A REQUIRED skill is injected in full; a RECOMMENDED one is named and left in
+// the pack to be loaded on demand.
+//
+// The asymmetry is deliberate and is not a token optimisation. SCH guarantees a
+// required skill is in context. Making that presence depend on the model
+// choosing to invoke it would invert this system's rule — code owns the
+// decision, the model owns bounded execution inside it. A recommendation
+// carries no such guarantee, so it costs a line instead of a body.
+function renderSkills(skills, packEntries = []) {
+  if (!skills.length) return "";
+  const required = skills.filter((s) => s.bucket === "required");
+  const rest = skills.filter((s) => s.bucket !== "required");
+  const idOf = (skillId) => packEntries.find((e) => e.skill_id === skillId)?.invocation_id ?? skillId;
+  const parts = [];
+  if (required.length)
+    parts.push(`# SELECTED SKILLS\n\n${required.map((s) => `## ${s.name} (${s.skill_id}, ${s.bucket}: ${s.reason})\n\n${s.excerpt}`).join("\n\n")}`);
+  if (rest.length)
+    parts.push(`# AVAILABLE SKILLS\n\nThese are installed for this task and load on demand — invoke one by id when it applies. Their instructions are NOT reproduced here.\n\n${rest.map((s) => `- ${s.name} (${s.skill_id}) — ${s.reason}. Invoke: ${idOf(s.skill_id)}`).join("\n")}`);
+  return parts.join("\n\n");
+}
+
+export function compilePrompt({ identity, task, policy, skills, dependencies = [], previousHandoff = null, knowledge = [], maxChars = DEFAULT_PROMPT_MAX_CHARS, procedures = [], planEnvelope = null, semanticHandler = null, promptTemplate = "worker@1", workflow = null, role = null, taskStateVersion = null, redactionApplied = false, packEntries = [] }) {
   const list = (xs) => (xs?.length ? xs.map((x) => `- ${x}`).join("\n") : "- (none recorded)");
   const sections = [
     { name: "safety-kernel", text: SAFETY_KERNEL },
@@ -622,7 +648,7 @@ export function compilePrompt({ identity, task, policy, skills, dependencies = [
         ? `This task is authorized for exactly one SCH control path: ${WS.WORKSPACE_DURABLE_CATEGORIES[policy.controlCategory]}. Nothing else under .sch-loop/.`
         : `All of .sch-loop/ is SCH control state and is off limits to this task.`) },
     { name: "verification", text: `# VERIFICATION THE CONTROLLER WILL RUN (you do not run it as proof)\n${list(policy.verify.map(displayCommand))}` },
-    { name: "skills", text: skills.length ? `# SELECTED SKILLS\n\n${skills.map((s) => `## ${s.name} (${s.skill_id}, ${s.bucket}: ${s.reason})\n\n${s.excerpt}`).join("\n\n")}` : "", reason: skills.length ? null : "no approved skill was selected for this task type" },
+    { name: "skills", text: renderSkills(skills, packEntries), reason: skills.length ? null : "no approved skill was selected for this task type" },
     { name: "dependencies", text: dependencies.length ? `# COMPLETED DEPENDENCIES\n${list(dependencies)}` : "", reason: dependencies.length ? null : "this task has no dependencies" },
     // THE TYPED PLAN HANDOFF. Selected, bounded FIELDS of a validated
     // PlannerEnvelopeV1 — never the planner's transcript, and never a live
@@ -690,7 +716,11 @@ export function compilePrompt({ identity, task, policy, skills, dependencies = [
     ],
     compacted, total_characters: text.length,
     system_characters: systemPrompt.length, user_characters: userPrompt.length,
-    skills: skills.map((s) => ({ skill_id: s.skill_id, bucket: s.bucket, reason: s.reason, content_hash: s.content_hash, trust: s.trust })),
+    skills: skills.map((s) => ({ skill_id: s.skill_id, bucket: s.bucket, reason: s.reason, content_hash: s.content_hash, trust: s.trust, indexed: s.bucket !== "required" })),
+    // What injection actually cost, and how many skills were named instead. The
+    // saving this split exists for is measurable rather than asserted.
+    skills_injected_chars: skills.filter((s) => s.bucket === "required").reduce((n, s) => n + (s.excerpt ?? "").length, 0),
+    skills_indexed_count: skills.filter((s) => s.bucket !== "required").length,
     procedures: (procedures ?? []).map((p) => ({ id: p.id, version: p.version, hash: p.hash, characters: p.characters })),
     prompt_template: promptTemplate,
     semantic_handler: semanticHandler ?? null,
@@ -945,6 +975,20 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
     bad("POLICY_VIOLATION", `invalid SCH_PROMPT_MAX_CHARS "${env.SCH_PROMPT_MAX_CHARS}" — must be at least 2000`);
   ctx.promptMax = promptMax;
 
+  // The catalogue the worker will actually have. Built before the worker is
+  // prepared, because a run whose pack failed must never reach a spawn.
+  if (task && failures.length === 0) {
+    const built = PACK.buildPack({
+      projectId, taskId, skills: ctx.skills?.selected ?? [],
+      root: PACK.packsRoot(env),
+    });
+    if (!built.ok) bad("PACK_UNAVAILABLE", built.message);
+    else ctx.pack = {
+      path: built.path, manifest_name: built.manifest.name,
+      entries: built.entries, refusals: built.refusals,
+    };
+  }
+
   return { ok: failures.length === 0, failures, ctx, preparePromise: exec.prepare() };
 }
 
@@ -1073,9 +1117,15 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
   }
   ev("run.preflight_completed", { checks: "all passed" });
 
-  const { project: proj, task, policy, skills, executor: exec, promptMax, baselineRepo } = pre.ctx;
+  const { project: proj, task, policy, skills, executor: exec, promptMax, baselineRepo, pack } = pre.ctx;
   wsDir = pre.ctx.wsDir; repoRoot = pre.ctx.repoRoot;
   if (!runPath) { runPath = WS.runDir(wsDir, runId); mkdirSync(runPath, { recursive: true }); record.run_dir = runPath; }
+
+  // What this worker was actually given, on the record and on disk. A pack whose
+  // contents nobody can read afterwards is indistinguishable from no containment.
+  record = { ...record, pack };
+  write("run.json", record);
+  write("pack.json", pack);
 
   // ---- lease
   const lease = acquireLease(wsDir, { projectId, taskId, runId });
@@ -1119,6 +1169,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       promptTemplate: roleConfig?.prompt_template ?? "worker@1",
       workflow: workflow ?? null, role: roleConfig ? { id: roleConfig.role_id, version: roleConfig.role_version, hash: roleConfig.role_hash } : null,
       taskStateVersion: task.stateVersion ?? null,
+    packEntries: pack?.entries ?? [],
     });
     if (!compiled.ok) return finish(outcomeFor(compiled.failure.code), compiled.failure);
 
@@ -1141,6 +1192,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     const cancelFile = join(runPath, "CANCEL");
     const worker = await exec.execute({
       cwd: repoRoot, prompt: compiled.text, identity,
+      extraArgs: PACK.workerArgs({ packPath: pack.path }),
       isCancelled: () => existsSync(cancelFile),
       onEvent: (type, payload) => ev(type, payload),
     });
@@ -1425,7 +1477,7 @@ export function readRun(projectId, runId) {
   return {
     dir, run: load("run.json"), baseline: load("baseline.json"), handoff: load("handoff.json"),
     effects: load("git-effects.json"), verification: load("verification.json"),
-    prompt_manifest: load("prompt-manifest.json"), preflight: load("preflight.json"),
+    prompt_manifest: load("prompt-manifest.json"), preflight: load("preflight.json"), pack: load("pack.json"),
     context_manifest: load("context-manifest.json"), agent_config: load("agent-config.json"), usage: load("usage.json"),
     // The binding the delivery controller checks the working tree against.
     // Absent on runs that predate it — those are simply not deliverable.

@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, WS, SECRET_ENV, FAKE_CLAUDE } from "./helpers.mjs";
+import { fixture, initWorkspace, addTask, fakeExecutor, run, git, RUN, WS, SECRET_ENV, FAKE_CLAUDE, ROOT } from "./helpers.mjs";
 
 const runsOf = (fx) => readdirSync(join(fx.repo, ".sch-loop", "runs"));
 const artifact = (rec, name) => readFileSync(join(rec.run_dir, name), "utf8");
@@ -340,3 +340,98 @@ test("a run writes evidence to the main workspace while working in workRoot", as
   } finally { fx.done(); }
 });
 
+
+test("executor: extraArgs reach the spawned process and the record", async () => {
+  const fx = fixture("exec-extra-args");
+  try {
+    const argvTo = join(fx.home, "argv.json");
+    const ex = fakeExecutor(fx, { argvTo });
+    const rec = await ex.execute({
+      cwd: fx.repo, prompt: "hello",
+      identity: { run_id: "R1", project_id: fx.P, task_id: "1" },
+      extraArgs: ["--setting-sources", "project"],
+    });
+    assert.ok(rec.args.includes("--setting-sources"), "the record must show the argv actually spawned");
+    assert.equal(rec.args[rec.args.indexOf("--setting-sources") + 1], "project");
+    const seen = JSON.parse(readFileSync(argvTo, "utf8"));
+    assert.ok(seen.includes("--setting-sources"), "the child process must actually receive them");
+  } finally { fx.done(); }
+});
+
+test("a run builds a pack and launches the worker pointed at it", async () => {
+  const fx = fixture("run-pack");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const argvTo = join(fx.home, "argv.json");
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      argvTo,
+      write: [{ path: "src/app.js", content: "// packed\n" }],
+    }));
+    assert.equal(rec.outcome, "VERIFIED", rec.failure?.message);
+
+    const argv = JSON.parse(readFileSync(argvTo, "utf8"));
+    const i = argv.indexOf("--plugin-dir");
+    assert.ok(i >= 0, "the worker must be launched with its pack");
+    assert.ok(existsSync(join(argv[i + 1], ".claude-plugin", "plugin.json")),
+      "the path passed must be a real generated pack");
+    assert.equal(argv[argv.indexOf("--setting-sources") + 1], "project",
+      "the operator's global catalogue must be suppressed");
+    assert.ok(argv.includes("Skill(schedule)"),
+      "a built-in that schedules work outside SCH's queue must be denied");
+
+    assert.ok(rec.pack, "the run record must carry what was packed");
+    assert.equal(typeof rec.pack.manifest_name, "string");
+  } finally { fx.done(); }
+});
+
+test("a pack that cannot be built fails the run closed — no worker starts", async () => {
+  const fx = fixture("run-pack-fail");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    // An unwritable pack root is the reachable form of "the pack is unavailable".
+    const rec = await run(fx, t, fakeExecutor(fx, {}), {
+      env: { ...process.env, SCH_PACK_ROOT: join(fx.repo, "src", "app.js") },
+    });
+    assert.notEqual(rec.outcome, "VERIFIED");
+    assert.equal(rec.failure?.code, "PACK_UNAVAILABLE");
+  } finally { fx.done(); }
+});
+
+test("a recommended skill is indexed by name, a required skill is injected in full", async () => {
+  const fx = fixture("skill-bucket-split");
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx, { category: "planning" });
+    // A recommended skill must actually be selected, or the loop below asserts
+    // nothing and the test passes on an empty list.
+    fx.cli("profile-set", "--project", fx.P, "--task-type", "planning", "--recommended", "sch-plan");
+    const promptTo = join(fx.home, "prompt.txt");
+    const rec = await run(fx, t, fakeExecutor(fx, {
+      promptTo, write: [{ path: "src/app.js", content: "// ok\n" }],
+    }));
+    assert.equal(rec.outcome, "VERIFIED", rec.failure?.message);
+
+    const prompt = readFileSync(promptTo, "utf8");
+    const manifest = JSON.parse(readFileSync(join(rec.run_dir, "prompt-manifest.json"), "utf8"));
+    assert.equal(typeof manifest.skills_injected_chars, "number",
+      "the prompt manifest must account for what injection cost");
+    assert.equal(typeof manifest.skills_indexed_count, "number");
+
+    // Whatever this fixture's recommendation engine selects, a recommended skill
+    // contributes its invocation id and not its body.
+    const rec2 = (manifest.skills ?? []).filter((x) => x.bucket === "recommended");
+    assert.ok(rec2.length > 0, "the fixture must actually select a recommended skill");
+    assert.equal(manifest.skills_indexed_count, rec2.length);
+    for (const s of rec2) {
+      assert.ok(prompt.includes(s.skill_id), "a recommended skill must still be named to the worker");
+      assert.ok(s.indexed === true, "a recommended skill must be indexed, not injected");
+    }
+    // The body of the indexed skill must not be in the prompt at all.
+    const body = readFileSync(join(ROOT, "skills", "sch-plan", "SKILL.md"), "utf8");
+    const marker = body.split(/\r?\n/).filter((l) => l.trim().length > 40).pop() ?? "";
+    assert.ok(marker.length > 40 && !prompt.includes(marker.trim()),
+      "an indexed skill's instructions must not be injected — it loads from the pack");
+  } finally { fx.done(); }
+});

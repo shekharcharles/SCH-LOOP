@@ -213,11 +213,14 @@ export class ClaudeCliExecutor extends AgentExecutor {
 
   // Resolves with a terminal record whatever happens — a spawn failure, a
   // timeout and a clean exit are all outcomes, never exceptions.
-  async execute({ cwd, prompt, identity = {}, isCancelled = () => false, onEvent = () => {} } = {}) {
+  async execute({ cwd, prompt, identity = {}, extraArgs = [], isCancelled = () => false, onEvent = () => {} } = {}) {
     const prep = await this.prepare();
+    // One argv, built once: the record and the spawn must never disagree about
+    // what this process was launched with.
+    const argv = [...this.baseArgs, ...(Array.isArray(extraArgs) ? extraArgs.map(String) : [])];
     const started = Date.now();
     const base = {
-      executable: prep.executable ?? this.configured, args: this.baseArgs.slice(),
+      executable: prep.executable ?? this.configured, args: argv.slice(),
       cwd, pid: null, started_at: new Date(started).toISOString(), ended_at: null, duration_ms: 0,
       stdout: "", stderr: "", exit_code: null, signal: null,
       timed_out: false, cancelled: false, cleanup: null,
@@ -252,7 +255,7 @@ export class ClaudeCliExecutor extends AgentExecutor {
     const out = sink(this.maxOutputBytes), err = sink(this.maxOutputBytes);
     let child;
     try {
-      child = spawn(prep.executable, this.baseArgs, {
+      child = spawn(prep.executable, argv, {
         cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
         // POSIX: own process group so the whole tree can be signalled at once.
         detached: process.platform !== "win32",

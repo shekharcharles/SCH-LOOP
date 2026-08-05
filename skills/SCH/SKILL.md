@@ -160,7 +160,11 @@ git credential helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/
 `SSH_AUTH_SOCK`/`SSH_AGENT_PID` — verification commands included — and only the
 delivery controller pushes, inside an authorized branch namespace. Effect
 inspection still reaches the shared `.git`, so a worker's own worktree and a hook
-installed into the shared hooks directory are both caught. But a write outside
+installed into the shared hooks directory are both caught. A worker sees only the skills packed for its task: a generated plugin directory
+holding SCH-approved skills, launched with `--setting-sources project`, so the
+operator's global catalogue never reaches it, and built-ins that schedule work or
+edit configuration are denied by argv. A denied built-in is still listed to the
+worker, and a skill needing its own scripts cannot be packed. But a write outside
 the worktree, a network call or a detached background process is still
 invisible to it, the credential strip only removes the *ambient*
 helper, and none of this is an OS boundary. Fully unattended operation is

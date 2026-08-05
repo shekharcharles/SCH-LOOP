@@ -112,6 +112,15 @@ helper and no `GH_TOKEN`/`GITHUB_TOKEN`/`GIT_ASKPASS`/`SSH_AUTH_SOCK`/
 pushes, and only inside a branch namespace an operator authorized for that
 project. Effect inspection still reaches the **shared `.git`**: a worker's own
 worktree and a hook installed into the shared hooks directory are both caught.
+**A worker also cannot see your global skill catalogue.** Each task gets a
+generated plugin directory holding only the skills SCH approved for it, built
+outside the repository, and the worker is launched with `--setting-sources
+project` so nothing from `~/.claude` reaches it. Built-ins that schedule work or
+edit configuration — `schedule`, `loop`, `init`, `update-config`,
+`fewer-permission-prompts`, `run` — are denied by argv, and an unclassified new
+built-in is denied too. Two residuals: a denied built-in is still LISTED to the
+worker (denial blocks invocation, not listing), and a skill needing its own
+scripts cannot be packed — only documents are carried.
 But **workers are still not OS-sandboxed**: a write outside the worktree
 is neither prevented nor detected, the network is unrestricted, a detached
 process survives the tree-kill, the credential strip only removes the *ambient*

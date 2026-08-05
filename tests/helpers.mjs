@@ -61,6 +61,7 @@ export function fixture(name, { register = true, commit = true } = {}) {
   // deleted repositories. Outside `home` as well as outside `repo`, because that
   // is where a worker's scratch space is required to live.
   const wt = mkdtempSync(join(tmpdir(), "sch-wt-" + tag + "-"));
+  const packs = mkdtempSync(join(tmpdir(), "sch-packs-" + tag + "-"));
   const P = "proj";
 
   git(repo, "init", "-q", "-b", "main");
@@ -83,6 +84,10 @@ export function fixture(name, { register = true, commit = true } = {}) {
   // skills can neither influence nor break a test.
   process.env.SCH_HOME = home;
   process.env.SCH_WORKTREE_ROOT = wt;
+  // Capability packs are generated OUTSIDE the managed repository, which without
+  // an override would mean the operator's real machine. Its own temp root, not a
+  // subdirectory of SCH_HOME: a pack must not live inside SCH_HOME either.
+  process.env.SCH_PACK_ROOT = packs;
   process.env.SCH_SKILL_ROOTS = "builtin:" + join(ROOT, "skills");
   for (const [k, v] of Object.entries(SECRET_ENV)) process.env[k] = v;
 
@@ -90,11 +95,11 @@ export function fixture(name, { register = true, commit = true } = {}) {
     { encoding: "utf8", env: { ...process.env, SCH_HOME: home, NODE_NO_WARNINGS: "1" } }).trim();
 
   return {
-    home, repo, wt, P, cli,
+    home, repo, wt, packs, P, cli,
     state: () => JSON.parse(readFileSync(join(home, "projects", P, "state.json"), "utf8")),
     wsDir: () => join(repo, ".sch-loop"),
     bare: null,
-    done: function () { for (const d of [wt, home, repo, this.bare].filter(Boolean)) { try { rmSync(d, { recursive: true, force: true }); } catch {} } },
+    done: function () { for (const d of [wt, packs, home, repo, this.bare].filter(Boolean)) { try { rmSync(d, { recursive: true, force: true }); } catch {} } },
   };
 }
 
