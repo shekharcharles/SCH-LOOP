@@ -98,34 +98,39 @@ The loop claims up to N ready tasks, runs them concurrently, and refills a freed
 slot from a freshly computed ready set the moment a task reaches a terminal
 state.
 
-## Serialized delivery, merge and re-verify
+## Fan-in happens at worktree creation, not at delivery
 
-Deliveries queue on the existing repository lease. One commit at a time, through
-the existing fail-closed controller, unchanged.
+An earlier draft of this spec placed integration at delivery time, on the
+assumption that a delivery moves `main` and invalidates every other in-flight
+baseline. **Reading the code disproved it.** A delivery commits on the task's own
+`sch/task-<n>` branch and pushes there (`delivery.mjs`); `main` is never moved.
+There is therefore no baseline race between parallel deliveries, and deliveries
+stay serialized only because one repository lease and one fail-closed controller
+are simpler to reason about — not because they contend.
 
-The first delivery of a wave moves `main`, which makes every other in-flight
-task's baseline stale — and `delivery.mjs` correctly invalidates a delivery whose
-baseline HEAD moved.
+The real gap is upstream, and it is **live today at `--max-parallel 1`**: `deps`
+are consumed only for readiness (`taskgraph.mjs`, `state.mjs:446`) and for prompt
+context (`runner.mjs:1158`). Nothing merges anything. A task worktree is branched
+from `main`'s HEAD (`scheduler.mjs:570`), so a task whose dependency has already
+delivered starts from a tree that **does not contain its dependency's work**.
 
-**Decision.** On a stale baseline, inside that task's own worktree:
+**Decision.** At worktree creation, a task branches from `main` HEAD and then
+merges the `sch/task-<n>` branch of every delivered dependency, in task-id order
+for determinism. This is the integration node — no new node type, just the base a
+dependent task deserved all along.
 
-1. merge the new `main` into the task branch,
-2. re-run that task's `--verify` command,
-3. deliver only if it passes.
+- The merge happens **before any worker starts**, so a conflict costs no model
+  time and no partial work.
+- Merge commits are recorded in the run evidence: which dependency branches, at
+  which commits, in which order.
+- A dependency that is `delivered` but whose branch is missing is a typed
+  failure, not a silent skip.
 
-No rebase: the task branch is the durable record of that task's work and is not
-rewritten. The re-verification is the point — it proves the task still works
-against what actually landed, not against what was there when it started.
+One new failure code, `DEPENDENCY_MERGE_CONFLICT` → `NEEDS_DECISION`, keeping the
+worktree in place as evidence. Not `RETRYABLE`: retrying a conflict produces the
+same conflict, and resolving it is a person's judgement.
 
-Two new failure codes, both `NEEDS_DECISION`, both keeping the worktree as
-evidence:
-
-- `INTEGRATION_CONFLICT` — the merge did not apply cleanly.
-- `INTEGRATION_VERIFICATION_FAILURE` — it merged, and the task's own verification
-  then failed against the merged result.
-
-Neither is `RETRYABLE`. Retrying does not change a conflict, and a task that
-breaks against what landed is a question for a person.
+Delivery itself is unchanged.
 
 ## Failure isolation
 
@@ -142,7 +147,7 @@ stops only the first worker is the failure mode this section exists to prevent.
 | `state.mjs` `mutateState` | The only way project state is mutated | file lock only |
 | `scheduler.mjs` claim loop | Sequential claiming, wave bounding, slot refill | `taskgraph`, `mutateState` |
 | `scheduler.mjs` wave runner | Concurrent execution, drain, budget evaluation | `runner` |
-| `delivery.mjs` integration | Merge, re-verify, deliver or refuse | repository lease |
+| `worktree.mjs` fan-in base | Merge delivered dependency branches at creation | `taskgraph` |
 
 ## Testing
 
@@ -155,10 +160,11 @@ with sleeps:
 - Two path-overlapping tasks are **never** in flight simultaneously, at any
   `--max-parallel`.
 - A concurrent-mutation test that fails on a lost update.
-- A stale-baseline delivery that merges, re-verifies and lands.
-- A merge conflict stops at `INTEGRATION_CONFLICT`, worktree preserved.
-- A red re-verify stops at `INTEGRATION_VERIFICATION_FAILURE`, worktree
-  preserved.
+- A task whose dependency delivered starts from a tree that CONTAINS that
+  dependency's change — the fan-in test, and it fails against today's code.
+- Two delivered dependencies merge in task-id order, deterministically.
+- A conflicting dependency merge stops at `DEPENDENCY_MERGE_CONFLICT` before any
+  worker starts, worktree preserved.
 - Cancellation reaches every in-flight run, not only the first.
 - `--max-parallel 1` reproduces today's behaviour exactly.
 
