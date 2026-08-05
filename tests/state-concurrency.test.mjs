@@ -5,9 +5,9 @@
 // erasure is silent. These tests are the reason `mutateState` exists.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fixture, STATE } from "./helpers.mjs";
+import { fixture, STATE, ROOT } from "./helpers.mjs";
 
 test("concurrent mutations do not lose updates", () => {
   const fx = fixture("state-mutate");
@@ -66,4 +66,16 @@ test("a held lock makes a state mutation fail closed, not proceed unlocked", () 
     assert.notEqual(STATE.loadState(fx.P).stolen, true,
       "nothing may be written when the lock was never held");
   } finally { fx.done(); }
+});
+
+test("no module mutates project state outside the single writer", () => {
+  // A grep test, deliberately. The invariant is "saveState is called in exactly
+  // one place", and only reading the source can assert that.
+  const offenders = [];
+  for (const f of ["transitions.mjs", "humangates.mjs", "runner.mjs", "scheduler.mjs", "dashboard.mjs"]) {
+    const src = readFileSync(join(ROOT, "scripts", f), "utf8");
+    if (/\bsaveState\s*\(/.test(src)) offenders.push(f);
+  }
+  assert.deepEqual(offenders, [],
+    `these mutate state without the lock: ${offenders.join(", ")} — use mutateState`);
 });

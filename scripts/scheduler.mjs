@@ -45,7 +45,7 @@ import * as USAGE from "./usage.mjs";
 import * as EV from "./evidence.mjs";
 import * as SEM from "./semantic.mjs";
 import * as WT from "./worktree.mjs";
-import { loadState, saveState, getProject, auditLog, event as stateEvent } from "./state.mjs";
+import { loadState, mutateState, getProject, auditLog, event as stateEvent } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
 
@@ -668,27 +668,27 @@ export function diagnoseNoReady(state, pick, validation) {
 // template version has to be invalidatable when that version moves.
 function recordWorkflowOnTask(projectId, taskId, { workflowId, wf }) {
   try {
-    const s = loadState(projectId);
-    const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
-    if (!t) return;
-    const prev = t.workflow_binding ?? null;
-    // A template that CHANGED under an unfinished task invalidates any approval
-    // that was given against the old one. Silently continuing on the new version
-    // would mean the operator approved a workflow that no longer exists.
-    const changed = prev && (prev.template_id !== wf.template_id || prev.template_version !== wf.template_version || prev.template_hash !== wf.template_hash);
-    t.workflow_id = workflowId;
-    t.workflow_binding = {
-      workflow_id: workflowId, template_id: wf.template_id, template_version: wf.template_version,
-      template_hash: wf.template_hash, selected_by: wf.selected_by, high_risk: wf.high_risk, bound_at: now(),
-      previous: changed ? prev : (prev ?? null),
-      invalidated_approvals: changed || undefined,
-    };
-    if (changed) {
-      t.workflowApprovals = [];
-      stateEvent(s, `task #${taskId} workflow changed ${prev.template_id}@${prev.template_version} → ${wf.template_id}@${wf.template_version}; template-bound approvals invalidated`);
-    }
-    t.updatedAt = now();
-    saveState(projectId, s);
+    mutateState(projectId, (s) => {
+      const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
+      if (!t) return;
+      const prev = t.workflow_binding ?? null;
+      // A template that CHANGED under an unfinished task invalidates any approval
+      // that was given against the old one. Silently continuing on the new version
+      // would mean the operator approved a workflow that no longer exists.
+      const changed = prev && (prev.template_id !== wf.template_id || prev.template_version !== wf.template_version || prev.template_hash !== wf.template_hash);
+      t.workflow_id = workflowId;
+      t.workflow_binding = {
+        workflow_id: workflowId, template_id: wf.template_id, template_version: wf.template_version,
+        template_hash: wf.template_hash, selected_by: wf.selected_by, high_risk: wf.high_risk, bound_at: now(),
+        previous: changed ? prev : (prev ?? null),
+        invalidated_approvals: changed || undefined,
+      };
+      if (changed) {
+        t.workflowApprovals = [];
+        stateEvent(s, `task #${taskId} workflow changed ${prev.template_id}@${prev.template_version} → ${wf.template_id}@${wf.template_version}; template-bound approvals invalidated`);
+      }
+      t.updatedAt = now();
+    });
   } catch { /* the attempt record carries the binding too */ }
 }
 

@@ -18,7 +18,7 @@
 // through the legacy map on demand; it gains a canonical state the first time
 // something legitimately moves it.
 
-import { loadState, saveState, event as stateEvent, auditLog, STATUSES, CONTROLLER_ONLY_STATUSES } from "./state.mjs";
+import { loadState, mutateState, event as stateEvent, auditLog, STATUSES, CONTROLLER_ONLY_STATUSES } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
 
@@ -138,36 +138,51 @@ const clamp = (s, n) => (String(s ?? "").length > n ? String(s).slice(0, n) + "�
 // `mutate(task)` runs INSIDE the write, after the edge is approved, so a caller
 // that needs to attach evidence to the same durable write does not race itself.
 export function transition(projectId, taskId, { to, actor, reason = "", expectVersion = null, runId = null, attempt = null, phaseId = null, causation = null, mutate = null }) {
-  const s = loadState(projectId);
-  const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
-  if (!t) return { ok: false, failure: { code: "TASK_NOT_FOUND", message: `no task #${taskId} in ${projectId}` } };
+  // The load, the checks and the write are ONE locked section: a transition
+  // that read a state version another writer had already moved would decide
+  // legality against a task that no longer exists in that form.
+  let audit = null;
+  try {
+    const out = mutateState(projectId, (s) => {
+      const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
+      if (!t) return { ok: false, failure: { code: "TASK_NOT_FOUND", message: `no task #${taskId} in ${projectId}` } };
+  
+      const from = canonicalState(t);
+      const version = t.stateVersion ?? 0;
+      if (expectVersion !== null && Number(expectVersion) !== version)
+        return { ok: false, failure: { code: "STATE_VERSION_CONFLICT", message: `task #${taskId} is at state version ${version}, not ${expectVersion} — something moved it since you read it` }, state: from, state_version: version };
+  
+      const legal = canTransition(from, to, actor);
+      if (!legal.ok)
+        return { ok: false, failure: { code: "ILLEGAL_TRANSITION", message: `task #${taskId}: ${legal.why}` }, state: from, state_version: version };
+  
+      const record = {
+        schema_version: SCHEMA_VERSION, from, to, actor, reason: clamp(reason, 500),
+        project_id: projectId, task_id: Number(taskId), run_id: runId, attempt,
+        phase_id: phaseId, state_version: version + 1, causation_event: causation, at: now(),
+      };
+  
+      t.state = to;
+      t.status = STATE_TO_LEGACY[to];
+      t.stateVersion = version + 1;
+      t.stateHistory = [record, ...(t.stateHistory ?? [])].slice(0, 50);
+      t.updatedAt = now();
+      // A caller mutation that throws must discard the whole write, including
+      // the state/version fields set just above. Throwing does exactly that:
+      // mutateState saves only on a normal return.
+      if (mutate) try { mutate(t, record); } catch (e) { throw Object.assign(new Error(e.message), { __schMutateConflict: true }); }
 
-  const from = canonicalState(t);
-  const version = t.stateVersion ?? 0;
-  if (expectVersion !== null && Number(expectVersion) !== version)
-    return { ok: false, failure: { code: "STATE_VERSION_CONFLICT", message: `task #${taskId} is at state version ${version}, not ${expectVersion} — something moved it since you read it` }, state: from, state_version: version };
-
-  const legal = canTransition(from, to, actor);
-  if (!legal.ok)
-    return { ok: false, failure: { code: "ILLEGAL_TRANSITION", message: `task #${taskId}: ${legal.why}` }, state: from, state_version: version };
-
-  const record = {
-    schema_version: SCHEMA_VERSION, from, to, actor, reason: clamp(reason, 500),
-    project_id: projectId, task_id: Number(taskId), run_id: runId, attempt,
-    phase_id: phaseId, state_version: version + 1, causation_event: causation, at: now(),
-  };
-
-  t.state = to;
-  t.status = STATE_TO_LEGACY[to];
-  t.stateVersion = version + 1;
-  t.stateHistory = [record, ...(t.stateHistory ?? [])].slice(0, 50);
-  t.updatedAt = now();
-  if (mutate) try { mutate(t, record); } catch (e) { return { ok: false, failure: { code: "INTERNAL_STATE_CONFLICT", message: e.message } }; }
-
-  stateEvent(s, `task #${t.id} ${from} → ${to} (${actor}${reason ? ": " + clamp(reason, 90) : ""})`);
-  saveState(projectId, s);
-  auditLog({ kind: "transition", project: projectId, task: String(taskId), ...record });
-  return { ok: true, transition: record, task: t, state: to, state_version: t.stateVersion };
+      stateEvent(s, `task #${t.id} ${from} → ${to} (${actor}${reason ? ": " + clamp(reason, 90) : ""})`);
+      audit = record;
+      return { ok: true, transition: record, task: t, state: to, state_version: t.stateVersion };
+    });
+    if (audit) auditLog({ kind: "transition", project: projectId, task: String(taskId), ...audit });
+    return out;
+  } catch (err) {
+    if (err && err.__schMutateConflict)
+      return { ok: false, failure: { code: "INTERNAL_STATE_CONFLICT", message: err.message } };
+    throw err;
+  }
 }
 
 // ------------------------------------------------------- legacy status writes
@@ -189,21 +204,32 @@ export function applyLegacyStatus(projectId, taskId, legacyStatus, { actor = "op
     return { ok: false, failure: { code: "UNKNOWN_STATUS", message: `"${legacyStatus}" is not a task status (${STATUSES.join(", ")})` } };
 
   const to = LEGACY_TO_STATE[legacyStatus];
-  const s = loadState(projectId);
-  const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
-  if (!t) return { ok: false, failure: { code: "TASK_NOT_FOUND", message: `no task #${taskId} in ${projectId}` } };
-  const from = canonicalState(t);
-  if (from === to) {
-    // Not a move. Still let the caller attach its own field writes.
-    if (mutate) { mutate(t, null); t.updatedAt = now(); saveState(projectId, s); }
-    return { ok: true, noop: true, state: to, state_version: t.stateVersion ?? 0 };
-  }
-  const legal = canTransition(from, to, actor);
-  if (!legal.ok && strict)
-    return { ok: false, failure: { code: "ILLEGAL_TRANSITION", message: `task #${taskId}: ${legal.why}` }, state: from };
+  // Same locked section as `transition`: read, decide and write together.
+  let audit = null;
+  try {
+    const out = mutateState(projectId, (s) => {
+      const t = (s.tasks ?? []).find((x) => x.id === Number(taskId));
+      if (!t) return { ok: false, failure: { code: "TASK_NOT_FOUND", message: `no task #${taskId} in ${projectId}` } };
+      const from = canonicalState(t);
+      if (from === to) {
+        // Not a move. Still let the caller attach its own field writes.
+        if (mutate) { mutate(t, null); t.updatedAt = now(); }
+        return { ok: true, noop: true, state: to, state_version: t.stateVersion ?? 0 };
+      }
+      const legal = canTransition(from, to, actor);
+      if (!legal.ok && strict)
+        return { ok: false, failure: { code: "ILLEGAL_TRANSITION", message: `task #${taskId}: ${legal.why}` }, state: from };
 
-  const r = transitionUnchecked(projectId, taskId, { to, actor, reason: reason || `legacy task-set --status ${legacyStatus}`, mutate, legacyOverride: legal.ok ? null : legal.why });
-  return r;
+      const r = transitionUnchecked(projectId, taskId, { to, actor, reason: reason || `legacy task-set --status ${legacyStatus}`, mutate, legacyOverride: legal.ok ? null : legal.why });
+      return r;
+    });
+    if (audit) auditLog({ kind: "transition", project: projectId, task: String(taskId), ...audit });
+    return out;
+  } catch (err) {
+    if (err && err.__schMutateConflict)
+      return { ok: false, failure: { code: "INTERNAL_STATE_CONFLICT", message: err.message } };
+    throw err;
+  }
 }
 
 // The legacy seam, and the ONLY place a refused edge is still written. It
@@ -225,10 +251,10 @@ function transitionUnchecked(projectId, taskId, { to, actor, reason, mutate, leg
   t.state = to; t.status = STATE_TO_LEGACY[to]; t.stateVersion = version + 1;
   t.stateHistory = [record, ...(t.stateHistory ?? [])].slice(0, 50);
   t.updatedAt = now();
-  if (mutate) try { mutate(t, record); } catch (e) { return { ok: false, failure: { code: "INTERNAL_STATE_CONFLICT", message: e.message } }; }
+  // Throwing discards the whole write, including the state fields set above.
+  if (mutate) try { mutate(t, record); } catch (e) { throw Object.assign(new Error(e.message), { __schMutateConflict: true }); }
   stateEvent(s, `task #${t.id} ${from} → ${to} (${actor})${legacyOverride ? ` [legacy write the closed machine would refuse: ${clamp(legacyOverride, 80)}]` : ""}`);
-  saveState(projectId, s);
-  auditLog({ kind: "transition", project: projectId, task: String(taskId), ...record });
+  audit = record;
   return { ok: true, transition: record, task: t, state: to, state_version: t.stateVersion, legacy_override: legacyOverride };
 }
 
