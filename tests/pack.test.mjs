@@ -217,3 +217,9 @@ test("workerArgs names the pack, restricts setting sources, and denies each buil
   assert.ok(!args.includes("--bare"),
     "--bare forces ANTHROPIC_API_KEY and would break subscription auth");
 });
+
+test("a built-in on both lists is denied — deny outranks allow", () => {
+  const policy = { version: 1, allow: ["run"], deny: ["run"], known: ["run"] };
+  assert.deepEqual(PACK.deniedBuiltins(policy), ["run"],
+    "a name on both lists is an editing mistake; the safe reading is the restrictive one");
+});

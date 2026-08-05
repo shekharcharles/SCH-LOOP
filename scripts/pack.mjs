@@ -200,8 +200,11 @@ export const BUILTIN_POLICY = Object.freeze({
 
 export function deniedBuiltins(policy = BUILTIN_POLICY) {
   const allow = new Set(policy.allow ?? []);
-  const seen = new Set([...(policy.known ?? []), ...(policy.deny ?? []), ...allow]);
-  return [...seen].filter((n) => !allow.has(n)).sort();
+  const deny = new Set(policy.deny ?? []);
+  const seen = new Set([...(policy.known ?? []), ...deny, ...allow]);
+  // Deny outranks allow. A name on both lists is an editing mistake, and the
+  // safe reading of that mistake is the restrictive one.
+  return [...seen].filter((n) => deny.has(n) || !allow.has(n)).sort();
 }
 
 // The exact argument vector a contained worker is launched with. Kept here, next
