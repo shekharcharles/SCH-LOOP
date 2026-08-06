@@ -13,3 +13,5 @@
 - A long background command killed twice at the same elapsed time → rerun it in the foreground with an explicit timeout instead of a third background attempt; a reaped task and a failing one look identical from the log tail.
 - A test that spawns a child process and awaits a reply → reject every pending waiter from the child's `exit` and `error` events; without that a missing or crashed child reads as a per-request timeout, multiplying the run time and hiding the stderr that names the real fault.
 - Driving a CLI subcommand or flag from a new test → copy the invocation from an existing test that already creates that state instead of inferring it from the command's name; an invented flag surfaces as a spawn failure deep in the fixture, far from the line that guessed it.
+- Converting a sequential loop to run work concurrently → audit EVERY exit path for the drain, not only the paths the new code added; the pre-existing returns are the ones that now abandon live work.
+- Recognising a privileged artifact by its shape (subject line, parent count) → record its identity (hash) at creation and match that instead; shape is forgeable, identity is not.
