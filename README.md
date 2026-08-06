@@ -381,7 +381,10 @@ bear on it, inside a tenth of the prompt budget, with every omission recorded.
 
 ### Planned, and NOT implemented
 
-OS-level worker sandboxing · a **writing** SCH MCP (the read side ships as
+OS-level worker sandboxing (**investigated and found unreachable** from Node
+without a container, a second account or a native module — see
+[ADR 0009](docs/adr/0009-os-confinement-what-node-cannot-reach.md)) ·
+a **writing** SCH MCP (the read side ships as
 `scripts/mcp.mjs`; starting, delivering and approving over MCP do not, and will
 not until there is something to authenticate the caller with) · the structured
 learning STORE of [ADR 0002](docs/adr/0002-learning-architecture.md) (typed
@@ -775,6 +778,19 @@ Stated plainly, because a false claim here is worse than a missing feature.
   recorded.
 - **Run evidence lives in the main repository**, not in the disposable checkout,
   so it outlives a worktree that is later removed.
+- **Only absolute `PATH` entries reach a worker or a verification command.** A
+  relative entry is resolved against the *child's* working directory, which for
+  a verification command is the worktree the worker just wrote — so
+  `PATH=node_modules/.bin:…` plus a worker that writes `node_modules/.bin/npm`
+  would decide what SCH's own `npm test` means. Relative and empty entries are
+  dropped for the child. If you deliberately keep a relative directory on PATH,
+  it will not resolve inside SCH's children; that is the point.
+- **On Windows, killing SCH kills its workers.** libuv puts every child in a Job
+  Object created kill-on-close, so the worker tree dies with the SCH process
+  even if SCH never gets to run cleanup code. This is the one OS-enforced
+  property here and it is inherited, not built — a worker that spawns *detached*
+  breaks out of the job and survives, and POSIX has no equivalent reachable from
+  Node, so there a worker outlives an SCH crash.
 - **The effect inspection still sees the shared `.git`.** A worker that creates
   its own worktree trips `worktrees_changed`, and a hook installed into the
   shared hooks directory is still caught: the metadata fingerprint resolves
@@ -832,10 +848,26 @@ and says so:
   else — your home directory, another project, `/etc` — remain invisible, and
   a writer that restores both a file's size and its modification time is not
   detected either. Only an OS boundary fixes those.
-- **Workers are not OS-sandboxed.** They run as your user with your PATH.
+- **Workers are not OS-sandboxed, and cannot be from here.** They run as your
+  user, with your file access and your network. This was investigated rather
+  than assumed, and the finding is a negative one recorded in
+  [ADR 0009](docs/adr/0009-os-confinement-what-node-cannot-reach.md): with no
+  new dependencies, no native module and no Administrator rights, **Node cannot
+  reach a single OS mechanism that would confine a worker.** Job-object limits
+  have no binding and are a resource governor rather than a boundary anyway;
+  `runas /trustlevel` does produce a restricted token but returns in 138 ms
+  without the child's stdout, exit code or a killable handle; an `icacls` DENY
+  ACE against your own account is removed by that same account in one command;
+  Node exposes no `setrlimit`. **A real boundary needs a container, a second
+  user account, or a native module** — all three priced and deferred in ADR
+  0004. Two things are true and narrower than "your PATH": only **absolute**
+  PATH entries reach a worker or a verification command, so a worker cannot turn
+  a file it wrote into something SCH's next command runs by name; and on Windows
+  a worker that does not deliberately detach **dies when SCH dies**, because
+  libuv puts it in a kill-on-close Job Object.
 - **Parallelism multiplies uncontained workers.** N workers means N processes
-  with your PATH and your network. Every containment caveat here applies N times
-  over, so raise `--max-parallel` deliberately.
+  with your file access and your network. Every containment caveat here applies
+  N times over, so raise `--max-parallel` deliberately.
 - **SCH merges dependency branches automatically.** This is the one merge it
   performs, into a disposable per-task checkout, refusing anything that does not
   apply cleanly. Nothing is ever merged into your branches on your behalf.
