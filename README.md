@@ -197,6 +197,11 @@ scripts/evidence.mjs      Selective evidence compaction: a passing check contrib
 scripts/procedures.mjs    The lazy-loaded, hashed operational procedure registry. A phase gets
                           the procedure for what it is doing, never the manual — and a
                           procedure can never grant authority.
+scripts/knowledge.mjs     Automatic ingestion of the project's OWN durable documents (PRD/SCOPE,
+                          docs/adr, LESSONS) into a bounded, hashed index. Deterministic, no
+                          model. A task draws the few entries that bear on it, inside a tenth of
+                          the prompt budget; an irrelevant entry contributes ZERO characters and
+                          every omission is recorded with its reason. Redacted at the door.
 scripts/skillsources.mjs  Governed EXTERNAL skill sources: full-commit pinning, operator-only
                           sync, file/script/hook inventory, explainable risk classification,
                           static quality gate, conflict detection against SCH's own machinery,
@@ -369,14 +374,19 @@ controller** · the **sequential graph scheduler** below: a first-class task gra
 with typed dependency reasons, a closed task-state machine, an SSSF-style phase
 engine with typed envelopes and named gates, bounded retries, typed human
 decision gates, a SQLite operational projection and deterministic project
-completion.
+completion · **automatic knowledge ingestion**: the project's own durable
+documents (PRD/SCOPE, `docs/adr`, `LESSONS.md`) are ingested deterministically
+into a bounded, hashed index, and each task's prompt draws only the entries that
+bear on it, inside a tenth of the prompt budget, with every omission recorded.
 
 ### Planned, and NOT implemented
 
 OS-level worker sandboxing · a **writing** SCH MCP (the read side ships as
 `scripts/mcp.mjs`; starting, delivering and approving over MCP do not, and will
-not until there is something to authenticate the caller with) ·
-automatic knowledge ingestion · distributed workers · Temporal (evaluation only)
+not until there is something to authenticate the caller with) · the structured
+learning STORE of [ADR 0002](docs/adr/0002-learning-architecture.md) (typed
+records, provenance, tombstoning, promotion) — ingestion reads the documents,
+it does not yet replace them · distributed workers · Temporal (evaluation only)
 · migrating state authority into SQLite. The queue scheduler runs **one task at a
 time by default**; `--max-parallel N` runs up to N, and stops at a defined
 terminal condition either way. Nothing here is unattended-safe yet: see
