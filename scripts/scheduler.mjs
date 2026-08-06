@@ -45,6 +45,7 @@ import * as USAGE from "./usage.mjs";
 import * as EV from "./evidence.mjs";
 import * as SEM from "./semantic.mjs";
 import * as WT from "./worktree.mjs";
+import { holderLiveness, HOST_ID } from "./remoteworker.mjs";
 import { loadState, mutateState, getProject, auditLog, event as stateEvent } from "./state.mjs";
 
 export const SCHEMA_VERSION = 1;
@@ -177,11 +178,15 @@ export function openAttempt(wsDir, taskId) {
 
 export const schedulerLeasePath = (wsDir) => join(WS.locksDir(wsDir), "scheduler.json");
 const LEASE_TTL_MS = 30 * 60 * 1000;
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 
 // One scheduler per project. Never steals a live lease; a stale one (expired, or
 // its owner is gone) is recovered and the recovery is recorded rather than
 // silently overwritten — "the previous scheduler vanished" is information.
+//
+// "Its owner is gone" is decided by `holderLiveness`, which knows that a pid is
+// only evidence on the machine that issued it. A scheduler on another host that
+// went quiet is NOT recovered here: one scheduler per project has to survive the
+// project being reachable from two machines.
 export function acquireSchedulerLease(wsDir, { projectId, schedulerId, ttlMs = LEASE_TTL_MS }) {
   mkdirSync(WS.locksDir(wsDir), { recursive: true });
   const p = schedulerLeasePath(wsDir);
@@ -189,15 +194,17 @@ export function acquireSchedulerLease(wsDir, { projectId, schedulerId, ttlMs = L
   if (existsSync(p)) {
     let held = null;
     try { held = JSON.parse(readFileSync(p, "utf8")); } catch { held = null; }
-    const expired = !held?.expires_at || new Date(held.expires_at).getTime() < Date.now();
-    const ownerGone = !held?.pid || !pidAlive(Number(held.pid));
-    if (!expired && !ownerGone)
-      return { ok: false, failure: { code: "SCHEDULER_LEASE_CONFLICT", message: `project ${projectId} already has scheduler ${held.scheduler_id} running (pid ${held.pid}, expires ${held.expires_at})` }, held };
+    const state = holderLiveness(held);
+    if (state.live)
+      return { ok: false, failure: { code: "SCHEDULER_LEASE_CONFLICT", message: `project ${projectId} already has scheduler ${held.scheduler_id} running (${state.reason})` }, held };
+    if (!state.recoverable)
+      return { ok: false, failure: { code: "SCHEDULER_LEASE_CONFLICT", message: `project ${projectId}'s scheduler lease is ${state.reason}. SCH will not take it: confirm that host is not scheduling this project, then delete ${p}.` }, held };
     try { unlinkSync(p); } catch {}
     recovered = held;
   }
   const lease = { schema_version: SCHEMA_VERSION, project_id: projectId, scheduler_id: schedulerId,
-    pid: process.pid, acquired_at: now(), expires_at: new Date(Date.now() + ttlMs).toISOString() };
+    host_id: HOST_ID, pid: process.pid, acquired_at: now(), heartbeat_at: now(),
+    expires_at: new Date(Date.now() + ttlMs).toISOString() };
   WS.writeAtomic(p, JSON.stringify(lease, null, 2));
   return { ok: true, lease, recovered };
 }
@@ -216,9 +223,7 @@ export function liveSchedulerLease(wsDir) {
   if (!existsSync(p)) return null;
   let held = null;
   try { held = JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
-  const expired = !held?.expires_at || new Date(held.expires_at).getTime() < Date.now();
-  if (expired || !pidAlive(Number(held.pid))) return null;
-  return held;
+  return holderLiveness(held).live ? held : null;
 }
 
 // -------------------------------------------------------------- the workflow
