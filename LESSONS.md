@@ -11,3 +11,4 @@
 - Adding code that writes outside the repository → give the test fixture an env override for that root in the same change, or the first test run pollutes the operator's real machine.
 - Patching source through a shell heredoc → use raw strings for the replacement text; the heredoc collapses `\n` before the interpreter sees it and writes real newlines into string literals.
 - A long background command killed twice at the same elapsed time → rerun it in the foreground with an explicit timeout instead of a third background attempt; a reaped task and a failing one look identical from the log tail.
+- Editing code that lives inside a template literal (a client script held in a server-side string) → keep backticks, `${` and backslashes out of everything inserted, comments included, and run `node --check` before the test suite, or one character in a comment fails every test as "the server exited 1".
