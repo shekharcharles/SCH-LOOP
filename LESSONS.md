@@ -20,3 +20,5 @@
 - Auditing a document for stale claims → grep the feature's own keywords across every doc AND the code comments in one pass; the contradiction is usually inside a single file, written months apart, and reading top-to-bottom is what makes it invisible.
 - Emitting a new event, outcome or artifact kind from a module that declares a CLOSED vocabulary → add it to that exported list in the same edit; the failure surfaces in an unrelated conformance test, never at the call you wrote.
 - Piping a test run into `tail` hides the exit code → the pipeline reports the success of `tail`, so read the assertion output, never the reported status, before calling a run green.
+- Probing whether A shadows B by comparing their output → first prove the two outputs DIFFER on this machine; a canary that happens to print the same string as the control (hostname == username) reports "no effect" for every outcome.
+- Deriving a relative path for a test from `path.relative(cwd, target)` → assert it is actually relative, or pin the target under cwd; across Windows drive letters `relative()` returns an ABSOLUTE path and the case under test silently stops existing.
