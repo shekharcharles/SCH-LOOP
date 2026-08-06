@@ -380,7 +380,7 @@ machine boundary, and none is planned until evidence can come back from one:**
 git-effect inspection, territory fingerprints and verification all read local
 disk, so a transport that cannot write there is refused at `prepare()` rather than
 producing a run nobody can verify. Nothing about the network is proven; see
-[ADR 0009](docs/adr/0009-the-distributed-worker-seam.md) for the labelled list of
+[ADR 0010](docs/adr/0010-the-distributed-worker-seam.md) for the labelled list of
 what is unproven.
 
 ## 🧪 Supervised external single-task runner

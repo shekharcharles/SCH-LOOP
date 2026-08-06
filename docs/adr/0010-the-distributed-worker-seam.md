@@ -1,4 +1,4 @@
-# ADR 0009 — The seam a second machine would plug into
+# ADR 0010 — The seam a second machine would plug into
 
 **Status:** accepted · Implements the contract only · Extends ADR 0004
 **Date:** 2026-08-06
