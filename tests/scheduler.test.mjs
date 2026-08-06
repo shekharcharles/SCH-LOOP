@@ -1123,3 +1123,26 @@ test("a duration limit signals the workers still running, it does not just outli
     assert.notEqual(states(fx)[a], "RUNNING", "a stopped run must not be left RUNNING");
   } finally { fx.done(); }
 });
+
+test("a retry runs the REPAIRER, not the builder a second time", async () => {
+  const fx = queueFixture("repair-role");
+  try {
+    const a = addTask(fx, {
+      title: "fails once", allow: "src/**",
+      verify: `${process.execPath.split(String.fromCharCode(92)).join("/")} -e process.exit(require("fs").existsSync("src/fixed.js")?0:1)`,
+    });
+    const dir = join(fx.home, "behaviours");
+    const env = fakeQueueEnv(fx, {});
+    writeFileSync(join(dir, `task-${a}-attempt-1.json`), JSON.stringify({ write: [{ path: "src/broken.js", content: "// nope" + NL }] }));
+    writeFileSync(join(dir, `task-${a}-attempt-2.json`), JSON.stringify({ write: [{ path: "src/fixed.js", content: "// yes" + NL }] }));
+    await runQueue(fx, { env, maxTasks: 1 });
+
+    // The repair handler exists for exactly this - a repairer told what broke,
+    // not a builder told to start again. Until it was wired it was registered,
+    // validated, and never reached.
+    const semantics = invocations(fx).map((i) => i.semantic);
+    assert.ok(semantics.includes("implement"), `attempt 1 must be the builder: ${semantics.join(", ")}`);
+    assert.ok(semantics.includes("repair"),
+      `a retry must run the repairer, not the builder again: ${semantics.join(", ")}`);
+  } finally { fx.done(); }
+});
