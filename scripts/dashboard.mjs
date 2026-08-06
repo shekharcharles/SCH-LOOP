@@ -799,6 +799,38 @@ const PAGE = `<!doctype html>
     .now .nt{min-width:100%;white-space:normal;order:9}
     .pgw{width:88px}
   }
+  /* RUN EVIDENCE — what the worker was actually given, and whether it stayed
+     where it was put. Three territory verdicts, three looks: "we looked and
+     found nothing", "we could not finish looking" and "it wrote outside its
+     worktree" must never render as the same badge. */
+  .runrow{border:1px solid var(--line);border-top:0;background:var(--panel);padding:8px 11px}
+  .runrow:first-of-type{border-top:1px solid var(--line)}
+  .runrow.bad{border-left:4px solid var(--red);background:rgba(255,42,42,.07)}
+  .runrow.unsure{border-left:4px solid var(--amber)}
+  .runh{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:11px}
+  .runh .rid{color:var(--red);letter-spacing:.06em}
+  .runh .rout{margin-left:auto;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-size:10px}
+  .runl{display:grid;grid-template-columns:132px minmax(0,1fr);gap:5px 10px;margin-top:6px;font-size:11.5px}
+  .runl>b{font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);font-weight:400;padding-top:3px}
+  @media(max-width:640px){.runl{grid-template-columns:1fr}.runl>b{padding-top:6px}}
+  .b-warn{color:var(--amber);border-color:var(--amber)}
+  .terr-clean{color:var(--green);border-color:rgba(74,246,38,.5)}
+  .terr-unknown{color:var(--amber);border-color:var(--amber)}
+  .terr-bad{color:#fff;background:var(--red);border-color:var(--red)}
+  .terr-none{color:var(--dim)}
+  .why{color:var(--dim);font-size:11px;margin-top:3px}
+  .viol{border-left:2px solid var(--red);background:rgba(0,0,0,.28);padding:7px 10px;margin-top:5px;font-size:11.5px}
+  .viol b{color:var(--red)}
+  /* PARALLELISM — the queue runs up to max_parallel tasks at once, so one
+     "current task" is a lie. One cell per slot: filled ones pulse, spare
+     capacity stays dark. */
+  .flight{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:8px}
+  .fl{background:var(--panel);padding:7px 11px;flex:1;min-width:158px;font-size:11px;display:flex;gap:8px;align-items:baseline}
+  .fl .fd{width:7px;height:7px;flex:none;background:var(--green);border-radius:50%;animation:blink 1.6s step-end infinite}
+  .fl .ft{color:var(--fg)}
+  .fl .fx{margin-left:auto;color:var(--dim);font-size:10px}
+  .fl.free{color:var(--dim)}.fl.free .fd{background:#2a2a2a;animation:none}
+  @media(prefers-reduced-motion:reduce){.fl .fd{animation:none}}
   /* ---- knowledge graph ---- */
   .gwrap{border:1px solid var(--line);background:var(--panel)}
   .gkinds{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
@@ -1777,11 +1809,60 @@ function loadQueue(pj){
     fetch("/api/task-graph?project="+encodeURIComponent(pj)).then(r=>r.json()).catch(()=>null),
     fetch("/api/scheduler?project="+encodeURIComponent(pj)).then(r=>r.json()).catch(()=>null),
     fetch("/api/human-gates?project="+encodeURIComponent(pj)).then(r=>r.json()).catch(()=>null),
-  ]).then(([g,s,h])=>set("queuesec",queueSec(g,s,h,pj))).catch(()=>{});
+    fetch("/api/runs?project="+encodeURIComponent(pj)+"&limit=8").then(r=>r.json()).catch(()=>null),
+  ]).then(([g,s,h,rp])=>set("queuesec",queueSec(g,s,h,pj,rp))).catch(()=>{});
 }
-function queueSec(g,s,h,pj){
-  if((!g||g.error)&&(!s||s.error))return"";
+// What the worker was GIVEN. Names, counts and refusals — never a skill body:
+// the projection does not send one and this must never ask for one.
+function packBits(p){
+  if(!p)return '<span class="lx">no pack recorded — this run predates project-local packs</span>';
+  const sk=p.skills||[], ref=p.refusals||[];
+  return '<span class="badge">'+esc(p.manifest_name||"unnamed pack")+'</span> '+
+    '<span class="lx">'+sk.length+' skill(s) carried</span>'+
+    (sk.length?'<div class="skl">'+sk.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':'')+
+    (ref.length?'<div class="why"><span class="badge b-warn">'+ref.length+' file(s) refused</span> '+
+      ref.slice(0,6).map(x=>esc(x.path)+(x.why?' — '+esc(x.why):'')).join("<br>")+
+      (ref.length>6?'<br>'+(ref.length-6)+' more':'')+'</div>':'');
+}
+// CLEAN is a finding. INCONCLUSIVE is the absence of one, and the whole point of
+// ADR 0007 is that they are not the same answer — so they never share a colour,
+// a word or a row style here.
+const TERR={CLEAN:["terr-clean","stayed inside its worktree"],
+  INCONCLUSIVE:["terr-unknown","the check could NOT see everything — this is not a clean result"],
+  VIOLATED:["terr-bad","wrote OUTSIDE its own worktree"],
+  UNWATCHED:["terr-none","nothing was watched"]};
+function terrBits(t){
+  if(!t)return '<span class="badge terr-none">NOT CHECKED</span> <span class="lx">this run predates the territory check</span>';
+  const m=TERR[t.verdict]||["terr-none",""];
+  let out='<span class="badge '+m[0]+'">'+esc(t.verdict)+'</span> <span class="lx">'+m[1]+
+    ' · '+(t.watched||0)+' territory(ies) watched'+((t.excluded||[]).length?', excluding '+t.excluded.map(esc).join(", "):'')+'</span>';
+  for(const v of (t.violated||[]))
+    out+='<div class="viol"><b>'+esc(v.id)+'</b> — '+v.added+' added, '+v.changed+' changed, '+v.removed+' removed'+
+      ((v.paths||[]).length?'<div class="why">'+v.paths.map(esc).join(", ")+'</div>':'')+'</div>';
+  for(const u of (t.unknown||[]))
+    out+='<div class="why">'+esc(u.id)+': '+esc(u.why||"the check could not complete")+'</div>';
+  return out;
+}
+function runRow(r){
+  const t=r.territory;
+  const cls=(t&&t.verdict==="VIOLATED")?" bad":(t&&t.verdict==="INCONCLUSIVE")?" unsure":"";
+  return '<div class="runrow'+cls+'"><div class="runh"><span class="rid mono">'+esc(r.run_id)+'</span>'+
+    '<span>task #'+esc(String(r.task_id))+'</span><span class="lx">attempt '+esc(String(r.attempt))+'</span>'+
+    '<span class="rout">'+esc(r.outcome||r.state||"")+'</span></div>'+
+    '<div class="runl"><b>CAPABILITY PACK</b><span>'+packBits(r.pack)+'</span>'+
+    '<b>TERRITORY</b><span>'+terrBits(t)+'</span></div></div>';
+}
+function queueSec(g,s,h,pj,rp){
+  if((!g||g.error)&&(!s||s.error)&&(!rp||rp.error))return"";
   let out="";
+  const runs=(rp&&!rp.error&&rp.runs)?rp.runs:[];
+  // A worker that wrote into another task's checkout is worse than anything else
+  // on this page, so it goes above everything else on this page.
+  const viol=runs.filter(r=>r.territory&&r.territory.verdict==="VIOLATED");
+  if(viol.length)out+='<div class="attn"><b>&#9888; A WORKER WROTE OUTSIDE ITS WORKTREE</b>'+
+    viol.map(r=>'<div class="attn-row">'+esc(r.run_id)+' · task #'+esc(String(r.task_id))+' — '+
+      r.territory.violated.map(v=>esc(v.id)).join(", ")+
+      '<div class="why">nothing was reverted; the evidence is kept in the run directory</div></div>').join("")+'</div>';
   // --- project graph
   if(g&&!g.error){
     const st=(n)=>'<span class="badge">'+esc(n.state)+'</span>';
@@ -1802,8 +1883,11 @@ function queueSec(g,s,h,pj){
   // --- current execution
   if(s&&!s.error){
     const a=s.active, l=s.lease;
+    // current_task is whichever task most recently entered a phase — with
+    // several in flight it is the LATEST, not the only one. Say so, and let the
+    // slot strip below carry the truth about what is running.
     out+='<div class="scope"><b>SCHEDULER //</b> '+(l?('<b>'+esc(l.scheduler_id)+'</b> live (pid '+esc(String(l.pid))+')'):'none running')+
-      (a?' · task <b>#'+esc(String(a.current_task||"-"))+'</b> phase <b>'+esc(a.current_phase||"-")+'</b> attempt '+esc(String(a.current_attempt||"-")):'')+'</div>';
+      (a?' · latest phase <b>'+esc(a.current_phase||"-")+'</b> on task <b>#'+esc(String(a.current_task||"-"))+'</b> attempt '+esc(String(a.current_attempt||"-")):'')+'</div>';
     const hist=(s.schedulers||[]).slice(0,6).map(x=>'<div class="ph"><span class="ph-n">'+esc(x.scheduler_id)+'</span> '+
       '<span class="badge">'+esc(x.state)+'</span> <span class="badge">'+esc(x.stop_reason||"running")+'</span> '+
       '<span class="lx">'+esc(String(x.tasks_delivered||0))+' delivered · '+esc(String(x.total_attempts||0))+' attempt(s)</span>'+
@@ -1815,6 +1899,28 @@ function queueSec(g,s,h,pj){
       (c.reasons||[]).map(r=>'<div class="ph">'+(r.passed?"&#10003;":"&#10007;")+' <span class="ph-n">'+esc(r.item)+'</span><div class="lx">'+esc(r.evidence)+'</div></div>').join("")+
       '</div></details>';
   }
+  // --- what is running RIGHT NOW, all of it. One slot per unit of allowed
+  // parallelism: held slots come from the live task leases, spare capacity is
+  // drawn dark so "3 of 4 busy" is a picture rather than a sentence.
+  if(rp&&!rp.error){
+    const fl=rp.in_flight||[];
+    const sch=(s&&!s.error)?s:null;
+    // A LIVE queue has spare slots. A stopped one has none — only a limit it
+    // used to run with, which is history and is labelled as history.
+    const live=(sch&&sch.active&&sch.active.max_parallel)||null;
+    const last=(sch&&(sch.schedulers||[])[0]&&(sch.schedulers||[])[0].max_parallel)||null;
+    const cells=fl.map(x=>'<div class="fl"><span class="fd"></span><span class="ft">task #'+esc(String(x.task_id))+'</span>'+
+      '<span class="fx mono">'+esc(x.run_id||"")+(x.acquired_at?' · '+ago(Date.now()-new Date(x.acquired_at).getTime()):'')+'</span></div>');
+    if(live)for(let i=fl.length;i<live;i++)cells.push('<div class="fl free"><span class="fd"></span><span class="ft">idle slot</span></div>');
+    out+='<div class="scope"><b>IN FLIGHT //</b> '+fl.length+(live?' of '+live+' slot(s)':'')+' task(s) running at this moment'+
+      (live?'':last?' <span class="lx">· no queue is running; the last one allowed '+esc(String(last))+' at once</span>'
+                  :' <span class="lx">· no scheduler record, so the limit is unknown</span>')+'</div>'+
+      (cells.length?'<div class="flight">'+cells.join("")+'</div>':'<div class="empty">no task is running</div>');
+  }
+  // --- run evidence: the pack each worker was given, and where it wrote
+  if(runs.length)
+    out+='<div class="scope"><b>RUN EVIDENCE //</b> the last '+runs.length+' run(s) — what each worker was handed, and whether it stayed in its own worktree</div>'+
+      runs.map(runRow).join("");
   // --- attention required
   if(h&&!h.error&&(h.pending||[]).length){
     out+='<div class="q"><b>&#9888; NEEDS A DECISION — the queue is stopped</b><br>'+
