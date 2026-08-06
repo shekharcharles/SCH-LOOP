@@ -22,3 +22,5 @@
 - Piping a test run into `tail` hides the exit code → the pipeline reports the success of `tail`, so read the assertion output, never the reported status, before calling a run green.
 - Probing whether A shadows B by comparing their output → first prove the two outputs DIFFER on this machine; a canary that happens to print the same string as the control (hostname == username) reports "no effect" for every outcome.
 - Deriving a relative path for a test from `path.relative(cwd, target)` → assert it is actually relative, or pin the target under cwd; across Windows drive letters `relative()` returns an ABSOLUTE path and the case under test silently stops existing.
+- A RED assertion comparing an actual against a constant the change has yet to export → both sides are `undefined` and it passes vacuously; assert against a literal, or against a shape the missing export cannot satisfy.
+- Claiming a protection whose effect no hermetic test can reach (network, OS boundary, remote behaviour) → implement only the part the test CAN see, and write the residual into the README and a KNOWN-GAP test in the same commit as the mechanism.

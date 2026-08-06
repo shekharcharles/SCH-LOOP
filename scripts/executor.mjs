@@ -13,6 +13,8 @@
 //     cloud, GitHub or database credentials just because the parent shell had them;
 //   * the prompt goes over stdin, so it never appears in the process list;
 //   * SCH owns the timeout, the cancellation and the kill — not the worker;
+//   * a task that has not been granted the network gets proxy variables aimed at
+//     a dead port — a speed bump for proxy-honouring clients, NOT a boundary;
 //   * stdout/stderr are capped, and truncation is recorded rather than hidden.
 
 import { spawn, execFileSync } from "node:child_process";
@@ -65,6 +67,78 @@ export const GIT_CREDENTIAL_STRIP = Object.freeze({
   GIT_CONFIG_COUNT: "1",
   GIT_CONFIG_KEY_0: "credential.helper",
   GIT_CONFIG_VALUE_0: "",
+});
+
+// ------------------------------------------------------------ NETWORK POLICY
+//
+// WHAT THIS IS, SAID BEFORE ANYTHING ELSE: it is not a network boundary, and
+// nothing here prevents a worker from reaching the internet.
+//
+// There is no per-process network restriction available on Windows and POSIX
+// alike without a new dependency or administrator rights. Windows Firewall
+// filters per executable and needs elevation; `unshare -n`, nftables and cgroups
+// need root; macOS `sandbox-exec` is deprecated and absent elsewhere. SCH has
+// none of those, so it does not claim one.
+//
+// What it CAN do is refuse to hand the worker a working proxy route: the
+// standard proxy variables are pointed at a closed loopback port. That stops
+// clients which honour them — curl, wget, git-over-http, npm, pip, python
+// requests, Go's default transport. It does NOT stop, and is not intended to
+// stop: a raw socket, ssh, a DNS query, or any client that ignores the
+// variables (Node's own `fetch` did, through v22). A worker that can write three
+// lines of JavaScript has all of those. Treat this as a speed bump for the
+// accidental fetch and as a recorded declaration of intent — never as
+// containment.
+//
+// The model endpoint is EXEMPT BY CONSTRUCTION. The worker IS an HTTP client to
+// the model API, so a policy that covered it would end every run before it
+// started. That exemption is itself an open route out.
+export const NETWORK_DENY_PROXY = "http://127.0.0.1:9";   // discard port — nothing serves HTTP there
+
+// The hosts a denied worker must still reach, or it cannot talk to its model.
+// Derived from the operator's OWN provider configuration, which is already on
+// the allowlist above — never guessed.
+function exemptHosts(parent = process.env) {
+  const hosts = ["localhost", "127.0.0.1", "::1",
+    // the model API, its auth/refresh and its telemetry: all under these two,
+    // and all reached by the CLI itself rather than by the task.
+    ".anthropic.com", ".claude.ai"];
+  const base = parent.ANTHROPIC_BASE_URL;
+  if (base) { try { hosts.push(new URL(base).hostname); } catch { /* an unparseable base URL is the operator's problem, not a crash */ } }
+  const on = (v) => v !== undefined && v !== "" && !/^(0|false)$/i.test(String(v));
+  if (on(parent.CLAUDE_CODE_USE_BEDROCK)) hosts.push(".amazonaws.com");
+  if (on(parent.CLAUDE_CODE_USE_VERTEX)) hosts.push(".googleapis.com");
+  return [...new Set(hosts)];
+}
+
+// The environment fragment a network policy contributes. `allow` contributes
+// nothing — the absence of a mechanism, not a weaker one. Anything else,
+// including a missing value, is treated as `deny`: this fails closed.
+export function networkEnv(policy = "deny", parent = process.env) {
+  if (policy === "allow") return {};
+  const exempt = exemptHosts(parent).join(",");
+  const env = {};
+  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) env[k] = NETWORK_DENY_PROXY;
+  env.NO_PROXY = exempt;
+  // curl reads `http_proxy` in lower case ONLY (a CGI-era rule), and several
+  // other clients look at one case or the other. Windows environment lookup is
+  // case-insensitive, so the upper-case names already answer both there and a
+  // duplicate would just be noise in the child's environment block.
+  if (process.platform !== "win32")
+    for (const [k, v] of Object.entries(env)) env[k.toLowerCase()] = v;
+  return env;
+}
+
+// What may be written down about it. Says what it does in the words the README
+// uses, so an auditor reading the run never has to infer the strength.
+export const networkEvidence = (policy, env) => ({
+  policy: policy === "allow" ? "allow" : "deny",
+  mechanism: policy === "allow" ? "none" : "proxy-environment-variables",
+  effect: policy === "allow"
+    ? "the worker's network access is unrestricted"
+    : "clients that honour proxy environment variables cannot connect; raw sockets, DNS, ssh and clients that ignore the variables are unaffected",
+  variables: Object.keys(env).filter((k) => /proxy/i.test(k)).sort(),
+  exempt: policy === "allow" ? [] : (env.NO_PROXY ?? "").split(",").filter(Boolean),
 });
 
 // Values that must never reach an artifact, a log or a diagnostic even though
@@ -238,7 +312,7 @@ export class ClaudeCliExecutor extends AgentExecutor {
 
   // Resolves with a terminal record whatever happens — a spawn failure, a
   // timeout and a clean exit are all outcomes, never exceptions.
-  async execute({ cwd, prompt, identity = {}, extraArgs = [], isCancelled = () => false, onEvent = () => {} } = {}) {
+  async execute({ cwd, prompt, identity = {}, extraArgs = [], network = "deny", isCancelled = () => false, onEvent = () => {} } = {}) {
     const prep = await this.prepare();
     // One argv, built once: the record and the spawn must never disagree about
     // what this process was launched with.
@@ -256,13 +330,19 @@ export class ClaudeCliExecutor extends AgentExecutor {
       // answer to "did this worker have GH_TOKEN?", on the one surface that
       // question is asked. Names only: values are never recorded here.
       environment_names: [],
+      // The network policy this worker ran under and, in plain words, what that
+      // did and did not do. Recorded whatever the outcome: "was this task
+      // permitted to reach the network?" must be answerable from the run.
+      network: null,
     };
+    const netEnv = networkEnv(network, this.parentEnv);
+    base.network = networkEvidence(network, netEnv);
     if (!prep.ok) {
       return { ...base, ended_at: new Date().toISOString(), ok: false, failure: prep.problems[0] };
     }
 
     const env = buildEnv(this.parentEnv, {
-      ...GIT_CREDENTIAL_STRIP,
+      ...GIT_CREDENTIAL_STRIP, ...netEnv,
       SCH_RUN_ID: identity.run_id, SCH_PROJECT_ID: identity.project_id, SCH_TASK_ID: identity.task_id,
       // Which attempt this is. A repair worker that cannot tell it is a repair
       // has no way to read the failure evidence it was given differently from
