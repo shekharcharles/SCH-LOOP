@@ -246,6 +246,12 @@ export function addTask(state, t) {
     // the whole workspace is off limits, which is the right default for the
     // application-development task that has no business editing SCH's own state.
     controlCategory: t.controlCategory ?? null,
+    // Whether this task was GRANTED the network. Default deny, because a task
+    // nobody thought about must not be network-permitted. Read
+    // `NETWORK POLICY` in scripts/executor.mjs before believing this prevents
+    // anything: it sets proxy variables and records the grant, and a worker that
+    // opens a socket is unaffected by both.
+    network: t.network === "allow" ? "allow" : "deny",
     verify: t.verify ?? [],
     // A question for the operator MUST be born blocked. Creating it queued and
     // blocking it in a second call is how three real questions ended up invisible:
@@ -637,6 +643,15 @@ export function detectProject(cwd = process.cwd()) {
 const pid = (flags) => flags.project || process.env.SCH_PROJECT || detectProject()
   || die("no --project given and this folder matches no registered project. Use --project <id>, or run from the project folder. See: project-list");
 const die = (m) => { console.error("error: " + m); process.exit(1); };
+
+// `--network deny|allow`. Refused rather than coerced: an operator who typed
+// something else meant something, and guessing which of two authorizations they
+// meant is not this program's job. Absent means "leave the default alone".
+const networkPolicy = (v) => {
+  if (v === undefined) return undefined;
+  if (v !== "deny" && v !== "allow") die(`--network must be "deny" or "allow", not "${v}"`);
+  return v;
+};
 
 const commands = {
   init() { saveRegistry(loadRegistry()); out("registry ready: " + registryPath()); },
@@ -1063,6 +1078,7 @@ const commands = {
     const id = pid(flags); const s = loadState(id);
     const t = addTask(s, { phase: flags.phase, phaseName: flags.phaseName ?? flags["phase-name"], category: flags.category, priority: flags.priority, title: flags.title, ac: splitList(flags.ac), ng: splitList(flags.ng), deps: splitList(flags.deps), source: flags.source ?? "plan", notes: flags.notes, active: flags.active, target: flags.target, status: flags.status, files: splitList(flags.files),
       allowedPaths: splitList(flags.allow), forbiddenPaths: splitList(flags.forbid), controlCategory: flags["control-category"],
+      network: networkPolicy(flags.network),
       verify: flags["verify-json"] !== undefined ? parseVerifyJson(flags["verify-json"]) : parseVerify(flags.verify) });
     saveState(id, s); out(t.id.toString());
   },
@@ -1180,6 +1196,7 @@ const commands = {
     // The one SCH control-state category this task may write, if any. Naming it
     // is a deliberate act; the default is that `.sch-loop/` is off limits.
     if (flags["control-category"] !== undefined) t.controlCategory = flags["control-category"] || null;
+    if (flags.network !== undefined) t.network = networkPolicy(flags.network);
     // what the work actually cost. Without this "are tokens going down?" is
     // unanswerable, and every efficiency change is a guess.
     // Guard the arithmetic: Number("unknown") is NaN, and a NaN written here would

@@ -92,6 +92,81 @@ test("worker.json lists the environment the child actually received", async () =
   } finally { fx.done(); }
 });
 
+// ------------------------------------------------------------------- network
+//
+// Read `NETWORK POLICY` in scripts/executor.mjs before changing any of these.
+// The mechanism is proxy environment variables and nothing else, so every
+// assertion here is about the ENVIRONMENT — never about a connection, because
+// this suite never makes one.
+
+test("network deny is proxy variables and nothing else, with the model endpoint exempt", () => {
+  const deny = EXEC.networkEnv("deny", {});
+  // Everything it sets is a proxy variable. If this ever grows a key that is not
+  // one, the README's "clients that honour proxy variables" wording is wrong.
+  for (const k of Object.keys(deny))
+    assert.match(k, /^(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)$/,
+      `network deny set ${k}, which is not a proxy variable`);
+  assert.equal(deny.HTTPS_PROXY, EXEC.NETWORK_DENY_PROXY);
+  assert.match(EXEC.NETWORK_DENY_PROXY, /^http:\/\/127\.0\.0\.1:/, "the dead endpoint must be loopback — never a real host");
+
+  // KNOWN GAP, asserted so it cannot be quietly forgotten: the worker IS an HTTP
+  // client to the model API, so the model endpoint is exempt BY CONSTRUCTION and
+  // is an open route out for anything willing to use it.
+  assert.match(deny.NO_PROXY, /anthropic\.com/, "the model endpoint is exempt — this is a hole, not an oversight");
+  assert.match(deny.NO_PROXY, /localhost/);
+
+  // A named provider endpoint is exempt too, or the run cannot reach its model.
+  assert.match(EXEC.networkEnv("deny", { CLAUDE_CODE_USE_BEDROCK: "1" }).NO_PROXY, /amazonaws\.com/);
+  assert.match(EXEC.networkEnv("deny", { ANTHROPIC_BASE_URL: "https://gw.example.test/v1" }).NO_PROXY, /gw\.example\.test/);
+
+  // "allow" is the absence of a mechanism, not a weaker one.
+  assert.deepEqual(EXEC.networkEnv("allow", {}), {});
+  // Anything unrecognised fails CLOSED.
+  assert.equal(EXEC.networkEnv(undefined, {}).HTTPS_PROXY, EXEC.NETWORK_DENY_PROXY);
+});
+
+test("a task's network policy defaults to deny and can be set to allow", () => {
+  const fx = fixture("network-policy-field");
+  try {
+    const a = addTask(fx);
+    const b = addTask(fx, { network: "allow" });
+    const tasks = fx.state().tasks;
+    assert.equal(tasks.find((t) => t.id === a).network, "deny", "a task nobody thought about must not be network-permitted");
+    assert.equal(tasks.find((t) => t.id === b).network, "allow");
+    assert.throws(() => fx.cli("task-set", "--project", fx.P, String(a), "--network", "sometimes"),
+      /network/i, "an unknown policy is refused, not silently coerced");
+  } finally { fx.done(); }
+});
+
+test("the worker process actually receives the deny policy, and the run records it", async () => {
+  const fx = fixture("network-deny-e2e");
+  const envFile = join(tmpdir(), `sch-net-env-${process.pid}.json`);
+  try {
+    initWorkspace(fx);
+    const t = addTask(fx);
+    const res = await runQueue(fx, {
+      env: fakeQueueEnv(fx, { [t]: {
+        envTo: envFile,
+        write: [{ path: "src/app.js", content: "// in scope\n" }],
+      } }),
+      maxTasks: 1,
+    });
+    // The environment the CHILD saw, not the one SCH meant to build.
+    const childEnv = JSON.parse(readFileSync(envFile, "utf8"));
+    assert.equal(childEnv.HTTPS_PROXY, EXEC.NETWORK_DENY_PROXY);
+    assert.equal(childEnv.HTTP_PROXY, EXEC.NETWORK_DENY_PROXY);
+    assert.match(childEnv.NO_PROXY ?? "", /anthropic\.com/);
+
+    const runId = res.tasks[0].attempt_records[0].run_id;
+    const worker = JSON.parse(readFileSync(join(RUN.readRun(fx.P, runId).dir, "worker.json"), "utf8"));
+    assert.equal(worker.network.policy, "deny");
+    assert.ok(worker.network.variables.includes("HTTPS_PROXY"));
+    assert.ok(worker.network.exempt.some((h) => /anthropic\.com/.test(h)));
+    // The record must not describe this as prevention.
+    assert.doesNotMatch(JSON.stringify(worker.network), /\bblocked\b|\bsandbox/i);
+  } finally { fx.done(); rmSync(envFile, { force: true }); }
+});
+
 test("a worker that creates its own worktree trips worktrees_changed", async () => {
   const fx = fixture("worker-made-worktree");
   try {
