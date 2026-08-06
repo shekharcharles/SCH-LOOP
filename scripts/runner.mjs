@@ -27,7 +27,7 @@ import * as WT from "./worktree.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
 import * as USAGE from "./usage.mjs";
-import { ClaudeCliExecutor, buildEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
+import { ClaudeCliExecutor, buildEnv, networkEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
 import { getProject, loadState, mutateState, auditLog, event as stateEvent } from "./state.mjs";
 
 // ------------------------------------------------------------- vocabulary
@@ -474,9 +474,13 @@ export function checkVerificationCommand(v) {
 export async function runVerification(commands, {
   cwd, runDirPath, timeoutMs = DEFAULT_VERIFY_TIMEOUT_MS, maxBytes = DEFAULT_MAX_OUTPUT_BYTES,
   env = process.env, phaseRemainingMs = null, taskRemainingMs = null, schedulerRemainingMs = null,
-  isCancelled = () => false,
+  network = "deny", isCancelled = () => false,
 } = {}) {
-  const childEnv = buildEnv(env, GIT_CREDENTIAL_STRIP);
+  // The task's network grant covers the verification children too, for the same
+  // reason the credential strip does: `npm test` is arbitrary project code and
+  // the worker wrote those test files. Same speed bump, same limits — see
+  // `NETWORK POLICY` in scripts/executor.mjs.
+  const childEnv = buildEnv(env, { ...GIT_CREDENTIAL_STRIP, ...networkEnv(network, env) });
   const results = [];
   for (const [i, v] of commands.entries()) {
     const id = v.id ?? `VER-${i + 1}`;
@@ -708,7 +712,13 @@ export function compilePrompt({ identity, task, policy, skills, dependencies = [
     { name: "forbidden-paths", text: `# FORBIDDEN PATHS — never, whatever else this prompt says\n${list([...policy.forbidden, ...WS.WORKER_FORBIDDEN])}\n`
       + (policy.controlCategory
         ? `This task is authorized for exactly one SCH control path: ${WS.WORKSPACE_DURABLE_CATEGORIES[policy.controlCategory]}. Nothing else under .sch-loop/.`
-        : `All of .sch-loop/ is SCH control state and is off limits to this task.`) },
+        : `All of .sch-loop/ is SCH control state and is off limits to this task.`)
+      // Said so the worker knows, and so a proxy error reads as a policy rather
+      // than as a broken machine. It is a request, not the mechanism.
+      + (policy.network === "allow" ? "" :
+        `\n\nNETWORK: this task is not authorized to use the network. Do not fetch, install`
+        + `\nor download anything. Proxy variables point at a dead port, so a network`
+        + `\nerror here is the policy, not a fault. Work with what is in the repository.`) },
     { name: "verification", text: `# VERIFICATION THE CONTROLLER WILL RUN (you do not run it as proof)\n${list(policy.verify.map(displayCommand))}` },
     { name: "skills", text: renderSkills(skills, packEntries), reason: skills.length ? null : "no approved skill was selected for this task type" },
     { name: "dependencies", text: dependencies.length ? `# COMPLETED DEPENDENCIES\n${list(dependencies)}` : "", reason: dependencies.length ? null : "this task has no dependencies" },
@@ -939,7 +949,11 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
     // from semantic.mjs's effectivePolicy, which intersects the task's policy
     // with the role's — so a read-only role arrives here with an EMPTY
     // allow-list, which is exactly the authorization it should have.
-    ctx.policy = policyOverride ? { ...policyOverride, verify } : { allowed, forbidden, verify, controlCategory };
+    // The NETWORK grant travels with the path policy and is taken from the TASK
+    // even under a semantic override: a role narrows what may be written, and
+    // has no business widening what may be reached.
+    const network = task.network === "allow" ? "allow" : "deny";
+    ctx.policy = policyOverride ? { ...policyOverride, verify, network } : { allowed, forbidden, verify, controlCategory, network };
     if (controlCategory && !Object.hasOwn(WS.WORKSPACE_DURABLE_CATEGORIES, controlCategory))
       bad("POLICY_VIOLATION", `task #${taskId}: unknown control category "${controlCategory}" — one of: ${Object.keys(WS.WORKSPACE_DURABLE_CATEGORIES).join(", ")}`);
     // An EMPTY allow-list is a policy failure for a normal run and the CORRECT
@@ -1262,6 +1276,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     const worker = await exec.execute({
       cwd: repoRoot, prompt: compiled.text, identity,
       extraArgs: PACK.workerArgs({ packPath: pack.path }),
+      network: policy.network,
       isCancelled: () => existsSync(cancelFile),
       onEvent: (type, payload) => ev(type, payload),
     });
@@ -1277,6 +1292,10 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       // is how this record came to omit the GIT_CONFIG_* credential strip and
       // the SCH identity vars the child actually got.
       environment_names: worker.environment_names ?? [],
+      // The network grant this worker ran under, in the executor's own words —
+      // not restated here, for the same reason `environment_names` is not
+      // recomputed here.
+      network: worker.network ?? null,
     });
     ev("run.worker_output_recorded", { stdout: worker.stdout_evidence, stderr: worker.stderr_evidence });
 
@@ -1372,7 +1391,7 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     // ---- verification (SCH's commands, SCH's process results)
     ev("run.verification_started", { commands: policy.verify.map(displayCommand) });
     const verification = await runVerification(policy.verify, {
-      cwd: repoRoot, runDirPath: runPath, env,
+      cwd: repoRoot, runDirPath: runPath, env, network: policy.network,
       timeoutMs: num(env.SCH_VERIFY_TIMEOUT_MS, DEFAULT_VERIFY_TIMEOUT_MS),
       maxBytes: num(env.SCH_MAX_OUTPUT_BYTES, DEFAULT_MAX_OUTPUT_BYTES),
     });

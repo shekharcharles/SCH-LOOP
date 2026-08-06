@@ -759,6 +759,20 @@ Stated plainly, because a false claim here is worse than a missing feature.
   directory holding exactly the skills SCH approved for it, and the worker is
   launched with `--setting-sources project` so nothing from `~/.claude` reaches
   it. The pack lives beside the worktree, never inside your repository.
+- **A task must be GRANTED the network, and the grant is on the record.** Every
+  task carries `network: deny|allow` — `state.mjs task-set <n> --network allow` —
+  and it defaults to **deny**, so a task nobody thought about is not permitted.
+  The run's `worker.json` names the policy the worker actually ran under, what it
+  did, and which hosts were exempt. Under `deny` the worker *and its verification
+  children* get `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` aimed at a closed
+  loopback port, with `NO_PROXY` covering loopback, `.anthropic.com`,
+  `.claude.ai`, and — only when the operator's own configuration names them —
+  the `ANTHROPIC_BASE_URL` host, `.amazonaws.com` (Bedrock) or `.googleapis.com`
+  (Vertex). **This stops clients that honour proxy environment variables — curl,
+  wget, git-over-http, npm, pip — and stops nothing else.** It is a speed bump
+  and a declaration, not a boundary; read the matching entry below before relying
+  on it. If your model endpoint is not on that exempt list, the run cannot reach
+  its model: set `--network allow` for that task.
 - **A worker cannot invoke a built-in that schedules work or edits your config.**
   `schedule`, `loop`, `init`, `update-config`, `fewer-permission-prompts` and
   `run` are denied by argv; a built-in a future CLI ships that nobody has
@@ -804,8 +818,8 @@ and says so:
   detected either. Only an OS boundary fixes those.
 - **Workers are not OS-sandboxed.** They run as your user with your PATH.
 - **Parallelism multiplies uncontained workers.** N workers means N processes
-  with your PATH and your network. Every containment caveat here applies N times
-  over, so raise `--max-parallel` deliberately.
+  with your PATH and N unrestricted routes to the network. Every containment
+  caveat here applies N times over, so raise `--max-parallel` deliberately.
 - **SCH merges dependency branches automatically.** This is the one merge it
   performs, into a disposable per-task checkout, refusing anything that does not
   apply cleanly. Nothing is ever merged into your branches on your behalf.
@@ -815,7 +829,20 @@ and says so:
 - **A skill that needs its own scripts cannot be packed.** Only `SKILL.md` and
   its supporting documents are carried; hooks, scripts and nested plugin
   manifests are refused and recorded in the pack's refusals.
-- **Network access is unrestricted.**
+- **Network access is not PREVENTED, and no connection is detected.** The `deny`
+  policy above is proxy environment variables and nothing more. A raw socket,
+  `ssh`, a DNS query, or any client that ignores those variables — Node's own
+  `fetch` did, through v22 — reaches the internet exactly as it did before, and a
+  worker that can write three lines of JavaScript has one. The model endpoint is
+  exempt by construction, because the worker *is* an HTTP client to it, so at
+  least one route out stays open by design. SCH records which policy the run was
+  given; it never sees a packet, so "did this worker phone home?" remains
+  unanswerable. Restricting this needs an OS boundary — Windows Firewall wants
+  elevation, `unshare -n`/nftables want root, `sandbox-exec` is deprecated and
+  macOS-only — and SCH has none of them. Read `network deny is proxy variables
+  and nothing else` in `tests/containment.test.mjs`: it asserts the mechanism sets
+  proxy variables and *only* proxy variables, so the day this grows into real
+  prevention, that test fails and says so.
 - **A process that detaches into a new session survives the tree-kill.**
 - **The credential strip removes the *ambient* helper only.** A worker that
   deliberately re-adds one — `git -c credential.helper=manager`, or `git config
