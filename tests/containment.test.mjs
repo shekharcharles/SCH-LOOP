@@ -7,10 +7,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter, isAbsolute } from "node:path";
 import { fixture, initWorkspace, addTask, fakeQueueEnv, runQueue, EXEC, RUN } from "./helpers.mjs";
 import { ROOT as _R, url as _u } from "./helpers.mjs";
 const PACK = await import(_u(_R + "/scripts/pack.mjs"));
@@ -144,4 +144,120 @@ test("KNOWN GAP: denying a built-in blocks invocation but not listing", () => {
   // can be deleted.
   assert.ok(PACK.deniedBuiltins().length > 0,
     "denial is by name, so the names are known and still listed");
+});
+
+// ---------------------------------------------------------------- the PATH
+
+// The operator's PATH is the only allowlisted value that names places to load
+// EXECUTABLE CODE from, and it is handed to the child verbatim. A relative
+// entry there resolves against the CHILD'S working directory — which for a
+// verification command is the worktree the worker just finished writing. So
+// `PATH=node_modules/.bin:...` plus a worker that writes `node_modules/.bin/npm`
+// decides what SCH's own `npm test` means.
+//
+// Measured, not assumed (Windows, Node 24 / libuv): a bare executable name is
+// NOT looked up in the child's cwd, and an EMPTY PATH entry is ignored — but a
+// literal "." IS honoured and resolves against the child's cwd.
+test("a relative PATH entry never reaches a bounded child", () => {
+  const parent = { PATH: [".", "node_modules/.bin", "", "relative/bin"].join(delimiter) };
+  const entries = EXEC.buildEnv(parent).PATH.split(delimiter);
+  assert.deepEqual(entries.filter(Boolean), [],
+    "a child's cwd is worker-controlled, so a PATH entry relative to it is worker-controlled too");
+});
+
+test("absolute PATH entries are preserved exactly, in order", () => {
+  const abs = process.platform === "win32"
+    ? ["C:\\Windows\\System32", "C:\\Program Files\\Git\\cmd", "\\\\server\\share\\bin"]
+    : ["/usr/local/bin", "/usr/bin", "/bin"];
+  const parent = { PATH: [abs[0], ".", abs[1], "", abs[2]].join(delimiter) };
+  assert.deepEqual(EXEC.buildEnv(parent).PATH.split(delimiter), abs,
+    "narrowing PATH must remove only what cannot legitimately be there");
+});
+
+test("SCH resolves its own executables from absolute PATH entries only", () => {
+  // Same hazard one level up: `resolveExecutable` joins each PATH entry with the
+  // command name and stats it, so a relative entry is resolved against SCH's own
+  // cwd — the managed repository.
+  //
+  // The canary lives UNDER the current directory, not in the system temp
+  // directory: `path.relative` across Windows drive letters returns an absolute
+  // path, so a tmpdir-based relative entry silently stops being relative and the
+  // test passes without exercising anything. The absolute lookup below is the
+  // positive control — it proves the canary is findable, so `null` from the
+  // relative form means REFUSED rather than "not there".
+  const rel = "sch-relpath.tmp";                 // gitignored by `*.tmp`
+  const d = join(process.cwd(), rel);
+  try {
+    mkdirSync(d, { recursive: true });
+    const canary = join(d, "sch-canary");
+    writeFileSync(canary, "");
+    assert.equal(isAbsolute(rel), false, "precondition: the entry under test is relative");
+    assert.equal(EXEC.resolveExecutable("sch-canary", { PATH: d, PATHEXT: ".EXE" }), canary,
+      "positive control: an absolute entry finds the canary");
+    assert.equal(EXEC.resolveExecutable("sch-canary", { PATH: rel, PATHEXT: ".EXE" }), null,
+      "the same directory, named relatively, must be refused");
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------- what the OS already gives
+
+// The one OS-level containment property SCH actually has, and it is inherited
+// rather than built: on Windows every process libuv spawns is assigned to a
+// global Job Object created with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so when the
+// SCH process dies the bounded children die with it — no tree walk, no
+// cooperation, no chance for SCH to run cleanup code first.
+//
+// It hangs entirely on `detached` being FALSE on win32 in the spawn options, and
+// nothing else asserts that. Flip that one boolean "for symmetry with POSIX" and
+// orphan cleanup disappears silently. Hence this test, which kills the SCH-side
+// process with NO tree walk and asks the OS what happened.
+test("win32: killing SCH kills its bounded children, with no tree walk", { skip: process.platform !== "win32" }, async () => {
+  const d = mkdtempSync(join(tmpdir(), "sch-joblimit-"));
+  const pidFile = join(d, "pids.json");
+  const alive = (pid) => {
+    try { return execFileSync("tasklist", ["/FI", `PID eq ${pid}`], { encoding: "utf8" }).includes(String(pid)); }
+    catch { return false; }
+  };
+  let pids = null;
+  try {
+    // A stand-in for SCH: it starts one child through the REAL bounded
+    // subprocess implementation, and one that deliberately detaches.
+    writeFileSync(join(d, "host.mjs"), `
+import { writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+const SUB = await import(${JSON.stringify(_u(_R + "/scripts/subprocess.mjs"))});
+const idle = ["-e", "setTimeout(() => {}, 600000)"];
+let bounded = null;
+SUB.runProcess({ exe: process.execPath, args: idle, timeoutMs: 600000,
+                 onStart: (c) => { bounded = c.pid; tryWrite(); } });
+// A worker that leaves the job on purpose. DETACHED_PROCESS + the job's
+// SILENT_BREAKAWAY_OK is all it takes.
+const escapee = spawn(process.execPath, idle, { stdio: "ignore", detached: true, windowsHide: true });
+escapee.unref();
+function tryWrite() {
+  if (bounded && escapee.pid) writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify({ bounded, escapee: escapee.pid }));
+}
+escapee.on("spawn", tryWrite);
+setTimeout(() => {}, 600000);
+`);
+    const host = spawn(process.execPath, [join(d, "host.mjs")], { stdio: "ignore", windowsHide: true });
+    for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 100));
+    pids = JSON.parse(readFileSync(pidFile, "utf8"));
+    assert.ok(alive(pids.bounded), "precondition: the bounded child is running");
+
+    // No /T. Nothing walks the tree. Only the OS can kill the children now.
+    execFileSync("taskkill", ["/PID", String(host.pid), "/F"], { stdio: "pipe" });
+    for (let i = 0; i < 60 && alive(pids.bounded); i++) await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(alive(pids.bounded), false,
+      "the bounded child must not outlive SCH — libuv's job object is kill-on-close, and `detached` must stay false on win32");
+    // The limitation, in the same breath: this is not a boundary a worker
+    // cannot cross. It is cleanup a cooperative worker cannot avoid.
+    assert.equal(alive(pids.escapee), true,
+      "KNOWN GAP: a child that spawns detached breaks out of the job and survives SCH");
+  } finally {
+    for (const pid of Object.values(pids ?? {}))
+      try { execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "pipe" }); } catch {}
+    rmSync(d, { recursive: true, force: true });
+  }
 });

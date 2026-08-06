@@ -11,3 +11,5 @@
 - Adding code that writes outside the repository → give the test fixture an env override for that root in the same change, or the first test run pollutes the operator's real machine.
 - Patching source through a shell heredoc → use raw strings for the replacement text; the heredoc collapses `\n` before the interpreter sees it and writes real newlines into string literals.
 - A long background command killed twice at the same elapsed time → rerun it in the foreground with an explicit timeout instead of a third background attempt; a reaped task and a failing one look identical from the log tail.
+- Probing whether A shadows B by comparing their output → first prove the two outputs DIFFER on this machine; a canary that happens to print the same string as the control (hostname == username) reports "no effect" for every outcome.
+- Deriving a relative path for a test from `path.relative(cwd, target)` → assert it is actually relative, or pin the target under cwd; across Windows drive letters `relative()` returns an ABSOLUTE path and the case under test silently stops existing.
