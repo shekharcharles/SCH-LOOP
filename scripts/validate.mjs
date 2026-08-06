@@ -272,14 +272,26 @@ for (const [cond, msg] of [
     ok(!/DELIVERED/.test(semSrc) || true, "");
   }
 
-  // The dashboard must not grow a remote write for any of this. Approval and
-  // task authority stay on the CLI until the dashboard has authentication.
+  // The dashboard must not grow a remote write for any of this. It HAS
+  // authentication now; authentication is not authorization, and approval and
+  // task authority stay on the CLI regardless.
   {
     const dash = read("scripts/dashboard.mjs");
     const post = dash.slice(dash.indexOf('if (req.method === "POST")'), dash.indexOf('url.pathname === "/api/projects"'));
     for (const route of ["human-gate", "approve", "deliver", "task-transition", "scheduler-cancel"])
-      ok(!post.includes(route), `the dashboard must not expose "${route}" as a write — it has no authentication`);
+      ok(!post.includes(route), `the dashboard must not expose "${route}" as a write — that authority is the operator's, on the CLI`);
+    // The README states both of these as facts about the running server.
+    ok(/const BIND = process\.env\.SCH_BIND \|\| "127\.0\.0\.1"/.test(dash),
+      "the dashboard must default to loopback — the README says listening on every interface is an explicit choice");
+    ok(/if \(!tokenOk\(presentedToken\(req, url\)\)\) return unauthorized\(res\)/.test(dash),
+      "every dashboard request must be authenticated before it is routed — the README claims exactly that");
   }
+
+  // The README's containment section names sch-run-task.mjs as THE exception:
+  // it passes no work root, so the worker runs in the operator's own checkout.
+  // If that ever stops being true the sentence becomes a lie, so enforce it.
+  ok(!/workRoot/.test(read("scripts/sch-run-task.mjs")),
+    "sch-run-task.mjs must pass no workRoot — the README documents it as the runner that stays in your working tree");
 
   // The whole point of the narrow ignore rules: never hide the durable record.
   // Checked against the rules the module actually emits, not against its prose.
