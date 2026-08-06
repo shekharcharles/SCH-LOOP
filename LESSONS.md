@@ -15,3 +15,4 @@
 - Driving a CLI subcommand or flag from a new test → copy the invocation from an existing test that already creates that state instead of inferring it from the command's name; an invented flag surfaces as a spawn failure deep in the fixture, far from the line that guessed it.
 - Converting a sequential loop to run work concurrently → audit EVERY exit path for the drain, not only the paths the new code added; the pre-existing returns are the ones that now abandon live work.
 - Recognising a privileged artifact by its shape (subject line, parent count) → record its identity (hash) at creation and match that instead; shape is forgeable, identity is not.
+- Editing code that lives inside a template literal (a client script held in a server-side string) → keep backticks, `${` and backslashes out of everything inserted, comments included, and run `node --check` before the test suite, or one character in a comment fails every test as "the server exited 1".

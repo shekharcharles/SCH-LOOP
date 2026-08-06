@@ -1516,6 +1516,47 @@ export function cancelRun(wsDir, runId, reason = "operator cancelled") {
 
 // -------------------------------------------------------- dashboard projection
 
+// Which tasks are being worked on RIGHT NOW. The lease is the authority, not the
+// run records: a run whose process died leaves `state: "active"` on disk forever,
+// and a screen that counted those would report a busy queue that is not running.
+// Same liveness test the lease acquisition makes — unexpired AND its owner alive.
+export function liveLeases(wsDir) {
+  const dir = WS.locksDir(wsDir);
+  if (!existsSync(dir)) return [];
+  const out = [];
+  for (const f of readdirSync(dir).filter((n) => n.startsWith("task-") && n.endsWith(".json"))) {
+    let held = null;
+    try { held = JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { continue; }
+    const expired = !held?.expires_at || new Date(held.expires_at).getTime() < Date.now();
+    if (expired || !held.pid || !pidAlive(Number(held.pid))) continue;
+    out.push({ task_id: String(held.task_id), run_id: held.run_id ?? null, pid: held.pid,
+      acquired_at: held.acquired_at ?? null, expires_at: held.expires_at });
+  }
+  return out.sort((a, b) => (a.task_id < b.task_id ? -1 : a.task_id > b.task_id ? 1 : 0));
+}
+
+// Did the worker stay in its own worktree? One VERDICT, decided here, because
+// this is the distinction a screen keeps getting wrong: "we looked and found
+// nothing" and "we could not finish looking" are not the same answer, and only
+// one of them is a clean bill of health. `null` — never checked at all — is a
+// third thing again, and the caller must be able to tell it from the other two.
+function territorySummary(t) {
+  if (!t) return null;
+  const violated = (t.violated ?? []).map((v) => ({
+    id: v.id,
+    added: (v.added ?? []).length, removed: (v.removed ?? []).length, changed: (v.changed ?? []).length,
+    // A few names so the row says WHICH file appeared, not merely that one did.
+    paths: [...(v.added ?? []).slice(0, 3), ...(v.changed ?? []).slice(0, 3)],
+  }));
+  const unknown = (t.unknown ?? []).map((u) => ({ id: u.id, why: u.why ?? null }));
+  return {
+    verdict: violated.length ? "VIOLATED" : unknown.length ? "INCONCLUSIVE" : (t.watched ?? 0) ? "CLEAN" : "UNWATCHED",
+    watched: t.watched ?? 0, checked_at: t.checked_at ?? null, violated, unknown,
+    // What was NOT watched, so nobody reads a clean verdict as more than it is.
+    excluded: [...new Set((t.results ?? []).flatMap((r) => r.excluded ?? []))],
+  };
+}
+
 // The smallest useful view: what ran, on what, how it went, and whether it wants
 // a human. Bounded — never the whole stdout, only references to it.
 export function runProjection(projectId, { limit = 10 } = {}) {
@@ -1525,7 +1566,7 @@ export function runProjection(projectId, { limit = 10 } = {}) {
   try { wsDir = WS.resolveWorkspaceDir(WS.repositoryRoot(project.path) ?? project.path, { mustExist: true }); }
   catch (e) { return { project: projectId, runs: [], available: false, reason: e.message }; }
   const dir = WS.runsDir(wsDir);
-  if (!existsSync(dir)) return { project: projectId, runs: [], available: true };
+  if (!existsSync(dir)) return { project: projectId, runs: [], available: true, in_flight: liveLeases(wsDir) };
   const ids = readdirSync(dir).filter((d) => d.startsWith("RUN-")).sort().reverse().slice(0, limit);
   const runs = [];
   for (const id of ids) {
@@ -1533,6 +1574,8 @@ export function runProjection(projectId, { limit = 10 } = {}) {
     try { r = JSON.parse(readFileSync(join(dir, id, "run.json"), "utf8")); } catch { continue; }
     let manifest = null;
     try { manifest = JSON.parse(readFileSync(join(dir, id, "prompt-manifest.json"), "utf8")); } catch {}
+    let terr = null;
+    try { terr = JSON.parse(readFileSync(join(dir, id, "territory.json"), "utf8")); } catch {}
     const events = readEvents(join(dir, id));
     runs.push({
       run_id: r.run_id, task_id: r.task_id, attempt: r.attempt, state: r.state,
@@ -1548,6 +1591,9 @@ export function runProjection(projectId, { limit = 10 } = {}) {
         refusals: (r.pack.refusals ?? []).map((x) => ({ path: x.path ?? String(x), why: x.why ?? null })),
       } : null,
       prompt_characters: manifest?.total_characters ?? null,
+      // Whether it stayed where it was put. Absent on runs that predate the
+      // check — reported as null, never as "clean".
+      territory: territorySummary(terr),
       verification: r.verification ?? null, effects: r.effects ?? null,
       outcome: r.outcome, failure: r.failure,
       attention_required: ["NEEDS_DECISION", "FAILED"].includes(r.outcome) ? (r.failure?.message ?? r.outcome) : null,
@@ -1556,7 +1602,11 @@ export function runProjection(projectId, { limit = 10 } = {}) {
     });
   }
   const active = runs.find((r) => r.state === "active") ?? null;
-  return { project: projectId, available: true, workspace: wsDir, active, runs };
+  // `active` is ONE run and there can be several: the queue runs up to
+  // `max_parallel` tasks at once. It stays for the callers that already read it;
+  // `in_flight` is the honest answer, and comes from the live leases rather than
+  // from this bounded window of run records.
+  return { project: projectId, available: true, workspace: wsDir, active, in_flight: liveLeases(wsDir), runs };
 }
 
 // Read one completed run back from disk — the restart path. Nothing about a

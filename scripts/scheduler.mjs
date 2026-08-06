@@ -765,6 +765,9 @@ export async function runQueue({
 const summary = (r) => ({
   scheduler_id: r.scheduler_id, project_id: r.project_id, state: r.state,
   stop_reason: r.stop_reason, failure: r.failure, tasks: r.tasks,
+  // How many tasks this queue was allowed to run AT ONCE. Absent on schedulers
+  // that predate parallel execution — null, which is not the same as 1.
+  max_parallel: r.max_parallel ?? null,
   tasks_delivered: r.tasks_delivered, total_attempts: r.total_attempts,
   started_at: r.started_at, ended_at: r.ended_at, duration_ms: r.duration_ms,
 });
