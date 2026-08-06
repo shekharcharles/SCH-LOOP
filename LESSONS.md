@@ -12,3 +12,4 @@
 - Patching source through a shell heredoc → use raw strings for the replacement text; the heredoc collapses `\n` before the interpreter sees it and writes real newlines into string literals.
 - A long background command killed twice at the same elapsed time → rerun it in the foreground with an explicit timeout instead of a third background attempt; a reaped task and a failing one look identical from the log tail.
 - A long background command piped through `tail`/`head` leaves its output file empty until it exits → run it unpiped so progress is visible; "no output yet" is not evidence of a hang.
+- Reaching for PowerShell here-string syntax (`@'...'@`) inside the Bash tool → its markers land verbatim in the argument; use a bash heredoc or `-F file` for any multi-line string.
