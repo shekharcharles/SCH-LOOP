@@ -16,7 +16,11 @@ import { ROOT as _R, url as _u } from "./helpers.mjs";
 const PACK = await import(_u(_R + "/scripts/pack.mjs"));
 const WT = await import(_u(_R + "/scripts/worktree.mjs"));
 
-test("KNOWN GAP: a write outside the worktree is neither prevented nor detected", async () => {
+// Narrower than it once was. A write into SCH's own territory — the main
+// repository, a sibling task's checkout — IS detected now and fails the run as
+// OUTSIDE_WORKTREE_WRITE (tests/worker.test.mjs). What remains uncovered is
+// everywhere else on the disk, which is what this canary sits in.
+test("KNOWN GAP: a write outside SCH's territory is neither prevented nor detected", async () => {
   const fx = fixture("gap-outside");
   const outside = mkdtempSync(join(tmpdir(), "sch-outside-"));
   const victim = join(outside, "outside-the-worktree.canary");

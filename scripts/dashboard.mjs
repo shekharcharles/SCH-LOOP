@@ -2,8 +2,8 @@
 // SCH Loop dashboard — LIVE (SSE), no-flicker, fluid. Zero dependencies.
 // Server pushes state over Server-Sent Events whenever state.json changes; the
 // client patches only the sections that changed and never touches a section you
-// are typing in. Binds 0.0.0.0 (Tailscale). Set SCH_BIND to a Tailscale IP to
-// hide it from the local LAN.
+// are typing in. Binds 127.0.0.1 and authenticates every request against the
+// shared token below; set SCH_BIND (e.g. a Tailscale IP) to reach it from a phone.
 
 import { createServer } from "node:http";
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
