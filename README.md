@@ -35,9 +35,11 @@ Set up SCH Loop from GitHub. Install it into my HOME directory (next to my
 4. Global context: ensure ~/.claude/SCH-loop/SCH-LOOP.md is imported by my global
    rules — add the line `@SCH-loop/SCH-LOOP.md` to ~/.claude/CLAUDE.md (create
    CLAUDE.md if absent). Do NOT run Claude's own /init — SCH Loop is self-sufficient.
-5. Start the dashboard: `node ~/.claude/SCH-loop/scripts/dashboard.mjs` (background)
-   → http://localhost:4600. On Windows, ~/.claude/SCH-loop/sch-dashboard.bat also
-   gives start/stop + auto-start.
+5. Start the dashboard: `node ~/.claude/SCH-loop/scripts/dashboard.mjs` (background).
+   It binds 127.0.0.1 and prints a one-time URL carrying its token
+   (`http://127.0.0.1:4600/?token=…`) — open THAT, not the bare port; every
+   request without the token is 401. On Windows, ~/.claude/SCH-loop/sch-dashboard.bat
+   also gives start/stop + auto-start.
 6. Run /reload-skills, confirm /skills lists the six sch-* skills, then tell me how
    to start my first project.
 
@@ -55,7 +57,7 @@ gh repo clone <OWNER>/SCH-LOOP ~/.claude/SCH-loop && cd ~/.claude/SCH-loop
 node scripts/state.mjs init
 cp -r skills/sch-* ~/.claude/skills/          # skills are path-portable ($HOME/.claude/SCH-loop)
 echo '@SCH-loop/SCH-LOOP.md' >> ~/.claude/CLAUDE.md   # global pointer (self-sufficient; no /init needed)
-node scripts/dashboard.mjs                     # → http://localhost:4600 (Tailscale-reachable)
+node scripts/dashboard.mjs                     # → prints http://127.0.0.1:4600/?token=… — open that
 # in Claude Code: /reload-skills  → confirm /skills shows the sch-* skills
 ```
 
@@ -82,8 +84,11 @@ claude
 /loop 45m /sch-run --project <cr>
 ```
 
-Then steer from the **dashboard** (`localhost:4600`, or your Tailscale IP on
-mobile): answer any question inline, add a feature/lead, bump priority, HALT.
+Then steer from the **dashboard**: answer any question inline, add a feature/lead,
+bump priority, HALT. It binds `127.0.0.1` and authenticates every request, so the
+URL to open is the tokenised one it prints at startup. Reaching it from a phone
+over Tailscale is an explicit second step — `SCH_BIND=0.0.0.0` (or your Tailscale
+IP) — and the token still applies.
 
 ---
 
@@ -160,12 +165,13 @@ scripts/phases.mjs        The phase engine: HUMAN / AGENT / CODE / GATE, the def
 scripts/humangates.mjs    Typed human decisions (12 kinds) bound to project/task/run/attempt/
                           phase/state-version/proposal hash/diff hash, with expiry and
                           automatic invalidation when the thing being approved moves.
-scripts/scheduler.mjs     The SEQUENTIAL graph scheduler: project lease, graph validation,
-                          one ready task at a time, the 16-phase task workflow, bounded
-                          retries with compact repair context, delivery through the existing
-                          controller, typed stop reasons, deterministic project completion.
+scripts/scheduler.mjs     The graph scheduler: project lease, graph validation, up to
+                          --max-parallel ready tasks (default 1, and never two whose paths
+                          overlap), the selected workflow's phases, bounded retries with
+                          compact repair context, delivery through the existing controller,
+                          typed stop reasons, deterministic project completion.
 scripts/sch-run-queue.mjs CLI for the queue: --project <id> [--max-tasks --max-duration-ms
-                          --phase --stop-after-task --dry-run]. One task at a time, then stop.
+                          --max-parallel --phase --stop-after-task --dry-run]. Then stop.
 scripts/projection.mjs    The SQLite operational PROJECTION (node:sqlite, no dependency) for
                           the dashboard: migrations, WAL, idempotent event projection,
                           bounded text, rebuildable. Never the authority.
@@ -213,7 +219,9 @@ scripts/suitelock.mjs     The full-test-suite lease — one complete suite at a 
 scripts/sch-test.mjs      Runs the suite under that lease with a heartbeat and an explicit
                           outer timeout: `--focused`, `--status`, `--release`.
 scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project control,
-                          answer box, skill picker, filter; fluid, no flicker. Port 4600.
+                          answer box, skill picker, filter; fluid, no flicker. Port 4600,
+                          bound to 127.0.0.1, every request authenticated against the
+                          shared token at $SCH_HOME/dashboard-token.
 scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
 scripts/secret-scan-hook.mjs  PreToolUse hook — makes the secret gate UNBYPASSABLE on git commit/push.
 scripts/report.mjs        Findings → CERT-In report (Markdown + print-to-PDF HTML). Refuses while a coverage cell is untested.
@@ -303,8 +311,8 @@ human-gate-list [--all true] | human-gate-show --gate <id>
 human-gate-open --type <TYPE> --question "..." [--task <n>]
 human-gate-decide --gate <id> --decision APPROVED|REJECTED --approver <name>
 projection-status [--rebuild true]                   (the SQLite operational projection)
-sch-run-queue.mjs --project <id> [--max-tasks n --max-duration-ms n --phase n
-                 --stop-after-task n --dry-run --quiet]        (the sequential queue)
+sch-run-queue.mjs --project <id> [--max-tasks n --max-duration-ms n --max-parallel n
+                 --phase n --stop-after-task n --dry-run --quiet]         (the queue)
 finding-add | finding-list | finding-set | chains   (offensive)
 retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
 provenance --ref <auth-ref>                          (who shared which asset, when, how)
@@ -401,7 +409,7 @@ operational truth (registration, task status, dependencies, execution mode, skil
 profile, locks, run references, audit). `.sch-loop/` holds the portable record.
 `SCH_HOME` is deliberately **not** in the worker's environment.
 
-**Preflight fails closed** on 37 conditions — project, task, real repository path,
+**Preflight fails closed** on every one of these — project, task, real repository path,
 repository root, execution mode, task eligibility, dependency completion,
 capability profile, skill approval and hash staleness, workspace + manifest,
 branch and HEAD, a clean tree and index, merge/rebase/cherry-pick/revert/bisect in
@@ -529,8 +537,9 @@ sets it, with the commit, branch, remote, pushed range and verification time
 attached. Every delivery is a transaction under `.sch-loop/runs/<run-id>/delivery/`
 with append-only, fail-closed events and a read-only dashboard projection at
 `/api/deliveries`. **Delivery and approval are operator authority and stay on the
-CLI: they must not be exposed remotely until the dashboard has authentication,
-which it does not have.**
+CLI.** The dashboard now authenticates every request, but authentication is not
+authorization: it still exposes no delivery, approval, human-gate, transition or
+scheduler-cancel write, and `validate.mjs` fails the build if one appears.
 
 ## 🧮 Sequential graph scheduler
 
@@ -604,7 +613,9 @@ the transition service — it refuses a canonical state name, refuses
 `delivered`, and records what it did (including, when the closed machine would
 have refused the move, that refusal beside it).
 
-**Phases.** Sixteen of them per task, each `HUMAN`, `AGENT`, `CODE` or `GATE`:
+**Phases.** How many a task runs is the workflow template's decision (5 to 16 —
+see *Reusable workflows* below); the default `FULL_SDLC` runs all sixteen, each
+`HUMAN`, `AGENT`, `CODE` or `GATE`:
 
 ```text
 prepare CODE · task-readiness GATE · compile-context CODE · implement AGENT
@@ -692,8 +703,10 @@ passing — each clause reported with its evidence.
 verification, binds delivery to the verified candidate, requires the configured
 approvals, pushes only through the delivery controller above, and becomes
 `DELIVERED` only after that controller has proved the commit on the remote with
-its own fetch. One task at a time; the next is claimed only once the previous
-one's commit is actually on the remote.
+its own fetch. At the default `--max-parallel 1` that is strictly one task at a
+time — the next is claimed only once the previous one's commit is actually on the
+remote. Above 1 the scheduler runs up to N ready tasks at once and never two
+whose paths overlap; see [Worker containment](#worker-containment-what-is-and-is-not-true).
 
 **Observability.** Versioned scheduler events (`scheduler.*`) with event id,
 timestamp, project, scheduler run, task, attempt, phase, actor, causation,
@@ -810,8 +823,9 @@ and says so:
   performs, into a disposable per-task checkout, refusing anything that does not
   apply cleanly. Nothing is ever merged into your branches on your behalf.
 - **Denied built-in skills still appear in the worker's skill listing.** Denial
-  blocks invocation, not listing, so roughly a dozen names remain as context
-  cost. No flag removes them without removing the pack as well.
+  blocks invocation, not listing, so the six denied names (plus any unclassified
+  new built-in, which is also denied) remain as context cost. No flag removes
+  them without removing the pack as well.
 - **A skill that needs its own scripts cannot be packed.** Only `SKILL.md` and
   its supporting documents are carried; hooks, scripts and nested plugin
   manifests are refused and recorded in the pack's refusals.
