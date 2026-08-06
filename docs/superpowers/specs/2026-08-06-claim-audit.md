@@ -1,6 +1,6 @@
 # Claim audit — README.md, SCH-LOOP.md, skills/SCH/SKILL.md
 
-**Date:** 2026-08-06 · **Baseline:** `main` @ e74dc84 · **Method:** every factual
+**Date:** 2026-08-06 · **Baseline:** `main` @ 246e0dd, 471 tests passing · **Method:** every factual
 claim in the three operator-facing documents traced to the test or the code that
 proves it. Status is one of **PROVEN** (a named test asserts it), **UNPROVEN**
 (the code does it, nothing pins it), **FALSE** (the code contradicts it).
