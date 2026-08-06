@@ -60,9 +60,9 @@ know where their project stands, not to read a manual.
 | `resume` | `state.mjs profile-set --project <id> --resume true` |
 | `stop` | `profile-set --mode PAUSED`, then `state.mjs lock-release --project <id>` |
 | `approve` | `state.mjs skill-trust <id> --state APPROVED` / `profile-set` |
-| `dashboard` | http://localhost:4600 (start: `node scripts/dashboard.mjs`) |
+| `dashboard` | `node scripts/dashboard.mjs` — 127.0.0.1:4600; open the `?token=…` URL it prints |
 | `doctor` | `node scripts/doctor.mjs` (`--fix` to install what is missing) |
-| `queue` | `node scripts/sch-run-queue.mjs --project <id>` (the sequential scheduler) |
+| `queue` | `node scripts/sch-run-queue.mjs --project <id>` (the graph scheduler; `--max-parallel` defaults to 1) |
 | `graph-validate` | `state.mjs graph-validate --project <id>` / `graph-show` |
 | `scheduler` | `state.mjs scheduler-status / scheduler-list / scheduler-cancel` |
 | `phases` | `state.mjs phase-list --task <n>` / `gate-report --task <n>` |
@@ -109,9 +109,9 @@ any incoming or unrelated outgoing commit, pushes without force, then fetches
 again and asks the remote before the task becomes `delivered`. It never merges,
 rebases, amends, resets or force-pushes. One run, one commit, then stop.
 
-## The sequential queue, and the boundary with `/SCH run`
+## The queue, and the boundary with `/SCH run`
 
-The queue now executes itself, **one task at a time**:
+The queue now executes itself, **one task at a time by default**:
 
 ```bash
 node scripts/state.mjs workspace-init --project <id>      # once per repository
@@ -125,7 +125,8 @@ node scripts/state.mjs human-gate-decide --project <id> --gate <HG-id> \
      --decision APPROVED --approver <you>
 ```
 
-Each task runs its 16-phase workflow: deterministic `CODE` phases, one `AGENT`
+Each task runs the phases its workflow template declares — 16 under the default
+`FULL_SDLC`, as few as 5 under another: deterministic `CODE` phases, one `AGENT`
 phase in a **fresh external worker**, named `GATE` phases that decide whether the
 graph may move, and a `HUMAN` phase for delivery approval. A phase starts
 unaccepted; a zero exit code only means the process returned. Retries are
@@ -144,9 +145,13 @@ Parallel execution exists: `--max-parallel N` (default 1) runs several ready
 tasks at once, never two that own the same paths, and a dependent task starts
 from its dependencies' delivered work.
 
-Still **not implemented**: OS-level worker sandboxing, the authenticated
-dashboard, the SCH MCP, distributed workers. If asked for any of
-those, say plainly that they are planned and name the next milestone:
+The dashboard **is** authenticated now: it binds `127.0.0.1`, every request needs
+the shared token at `$SCH_HOME/dashboard-token`, and it still exposes no delivery,
+approval or human-gate write — authentication is not authorization.
+
+Still **not implemented**: OS-level worker sandboxing, a full SCH MCP,
+distributed workers. If asked for any of those, say plainly that they are planned
+and name the next milestone:
 
 > Give the worker an OS boundary: a sandboxed process that cannot write outside
 > its worktree, cannot reach the network unless the task says so, and cannot
@@ -172,8 +177,9 @@ worker, and a skill needing its own scripts cannot be packed. A write into the m
 fails the run as `OUTSIDE_WORKTREE_WRITE`. A write anywhere ELSE, a network
 call or a detached background process is still invisible to it, the credential strip only removes the *ambient*
 helper, and none of this is an OS boundary. Fully unattended operation is
-therefore still not supported. Never claim otherwise, never imply parallel
-execution works, and never simulate it.
+therefore still not supported. Never claim otherwise, and never simulate a run.
+Parallelism does not change any of this — N workers means N uncontained
+processes, so `--max-parallel` above 1 is a deliberate choice, not a default.
 
 ## Skills are recommended, never assumed
 

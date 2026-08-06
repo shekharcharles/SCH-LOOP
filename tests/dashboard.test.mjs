@@ -48,17 +48,20 @@ async function dashboard(fx, extraEnv = {}) {
     env: { ...process.env, SCH_HOME: fx.home, SCH_PORT: "0", SCH_BIND: "127.0.0.1", NODE_NO_WARNINGS: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const port = await new Promise((resolve, reject) => {
+  // Wait for the SECOND banner line — the one carrying the token — not merely
+  // the first thing with a colon and a digit in it. Resolving on line one made
+  // the buffer a race: whether line two had arrived yet depended on chunking.
+  const banner = await new Promise((resolve, reject) => {
     let buf = "";
-    const t = setTimeout(() => reject(new Error("the dashboard never reported a port: " + buf)), 15000);
+    const t = setTimeout(() => reject(new Error("the dashboard never reported its URL: " + buf)), 15000);
     child.stdout.on("data", (d) => {
       buf += d;
-      const m = buf.match(/:(\d+)\b/);
-      if (m) { clearTimeout(t); resolve(Number(m[1])); }
+      const m = buf.match(/open it with: http:\/\/(\S+?):(\d+)\/\?token=(\S+)/);
+      if (m) { clearTimeout(t); resolve({ bind: m[1], port: Number(m[2]), token: m[3], text: buf }); }
     });
     child.on("exit", (c) => { clearTimeout(t); reject(new Error(`exited ${c}: ${buf}`)); });
   });
-  return { child, port, base: `http://127.0.0.1:${port}`, stop: () => child.kill() };
+  return { child, ...banner, base: `http://127.0.0.1:${banner.port}`, stop: () => child.kill() };
 }
 
 const tokenOf = (fx) => readFileSync(join(fx.home, "dashboard-token"), "utf8").trim();
@@ -116,6 +119,19 @@ test("a token in the query sets a cookie, and the cookie alone then works", asyn
     const jar = cookie.split(";")[0];
     const again = await fetch(d.base + "/", { headers: { cookie: jar } });
     assert.equal(again.status, 200);
+  } finally { d.stop(); fx.done(); }
+});
+
+// Every other test here sets SCH_BIND explicitly, so the DEFAULT — the thing the
+// README states, and the thing that decides whether an unstarted operator is
+// exposed on their LAN — was the one part nothing covered.
+test("with no SCH_BIND the server binds loopback and prints the tokenised URL", async () => {
+  const fx = fixture("dash-default-bind");
+  const d = await dashboard(fx, { SCH_BIND: undefined });
+  try {
+    assert.equal(d.bind, "127.0.0.1", "listening on every interface must be an explicit choice");
+    assert.equal(d.token, tokenOf(fx),
+      "the operator must be handed a URL that works, or they will disable the check");
   } finally { d.stop(); fx.done(); }
 });
 

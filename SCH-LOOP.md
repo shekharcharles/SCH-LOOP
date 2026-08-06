@@ -1,8 +1,11 @@
 # SCH Loop — autonomous build/pentest loop (present on this machine)
 
 `SCH_HOME` = `$HOME/.claude/SCH-loop`. Engine CLI:
-`node $HOME/.claude/SCH-loop/scripts/state.mjs <cmd>`. Dashboard:
-http://localhost:4600 (Tailscale-reachable). Skills are installed globally
+`node $HOME/.claude/SCH-loop/scripts/state.mjs <cmd>`. Dashboard: port 4600, bound
+to `127.0.0.1`, and **every request is authenticated** against the shared token at
+`$SCH_HOME/dashboard-token` — open the `?token=…` URL it prints at startup;
+anything else gets 401. Reaching it over Tailscale needs `SCH_BIND` set
+explicitly. Skills are installed globally
 (`sch-spec`, `sch-plan`, `sch-run`, `sch-review`, `sch-ship`, `sch-learn`).
 
 **Two commands run everything:** `/sch-spec` starts any work (dev PRD or pentest
@@ -51,13 +54,14 @@ the remote** before marking the task `delivered` (a terminal status distinct fro
 `merged`, unreachable from `task-set`). Approve with
 `state.mjs delivery-approve --run <RUN-id> --approver <you>`.
 
-**The sequential queue (one task at a time, then stop):**
+**The queue (one task at a time by default, then stop):**
 `sch-run-queue.mjs --project <id>` executes the task graph itself. Code owns the
 graph, agents own bounded semantic phases, typed envelopes cross phase
 boundaries and named gates define acceptance — the model never selects a task,
 never decides whether a phase passed, never counts its own retries and never
-authorizes a delivery. Each task runs 16 phases (`CODE`/`AGENT`/`GATE`/`HUMAN`),
-starts unaccepted, and only reaches `ACCEPTED` when every required gate has run
+authorizes a delivery. Each task runs the phases its workflow template declares
+(`CODE`/`AGENT`/`GATE`/`HUMAN`) — 16 under the default `FULL_SDLC`, as few as 5
+under another — starts unaccepted, and only reaches `ACCEPTED` when every required gate has run
 AND passed; a zero exit code only means the process returned. Every task gets a
 fresh worker, its own verification, and delivery through the controller above —
 `DELIVERED` only after the remote was asked independently. Retries are bounded
