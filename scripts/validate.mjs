@@ -255,10 +255,17 @@ for (const [cond, msg] of [
       }
     // The scheduler must actually dispatch each registered handler.
     const sched = read("scripts/scheduler.mjs");
-    for (const id of SEMx.SEMANTIC_IDS)
-      if (id !== "repair")   // repair reuses the builder path; it has no separate call site yet
-        ok(new RegExp(`runSemantic\\(\\s*"[a-z-]+"\\s*,\\s*"${id}"`).test(sched),
-          `scheduler.mjs never dispatches the "${id}" semantic handler — a registered handler nothing calls is the same defect in a new place`);
+    // Every registered handler must be REACHED. A handler may be dispatched by
+    // a literal or chosen at the call site (a retry runs `repair` where a first
+    // attempt runs `implement`), so both forms count - but "registered and never
+    // called" does not, for any of them. `repair` was exempt here for a whole
+    // milestone, and the exemption is what let it stay unreachable.
+    for (const id of SEMx.SEMANTIC_IDS) {
+      const literal = new RegExp("runSemantic\\(\\s*\"[a-z-]+\"\\s*,\\s*\"" + id + "\"");
+      const chosen = new RegExp("[?:]\\s*\"" + id + "\"");
+      ok(literal.test(sched) || chosen.test(sched),
+        `scheduler.mjs never dispatches the "${id}" semantic handler — a registered handler nothing calls is the same defect in a new place`);
+    }
     const semSrc = read("scripts/semantic.mjs");
     ok(/NOT by tool sandboxing/.test(semSrc), "semantic.mjs must state honestly that read-only is enforced by inspection, not sandboxing");
     ok(/ROLE_POLICY_VIOLATION/.test(sched), "a read-only role that writes must fail as a role-policy violation");

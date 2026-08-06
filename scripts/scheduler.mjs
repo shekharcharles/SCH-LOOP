@@ -1342,7 +1342,14 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
   // role is resolved, the write policy is the task's, and the plan (when a
   // planner ran) arrives as typed fields, not as a conversation.
   if (inWorkflow("implement")) {
-    p = await runSemantic("implement", "implement", { planEnvelope: planArtifact });
+    // A retry is not a second first attempt. The `repair` handler exists for
+    // exactly this - a repairer told what broke, not a builder told to start
+    // again - and until now it was registered, validated, and never reached:
+    // every attempt ran as `implement` and the repair context was handed to a
+    // builder. The phase KEEPS its id so the workflow shape does not change
+    // between attempts; only who is asked, and how, changes.
+    const semantic = attempt > 1 ? "repair" : "implement";
+    p = await runSemantic("implement", semantic, { planEnvelope: planArtifact });
     if (p.state !== "ACCEPTED")
       return stopWith(p, p.state === "NEEDS_DECISION" ? "NEEDS_DECISION" : p.state === "CANCELLED" ? "CANCELLED" : "FAILED", p.failure);
   }
