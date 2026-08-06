@@ -5,7 +5,7 @@
 // There is no broker and no second machine here. Everything below runs in this
 // process, on this filesystem. What is proven is the SEAM — the contract, the
 // refusals and the lease arithmetic. What is NOT proven is that any of it works
-// over a network; see docs/adr/0009-the-distributed-worker-seam.md.
+// over a network; see docs/adr/0010-the-distributed-worker-seam.md.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";

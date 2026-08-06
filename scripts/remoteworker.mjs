@@ -12,7 +12,7 @@
 // transport that ships is LOOPBACK — same process, same filesystem — which proves
 // the CONTRACT and nothing about a network. Everything that a network would break
 // is written down here as a refusal rather than a hope. See
-// docs/adr/0009-the-distributed-worker-seam.md for what is unproven.
+// docs/adr/0010-the-distributed-worker-seam.md for what is unproven.
 //
 // The three things that are actually hard, and where each is handled:
 //
