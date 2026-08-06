@@ -73,6 +73,26 @@ const SECRET_NAMES = /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)$/i;
 
 const upper = (s) => String(s).toUpperCase();
 
+// PATH is the only allowlisted value that names places to load EXECUTABLE CODE
+// from, and until now it was handed to the child verbatim. A NON-ABSOLUTE entry
+// there is resolved against the CHILD'S working directory — and for a
+// verification command that directory is the worktree the worker just finished
+// writing. So an operator whose PATH contains `node_modules/.bin` or `.` lets a
+// worker decide what SCH's own `npm test` means, by writing a file.
+//
+// Absolute entries only. That is not a sandbox and does not pretend to be one:
+// it removes one specific way a worker's OUTPUT becomes SCH's next INPUT.
+//
+// Measured on Windows (Node 24 / libuv) rather than assumed: a bare executable
+// name is NOT searched for in the child's cwd, and an EMPTY PATH entry is
+// ignored — but a literal "." IS honoured and resolves against the child's cwd.
+// POSIX `execvp` treats an empty entry as the cwd outright. Both forms go.
+//
+// Consequence, stated because it is a real behaviour change: an operator who
+// deliberately puts a relative directory on PATH loses it inside SCH's children.
+const absolutePathEntries = (value) =>
+  String(value).split(delimiter).filter((e) => e !== "" && isAbsolute(e)).join(delimiter);
+
 // Explicit construction: start empty, copy what is allowed, then add the run
 // identity. SCH_HOME is deliberately absent — a worker must not be able to find,
 // let alone edit, the operational state that grades it.
@@ -80,7 +100,7 @@ export function buildEnv(parent = process.env, extra = {}) {
   const allow = new Set(ENV_ALLOW.map(upper));
   const env = {};
   for (const [k, v] of Object.entries(parent))
-    if (allow.has(upper(k)) && v !== undefined) env[k] = v;
+    if (allow.has(upper(k)) && v !== undefined) env[k] = upper(k) === "PATH" ? absolutePathEntries(v) : v;
   for (const [k, v] of Object.entries(extra)) if (v !== undefined) env[k] = String(v);
   return env;
 }
@@ -94,13 +114,18 @@ export const redactEnv = (env) =>
 // Resolve a command to a real file. A bare name is looked up on PATH (honouring
 // PATHEXT on Windows) so the run records the exact file it started, not a name
 // that might resolve differently later.
+//
+// The same absolute-only rule as `buildEnv`, one level up: this joins each PATH
+// entry with the command name and stats it, so a relative entry is resolved
+// against SCH'S OWN cwd — the managed repository — and a file sitting there
+// would decide which `claude` SCH launches.
 export function resolveExecutable(cmd, env = process.env) {
   if (!cmd) return null;
   const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
   if (cmd.includes("/") || cmd.includes("\\") || isAbsolute(cmd)) return isFile(cmd) ? cmd : null;
   const exts = process.platform === "win32"
     ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-  for (const dir of String(env.PATH || "").split(delimiter).filter(Boolean))
+  for (const dir of String(env.PATH || "").split(delimiter).filter((d) => d !== "" && isAbsolute(d)))
     for (const ext of ["", ...exts]) {
       const p = join(dir, cmd + ext);
       if (isFile(p)) return p;
