@@ -965,15 +965,18 @@ pushed and remotely verified) · `NEEDS_DECISION` · `FAILED`.
 
 ### What is still NOT wired, stated plainly
 
-- The `repair` handler is registered and validated but shares the builder's call
-  site; there is no separate repair phase in any built-in template yet.
+- **A retry now runs the `repair` handler**, with the `repairer` role and its
+  own prompt, instead of running the builder a second time. The phase keeps
+  its id so the workflow shape does not change between attempts.
 - Role resolution is the execution authority, but only one executor exists — the
   Claude CLI. Per-phase model routing is configuration no second executor
   consumes yet, and the CLI does not accept a reasoning/model argument from SCH.
 - Usage is `UNKNOWN` for every real run, because nothing reports it. That is the
   honest state, not a placeholder to be filled with zeros.
-- The scheduler runs phases in a fixed canonical order; a template chooses WHICH
-  phases run, not the order they run in.
+- The scheduler still runs phases in a fixed canonical order; a template
+  chooses WHICH phases run, not the order they run in. Making order
+  template-driven means turning the execution path from a fixed sequence into
+  a driven loop, and that is its own milestone rather than a detail.
 
 ## Rules that keep it safe
 - If it's not in the PRD/SCOPE or a planned task, it doesn't exist.
