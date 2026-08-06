@@ -26,6 +26,7 @@ import * as TERR from "./territory.mjs";
 import * as WT from "./worktree.mjs";
 import { computeCandidate } from "./candidate.mjs";
 import * as PROC from "./procedures.mjs";
+import * as KNOW from "./knowledge.mjs";
 import * as USAGE from "./usage.mjs";
 import { ClaudeCliExecutor, buildEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
 import { getProject, loadState, mutateState, auditLog, event as stateEvent } from "./state.mjs";
@@ -73,7 +74,8 @@ export const isRetryable = (code) => outcomeFor(code) === "RETRYABLE";
 // Event vocabulary — versioned, append-only, consumed by the dashboard.
 export const EVENTS = [
   "run.created", "run.preflight_started", "run.preflight_completed", "run.preflight_failed",
-  "run.lease_acquired", "run.worker_started", "run.worker_output_recorded", "run.worker_exited",
+  "run.lease_acquired", "run.knowledge_compiled",
+  "run.worker_started", "run.worker_output_recorded", "run.worker_exited",
   "run.worker_timed_out", "run.worker_cancelled", "run.handoff_parsed", "run.handoff_rejected",
   "run.effects_inspected", "run.effects_rejected", "run.verification_started",
   "run.verification_completed", "run.verification_failed", "run.outcome_recorded",
@@ -1230,9 +1232,25 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
     });
     const previous = previousHandoff(wsDir, taskId, runId, attempt);
     const procs = PROC.load(PROC.proceduresFor("agent-run", { role: roleConfig?.role_id ?? null }));
+
+    // WHAT THE PROJECT ALREADY WROTE DOWN. Its PRD, its ADRs, its lessons —
+    // ingested deterministically, cut to the few entries that bear on this task,
+    // and capped at a TENTH of the prompt budget so knowledge can never crowd
+    // out the task itself. Everything left out is on the record next to it.
+    const knowledge = KNOW.compileKnowledge({
+      repoRoot, task,
+      maxCharacters: Math.min(KNOW.LIMITS.selection_characters, Math.floor(promptMax / 10)),
+    });
+    write("knowledge-manifest.json", knowledge.manifest);
+    ev("run.knowledge_compiled", {
+      index_hash: knowledge.manifest.index_hash, documents: knowledge.manifest.documents_ingested,
+      included: knowledge.manifest.included.length, characters: knowledge.manifest.contributed_characters,
+      omitted_entries: knowledge.manifest.omitted_entries ?? 0,
+    });
+
     const compiled = compilePrompt({
       identity, task, policy, skills: skills.selected, dependencies: deps,
-      previousHandoff: previous, knowledge: task.graphContext ?? [], maxChars: promptMax,
+      previousHandoff: previous, knowledge: [...(task.graphContext ?? []), ...knowledge.lines], maxChars: promptMax,
       procedures: procs.procedures,
       planEnvelope, semanticHandler,
       promptTemplate: roleConfig?.prompt_template ?? "worker@1",
