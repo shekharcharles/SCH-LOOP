@@ -229,6 +229,11 @@ scripts/graph.mjs         Self-contained knowledge graph (node:sqlite, FTS5, no 
                           Symbols, endpoints, findings, decisions + the edges between them.
 scripts/graph-mcp.mjs     MCP server over that graph (hand-written JSON-RPC, no SDK) so
                           Claude Code / Codex / OpenCode all query it the same way.
+scripts/mcp.mjs           MCP server over the loop's OPERATIONAL state — projects, tasks,
+                          the dependency graph, supervised runs, human decision gates.
+                          READ ONLY: it reuses the same projections the dashboard does, so
+                          no prompt, skill body or credential crosses it, and starting,
+                          delivering and approving stay operator-only on the CLI.
 scripts/graph-index.mjs   Keeps the graph current AUTOMATICALLY — a PostToolUse hook indexes
                           every edited file; --all does a first full pass. No manual init, ever.
 scripts/graph-seed.mjs    Loads what past tasks/commits/decisions already learned into the graph.
@@ -360,7 +365,9 @@ completion.
 
 ### Planned, and NOT implemented
 
-OS-level worker sandboxing · a full SCH MCP ·
+OS-level worker sandboxing · a **writing** SCH MCP (the read side ships as
+`scripts/mcp.mjs`; starting, delivering and approving over MCP do not, and will
+not until there is something to authenticate the caller with) ·
 automatic knowledge ingestion · distributed workers · Temporal (evaluation only)
 · migrating state authority into SQLite. The queue scheduler runs **one task at a
 time by default**; `--max-parallel N` runs up to N, and stops at a defined
