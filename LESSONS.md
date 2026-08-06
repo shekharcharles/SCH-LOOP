@@ -11,3 +11,5 @@
 - Adding code that writes outside the repository → give the test fixture an env override for that root in the same change, or the first test run pollutes the operator's real machine.
 - Patching source through a shell heredoc → use raw strings for the replacement text; the heredoc collapses `\n` before the interpreter sees it and writes real newlines into string literals.
 - A long background command killed twice at the same elapsed time → rerun it in the foreground with an explicit timeout instead of a third background attempt; a reaped task and a failing one look identical from the log tail.
+- A test helper that resolves on the first stdout chunk matching a loose pattern → match the LAST line the helper's callers need instead; stream chunking decides how much of a multi-line banner is in the buffer, so an assertion on the rest passes or fails by timing.
+- Auditing a document for stale claims → grep the feature's own keywords across every doc AND the code comments in one pass; the contradiction is usually inside a single file, written months apart, and reading top-to-bottom is what makes it invisible.
