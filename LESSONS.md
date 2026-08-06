@@ -11,3 +11,5 @@
 - Adding code that writes outside the repository → give the test fixture an env override for that root in the same change, or the first test run pollutes the operator's real machine.
 - Patching source through a shell heredoc → use raw strings for the replacement text; the heredoc collapses `\n` before the interpreter sees it and writes real newlines into string literals.
 - A long background command killed twice at the same elapsed time → rerun it in the foreground with an explicit timeout instead of a third background attempt; a reaped task and a failing one look identical from the log tail.
+- A test that spawns a child process and awaits a reply → reject every pending waiter from the child's `exit` and `error` events; without that a missing or crashed child reads as a per-request timeout, multiplying the run time and hiding the stderr that names the real fault.
+- Driving a CLI subcommand or flag from a new test → copy the invocation from an existing test that already creates that state instead of inferring it from the command's name; an invented flag surfaces as a spawn failure deep in the fixture, far from the line that guessed it.
