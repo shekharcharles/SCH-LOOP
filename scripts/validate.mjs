@@ -125,6 +125,7 @@ for (const [cond, msg] of [
   const scheduler = read("scripts/scheduler.mjs");
   const humangates = read("scripts/humangates.mjs");
   const projection = read("scripts/projection.mjs");
+  const remoteworker = read("scripts/remoteworker.mjs");
   for (const [cond, msg] of [
     // the graph is audited, never silently rewritten
     [/FALSE_EDGE_SUSPECTED/.test(graph), "taskgraph.mjs must flag undefended dependency edges"],
@@ -167,6 +168,16 @@ for (const [cond, msg] of [
     [/PROJECTION of them|It is not the authority/.test(projection), "projection.mjs must state that it is not the authority"],
     [/INSERT OR IGNORE INTO events/.test(projection), "event projection must be idempotent by event id"],
     [!/from ["']better-sqlite3["']|require\(["']better-sqlite3/.test(projection), "the projection must use node:sqlite, not a dependency"],
+    // the distributed worker seam. Each of these is a guarantee a network
+    // silently removes, which is exactly why it is checked rather than trusted.
+    [remoteworker.includes("shared_workspace"),
+      "remoteworker.mjs must refuse a transport whose evidence cannot reach this filesystem"],
+    [remoteworker.includes("assertCredentialFree"),
+      "a job envelope carrying any credential value must be refused before dispatch"],
+    [(() => { const body = (remoteworker.split("export function buildJob")[1] ?? "").split("\n}")[0]; return body && !/\benv\b/i.test(body); })(),
+      "a job envelope must carry NO environment — a worker host builds its own from its own allowlist"],
+    [runner.includes("holderLiveness") && scheduler.includes("holderLiveness"),
+      "lease liveness must go through holderLiveness — a pid is only evidence on the machine that issued it"],
   ]) ok(cond, msg);
 
   // 6e. the software-factory runtime. Same principle: the claims the README

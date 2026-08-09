@@ -24,3 +24,5 @@
 - Deriving a relative path for a test from `path.relative(cwd, target)` → assert it is actually relative, or pin the target under cwd; across Windows drive letters `relative()` returns an ABSOLUTE path and the case under test silently stops existing.
 - A RED assertion comparing an actual against a constant the change has yet to export → both sides are `undefined` and it passes vacuously; assert against a literal, or against a shape the missing export cannot satisfy.
 - Claiming a protection whose effect no hermetic test can reach (network, OS boundary, remote behaviour) → implement only the part the test CAN see, and write the residual into the README and a KNOWN-GAP test in the same commit as the mechanism.
+- A long background command piped through `tail`/`head` leaves its output file empty until it exits → run it unpiped so progress is visible; "no output yet" is not evidence of a hang.
+- Reaching for PowerShell here-string syntax (`@'...'@`) inside the Bash tool → its markers land verbatim in the argument; use a bash heredoc or `-F file` for any multi-line string.
