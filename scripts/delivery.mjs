@@ -764,10 +764,15 @@ export function deliverRun({ projectId, runId, env = process.env, commitMessageO
       ahead = outgoing.length;
     }
     // SCH's own integration merges are part of the base a dependent task was
-    // given, not work it smuggled in. Recognised by BOTH the exact subject SCH
-    // writes AND by having two parents - a subject alone is forgeable by a worker.
+    // given, not work it smuggled in. The authoritative check is membership in
+    // the record SCH itself wrote when it created the merge — a worker never
+    // gets write access to that path, so it cannot add an entry for a merge it
+    // forged. Subject and parent-count are kept as a cheap shape sanity check,
+    // not the identity check: text and parent count alone are forgeable.
+    const recordedMergeCommits = new Set(WT.readIntegrationMerges(wsDir, taskId).map((m) => m.merge_commit));
     const isIntegrationMerge = (c) =>
-      INTEGRATION_SUBJECT.test(C.gitOut(repoRoot, "show", "-s", "--format=%s", c) ?? "")
+      recordedMergeCommits.has(c)
+      && INTEGRATION_SUBJECT.test(C.gitOut(repoRoot, "show", "-s", "--format=%s", c) ?? "")
       && ((C.gitOut(repoRoot, "rev-list", "--parents", "-n", "1", c) ?? "").trim().split(/\s+/).length === 3);
     const unrelated = outgoing.filter((c) => !isIntegrationMerge(c));
     artifact("outgoing.json", {

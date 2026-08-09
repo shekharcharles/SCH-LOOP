@@ -1124,6 +1124,30 @@ test("a duration limit signals the workers still running, it does not just outli
   } finally { fx.done(); }
 });
 
+test("a task-count limit hit mid-flight still drains the other worker, leaving none RUNNING", async () => {
+  const fx = queueFixture("queue-maxtasks-drain");
+  try {
+    // Two independent, unblocked tasks under maxParallel 2 both start in the
+    // same pass. a completes almost instantly; b is still mid-flight when
+    // tasks_delivered hits maxTasks 1. MAX_TASKS_REACHED is not a HARD_STOP
+    // (it should not force-cancel a sibling that is doing nothing wrong), so
+    // the top-of-loop check must WAIT for b instead of abandoning it.
+    const a = addTask(fx, { title: "a", allow: "src/a.js" });
+    const b = addTask(fx, { title: "b", allow: "src/b.js" });
+    const rec = await runQueue(fx, {
+      env: fakeQueueEnv(fx, {
+        [a]: { write: [{ path: "src/a.js", content: "// a" + NL }] },
+        [b]: { waitForFile: join(fx.home, "never-appears"), waitMs: 1500 },
+      }),
+      maxTasks: 1, maxParallel: 2,
+    });
+    assert.equal(rec.stop_reason, "MAX_TASKS_REACHED", JSON.stringify(rec).slice(0, 300));
+    for (const id of [a, b])
+      assert.notEqual(states(fx)[id], "RUNNING",
+        `task #${id} was left RUNNING when the task limit stopped the queue — a limit that abandons a live worker is not a stop`);
+  } finally { fx.done(); }
+});
+
 test("a retry runs the REPAIRER, not the builder a second time", async () => {
   const fx = queueFixture("repair-role");
   try {

@@ -9,9 +9,9 @@
 // One worktree per TASK, not per attempt: a retry must inherit the previous
 // attempt's uncommitted work, and the scheduler already promises that.
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve, dirname } from "node:path";
 import { git, repositoryRoot, contains } from "./workspace.mjs";
 import { gitRun } from "./candidate.mjs";
 
@@ -160,7 +160,30 @@ export function mergeDependencies({ worktreePath, repoRoot, deps = [] }) {
       return { ok: false, code: "DEPENDENCY_MERGE_CONFLICT", task_id: id, branch,
         message: `task #${id}'s branch "${branch}" does not merge cleanly into this task's base - resolve it and re-queue; retrying produces the same conflict` };
     }
-    merged.push({ task_id: id, branch, commit });
+    // The commit this merge just CREATED, not the dependency's own commit —
+    // delivery matches outgoing history against this, and a worker (denied
+    // write access to the record below) cannot forge an entry for one it made.
+    const mergeCommit = gt(worktreePath, "rev-parse", "HEAD");
+    merged.push({ task_id: id, branch, commit, merge_commit: mergeCommit });
   }
   return { ok: true, merged };
+}
+
+// Where SCH records the merge commits it creates when fanning a task's
+// dependencies into its worktree. Lives outside the worktree — a worker is
+// denied this path the same way it is denied the rest of `.sch-loop/` — so
+// delivery can trust membership here over a commit's subject line, which a
+// worker can forge (matching text, matching parent count, wrong content).
+export const integrationMergesPath = (wsDir, taskId) => join(wsDir, "integration-merges", `task-${taskId}.json`);
+
+export function recordIntegrationMerges(wsDir, taskId, merged) {
+  if (!merged?.length) return;
+  const p = integrationMergesPath(wsDir, taskId);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(merged, null, 2));
+}
+
+export function readIntegrationMerges(wsDir, taskId) {
+  try { return JSON.parse(readFileSync(integrationMergesPath(wsDir, taskId), "utf8")); }
+  catch { return []; }
 }

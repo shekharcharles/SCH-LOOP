@@ -42,10 +42,14 @@ everything, so the gate fails on inconclusive rather than passing.
 ## Alternatives rejected
 
 - **Content hashes instead of size+mtime.** Hashing every file in a repository
-  twice per run costs more than the protection is worth. The consequence is
-  stated rather than hidden: a writer that restores both the byte count and the
-  mtime is not detected. This is a defence against a careless escape, not a
-  determined one.
+  twice per run costs more than the protection is worth — true for a directory
+  git does not track, which is why the fallback walk still uses size+mtime and
+  still misses a writer that restores both. It stopped being true for a git
+  checkout: `territory.mjs`'s git fast path asks `git status` for the changed
+  set first, then runs `git hash-object` on just those files — narrowing to
+  what git already flags makes content hashing cheap, and a restored mtime no
+  longer hides an edit there. The rejection stands only for the untracked,
+  whole-tree case.
 - **Watching the whole filesystem.** Not possible without an OS boundary, which
   is a later milestone. Claiming it here would be the exact false claim this
   project refuses to make.
@@ -69,4 +73,6 @@ everything, so the gate fails on inconclusive rather than passing.
   invisible.
 - Nothing is prevented. The worker still runs as the operator with the
   operator's PATH and unrestricted network.
-- A writer that forges size and mtime defeats this entirely.
+- A writer that forges size and mtime defeats the fallback walk entirely (a
+  directory git does not track). In a git checkout the fast path hashes
+  content instead, so this no longer applies there.

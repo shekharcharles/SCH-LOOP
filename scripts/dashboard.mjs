@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, watch } 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
-import { loadRegistry, saveRegistry, loadState, getProject, event, saveState, OFFENSIVE, suggestInterval } from "./state.mjs";
+import { loadRegistry, saveRegistry, loadState, getProject, event, OFFENSIVE, suggestInterval } from "./state.mjs";
 import { projection as capabilityProjection } from "./skills.mjs";
 import { runProjection } from "./runner.mjs";
 import { deliveryProjection } from "./delivery.mjs";

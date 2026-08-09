@@ -542,11 +542,11 @@ export async function runQueue({
     for (;;) {
       // ---- budget checks BEFORE selecting anything: a scheduler that starts a
       // task it has no time to finish leaves a worker's change in the tree.
-      if (Date.now() - started > limitMs) return finish("MAX_DURATION_REACHED");
-      if (record.tasks_delivered >= limitTasks) return finish("MAX_TASKS_REACHED");
-      if (record.consecutive_failures >= budgets.max_consecutive_failures) return finish("CONSECUTIVE_FAILURE_LIMIT");
-      if (record.total_attempts >= budgets.max_total_attempts) return finish("PROJECT_BUDGET_EXCEEDED");
-      if (!liveSchedulerLease(wsDir) || liveSchedulerLease(wsDir)?.scheduler_id !== id) return finish("SCHEDULER_LEASE_LOST");
+      if (Date.now() - started > limitMs) return finishDraining("MAX_DURATION_REACHED");
+      if (record.tasks_delivered >= limitTasks) return finishDraining("MAX_TASKS_REACHED");
+      if (record.consecutive_failures >= budgets.max_consecutive_failures) return finishDraining("CONSECUTIVE_FAILURE_LIMIT");
+      if (record.total_attempts >= budgets.max_total_attempts) return finishDraining("PROJECT_BUDGET_EXCEEDED");
+      if (!liveSchedulerLease(wsDir) || liveSchedulerLease(wsDir)?.scheduler_id !== id) return finishDraining("SCHEDULER_LEASE_LOST");
 
       // ---- validate the graph, every pass. It is cheap, and a queue edited by
       // a person between two tasks is the normal case, not the exotic one.
@@ -555,7 +555,7 @@ export async function runQueue({
       emit("scheduler.graph_validated", { ok: validation.ok, problems: validation.problems.map((p) => p.code), warnings: validation.warnings.map((w) => w.code) });
       try { if (db) PROJ.upsertGraph(db, projectId, GRAPH.projectGraph(projectId, { canonicalState: TR.canonicalState, state })); } catch {}
       if (!validation.ok)
-        return finish("POLICY_VIOLATION", { code: "GRAPH_INVALID", message: validation.problems.map((p) => `${p.code}: ${p.message}`).join(" | ") });
+        return finishDraining("POLICY_VIOLATION", { code: "GRAPH_INVALID", message: validation.problems.map((p) => `${p.code}: ${p.message}`).join(" | ") });
 
       // ---- a pending human gate stops the queue. It does not skip the task and
       // move on: the operator asked to be asked, and running past them is how a
@@ -563,7 +563,7 @@ export async function runQueue({
       const open = HG.pending(projectId, { state });
       if (open.length) {
         emit("scheduler.task_blocked", { human_gates: open.map((g) => ({ id: g.id, type: g.gate_type, task: g.task_id })) });
-        return finish("NEEDS_DECISION", { code: "HUMAN_GATE_PENDING", message: `${open.length} human gate(s) awaiting a decision: ${open.map((g) => `${g.id} (${g.gate_type})`).join(", ")}` });
+        return finishDraining("NEEDS_DECISION", { code: "HUMAN_GATE_PENDING", message: `${open.length} human gate(s) awaiting a decision: ${open.map((g) => `${g.id} (${g.gate_type})`).join(", ")}` });
       }
 
       // ---- an ANSWERED gate puts its task back in the queue. The operator
@@ -678,8 +678,10 @@ export async function runQueue({
           if (wt.created && (task.deps ?? []).length) {
             const fan = WT.mergeDependencies({ worktreePath: wt.path, repoRoot, deps: task.deps });
             if (!fan.ok) return noWorktree(fan.code, fan.message);
-            if (fan.merged.length)
+            if (fan.merged.length) {
+              WT.recordIntegrationMerges(wsDir, task.id, fan.merged);
               emit("scheduler.dependencies_merged", { merged: fan.merged }, { taskId: task.id });
+            }
           }
 
           const outcome = await executeTask({
