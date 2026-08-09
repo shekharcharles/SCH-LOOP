@@ -29,6 +29,7 @@ import * as PROC from "./procedures.mjs";
 import * as KNOW from "./knowledge.mjs";
 import * as USAGE from "./usage.mjs";
 import { ClaudeCliExecutor, buildEnv, networkEnv, GIT_CREDENTIAL_STRIP, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_OUTPUT_BYTES } from "./executor.mjs";
+import { holderLiveness, HOST_ID } from "./remoteworker.mjs";
 import { getProject, loadState, mutateState, auditLog, event as stateEvent } from "./state.mjs";
 
 // ------------------------------------------------------------- vocabulary
@@ -127,6 +128,11 @@ const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e)
 // Fail on a live lease; recover a stale one (expired, or its owner is gone).
 // Never steal an active lease — two workers in one repository is how a run
 // destroys another run's evidence.
+//
+// Liveness is `holderLiveness`, not `pidAlive`, because the two are only the same
+// thing while every holder is on this machine. A lease written by another host
+// carries a pid from another pid space: checking it here would either resurrect a
+// dead holder (the number happens to be in use locally) or bury a live one.
 export function acquireLease(wsDir, { projectId, taskId, runId, ttlMs = LEASE_TTL_MS }) {
   mkdirSync(WS.locksDir(wsDir), { recursive: true });
   const p = leasePath(wsDir, taskId);
@@ -134,17 +140,24 @@ export function acquireLease(wsDir, { projectId, taskId, runId, ttlMs = LEASE_TT
   if (existsSync(p)) {
     let held = null;
     try { held = JSON.parse(readFileSync(p, "utf8")); } catch { held = null; }
-    const expired = !held?.expires_at || new Date(held.expires_at).getTime() < Date.now();
-    const ownerGone = !held?.pid || !pidAlive(Number(held.pid));
-    if (!expired && !ownerGone)
-      return { ok: false, failure: { code: "LEASE_CONFLICT", message: `task ${taskId} is already leased by run ${held.run_id} (pid ${held.pid}, expires ${held.expires_at})` }, held };
+    const state = holderLiveness(held);
+    if (state.live)
+      return { ok: false, failure: { code: "LEASE_CONFLICT", message: `task ${taskId} is already leased by run ${held.run_id} (${state.reason})` }, held };
+    // Not live is not the same as safe to take. A silent holder on another
+    // machine cannot be killed from here and cannot be proven stopped, so its
+    // lease is left exactly where it is and a person decides.
+    if (!state.recoverable)
+      return { ok: false, failure: { code: "LEASE_CONFLICT", message: `task ${taskId} is leased by run ${held.run_id} ${state.reason}. SCH will not take it: recovering a remote lease automatically would put two workers in one worktree. Confirm that host is not running the task, then delete ${p}.` }, held };
     // stale: recovered, and said out loud rather than silently overwritten
     try { unlinkSync(p); } catch {}
     recovered = held;
   }
   const lease = {
     schema_version: SCHEMA_VERSION, project_id: projectId, task_id: String(taskId), run_id: runId,
-    pid: process.pid, acquired_at: now(), heartbeat_at: now(),
+    // Which machine holds this, so the next reader knows whether the pid below
+    // means anything to it. A remote worker's heartbeat overwrites host_id with
+    // its own — see remoteworker.renewLease.
+    host_id: HOST_ID, pid: process.pid, acquired_at: now(), heartbeat_at: now(),
     expires_at: new Date(Date.now() + ttlMs).toISOString(),
   };
   WS.writeAtomic(p, JSON.stringify(lease, null, 2));
@@ -1044,8 +1057,9 @@ export function preflight({ projectId, taskId, env = process.env, executor = nul
     const lp = leasePath(ctx.wsDir, taskId);
     if (existsSync(lp)) {
       let held = null; try { held = JSON.parse(readFileSync(lp, "utf8")); } catch {}
-      const live = held?.expires_at && new Date(held.expires_at).getTime() > Date.now() && held.pid && pidAlive(Number(held.pid));
-      if (live) bad("LEASE_CONFLICT", `task #${taskId} is leased by run ${held.run_id} (pid ${held.pid})`);
+      const state = holderLiveness(held);
+      if (state.live) bad("LEASE_CONFLICT", `task #${taskId} is leased by run ${held.run_id} (${state.reason})`);
+      else if (held && !state.recoverable) bad("LEASE_CONFLICT", `task #${taskId} is leased by run ${held.run_id} ${state.reason}`);
     }
   }
 
@@ -1297,6 +1311,10 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       network: policy.network,
       isCancelled: () => existsSync(cancelFile),
       onEvent: (type, payload) => ev(type, payload),
+      // Only an executor whose worker is on another machine uses this: the lease
+      // is renewed from the WORKER's heartbeat, never from this process's
+      // optimism. A local executor ignores it.
+      leaseFile: leasePath(wsDir, taskId),
     });
     write("stdout.log", worker.stdout ?? "");
     write("stderr.log", worker.stderr ?? "");
@@ -1305,6 +1323,11 @@ export async function runTask({ projectId, taskId, env = process.env, executor =
       started_at: worker.started_at, ended_at: worker.ended_at, duration_ms: worker.duration_ms,
       exit_code: worker.exit_code, signal: worker.signal, timed_out: worker.timed_out,
       cancelled: worker.cancelled, cleanup: worker.cleanup,
+      // WHERE it ran. Null for a local worker; the transport and the machine for
+      // a remote one. Evidence that cannot name its machine stops being auditable
+      // the moment there is more than one.
+      transport: worker.transport ?? null, host_id: worker.host_id ?? null,
+      heartbeats: worker.heartbeats ?? null, remote_cancel: worker.remote_cancel ?? null,
       stdout: worker.stdout_evidence, stderr: worker.stderr_evidence,
       // From the executor, which built it — not recomputed here. Recomputing it
       // is how this record came to omit the GIT_CONFIG_* credential strip and

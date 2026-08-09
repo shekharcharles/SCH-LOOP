@@ -142,6 +142,10 @@ scripts/sch-deliver-run.mjs  CLI for one delivery: --project <id> --run <RUN-id>
 scripts/executor.mjs      Provider-neutral AgentExecutor + ClaudeCliExecutor: a fresh
                           external worker process, allowlisted environment, SCH-owned
                           timeout/cancel, process-tree kill, bounded output.
+scripts/remoteworker.mjs  The distributed-worker SEAM: the WorkerTransport contract, the
+                          cross-host lease predicate (a pid is evidence only on the machine
+                          that issued it), the credential-free job envelope, and LOOPBACK —
+                          an in-process transport. NO transport crosses a machine boundary.
 scripts/runner.mjs        The supervised single-task orchestrator: preflight, lease,
                           baseline, prompt compilation, handoff parsing, ACTUAL git-effect
                           inspection, deterministic verification, outcome, run events.
@@ -394,6 +398,18 @@ it does not yet replace them · distributed workers · Temporal (evaluation only
 time by default**; `--max-parallel N` runs up to N, and stops at a defined
 terminal condition either way. Nothing here is unattended-safe yet: see
 [Worker containment](#worker-containment-what-is-and-is-not-true).
+
+**Distributed workers: the seam, not the network.** `scripts/remoteworker.mjs`
+defines what a remote worker would have to satisfy — a `WorkerTransport`, a lease
+predicate that knows a pid is only evidence on the machine that issued it, and a
+job envelope carrying no environment at all — and ships exactly one transport,
+LOOPBACK, which runs in this process on this filesystem. **No transport crosses a
+machine boundary, and none is planned until evidence can come back from one:**
+git-effect inspection, territory fingerprints and verification all read local
+disk, so a transport that cannot write there is refused at `prepare()` rather than
+producing a run nobody can verify. Nothing about the network is proven; see
+[ADR 0010](docs/adr/0010-the-distributed-worker-seam.md) for the labelled list of
+what is unproven.
 
 ## 🧪 Supervised external single-task runner
 
