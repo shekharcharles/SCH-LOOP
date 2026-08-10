@@ -59,3 +59,6 @@ external-skills/
 
 # Agent worktrees — scratch checkouts, never part of the repository.
 .claude/worktrees/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
