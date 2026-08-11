@@ -176,6 +176,25 @@ scripts/scheduler.mjs     The graph scheduler: project lease, graph validation, 
                           typed stop reasons, deterministic project completion.
 scripts/sch-run-queue.mjs CLI for the queue: --project <id> [--max-tasks --max-duration-ms
                           --max-parallel --phase --stop-after-task --dry-run]. Then stop.
+scripts/supervisor.mjs    Per-project run control: start, pause, resume, stop. Owns the
+                          PROCESS, never the work. Pause and stop release the scheduler's
+                          lease, so the task in flight finishes and nothing is ever killed
+                          mid-delivery.
+scripts/run-with-inbox.mjs Plan the inbox, then run the queue — the order an operator means
+                          when they press Start. A planning failure never stops work that is
+                          already queued.
+scripts/inbox-planner.mjs Turns an operator's one-line inbox note into queued tasks, or
+                          refuses with a reason. Rejects a task with no verification, a path
+                          outside policy, an unknown dependency, or no acceptance criteria.
+scripts/land.mjs          Merges the delivered tip into the branch the operator works on.
+                          Never on its own, never over a dirty tree, never force, and a
+                          conflict is left conflicted for a person.
+scripts/limits.mjs        Reads the provider's own usage endpoint for the 5-hour and 7-day
+                          windows. Caches, backs off on 429, keeps the last good reading, and
+                          never logs or serialises the token.
+scripts/onboard.mjs       Brownfield EVIDENCE collector: inventory, the repo's own build/test
+                          baseline with real exit codes, dead-code tool output, git churn,
+                          and the files nothing imports. Collects facts; claims nothing.
 scripts/projection.mjs    The SQLite operational PROJECTION (node:sqlite, no dependency) for
                           the dashboard: migrations, WAL, idempotent event projection,
                           bounded text, rebuildable. Never the authority.

@@ -117,11 +117,28 @@ resolve it in the contract **now** — do not let the loop discover it mid-build
 
 ## B) Dev — app / tool
 
-**Brainstorm first for a vague/greenfield idea** (superpowers `brainstorming`):
-if the request is fuzzy ("build me an X"), refine it Socratically BEFORE the PRD —
-surface the core user + primary flow, the one metric of success, and 2-3 design
-forks, presenting your recommended direction. Get the shape agreed, THEN spec. For
-a concrete/existing codebase, skip straight to the interview.
+**An existing repository goes to `/SCH onboard` FIRST — not here.** This skill
+interviews an operator about a product; run against a live codebase it will
+interview you about software it never read. `sch-onboard` reads the repo, runs
+its build and tests, finds what is broken and unused, and reports what it
+understood before a single question is asked. Come back here with its
+`UNDERSTANDING.md` in hand.
+
+**Brainstorming is a gate, not an option.** Before the PRD — every time, not only
+when the request sounds fuzzy — surface the core user and primary flow, the one
+measure of success, and 2–3 design forks with your recommended direction. An
+operator who already knows exactly what they want spends two minutes confirming
+it; one who does not discovers that here rather than after twenty tasks are
+built. Options and decisions stay separate: `/SCH brainstorm` records proposals
+as proposals until the operator picks one.
+
+**Then grill what came back.** A specification agreed too easily is a
+specification nobody stress-tested. Take the agreed shape and attack it: for each
+acceptance criterion, what is the input that breaks it? Which two requirements
+conflict under load, at zero data, or at the boundary? What did the operator
+answer quickly that they would answer differently after seeing it built? Keep
+going until no branch of the design is unresolved — that is the bar, not a
+question count.
 
 **Research the code first.** Read the routes, models and components that already
 exist before asking anything. Half of a good interview is not asking what the

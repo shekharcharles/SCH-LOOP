@@ -1,6 +1,6 @@
 ---
 name: SCH
-description: The single SCH Loop command surface. Use for /SCH and any /SCH <subcommand> — status, project, spec, brainstorm, plan, skills, run, review, learn, graph, pause, resume, stop, approve, dashboard, doctor. Routes to the focused SCH skill or engine command that already does the work; never re-implements it. With no subcommand it resolves the active project and reports its status and next actions.
+description: The single SCH Loop command surface. Use for /SCH and any /SCH <subcommand> — status, project, onboard, spec, brainstorm, plan, skills, run, review, learn, graph, pause, resume, stop, approve, dashboard, doctor. Routes to the focused SCH skill or engine command that already does the work; never re-implements it. With no subcommand it resolves the active project and reports its status and next actions.
 ---
 
 # `/SCH` — one command surface
@@ -9,9 +9,15 @@ description: The single SCH Loop command surface. Use for /SCH and any /SCH <sub
 > command below lives there; use the absolute path if your terminal is elsewhere.
 
 This skill is a **router**, not a methodology. The methodology lives in the
-focused skills (`sch-spec`, `sch-brainstorm`, `sch-plan`, `sch-run`,
-`sch-review`, `sch-learn`) and in the engine CLI. Your job is to work out which
-one the operator asked for, hand off, and get out of the way.
+focused skills (`sch-onboard`, `sch-spec`, `sch-brainstorm`, `sch-plan`,
+`sch-run`, `sch-review`, `sch-learn`) and in the engine CLI. Your job is to work
+out which one the operator asked for, hand off, and get out of the way.
+
+**Which entry point.** An operator pointing at a folder that already contains
+code wants `sch-onboard`, not `sch-spec` — spec interviews you about a product
+that does not exist yet, and run against a live repository it will interview you
+about software it never read. New idea, empty folder: `sch-spec`. Existing
+repository, in any state: `sch-onboard` first, always.
 
 **Do not paste the command table below from memory.** It is data, and the engine
 owns it:
@@ -48,6 +54,7 @@ know where their project stands, not to read a manual.
 |---|---|
 | `status` | `state.mjs stats` + `interval-advice` + `profile-validate` |
 | `project` | `state.mjs project-list` / `project-here` / `project-get` |
+| `onboard` | the **sch-onboard** skill (interactive) — an EXISTING repo: read it, run its build, find what is broken and unused, report, ask three questions |
 | `spec` | the **sch-spec** skill (interactive) |
 | `brainstorm` | the **sch-brainstorm** skill (interactive) |
 | `plan` | the **sch-plan** skill (interactive) |
