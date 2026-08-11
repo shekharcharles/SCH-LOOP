@@ -99,6 +99,10 @@ export function buildUsage({
     u.usage_status = "REPORTED";
     u.unknown_reason = null;
     for (const k of ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"]) u[k] = num(reported[k]);
+    // the model's declared window, recorded so "how full was it" is the
+    // provider's number and never an assumption about which model ran
+    if (num(reported.context_window) !== null) u.context_window = num(reported.context_window);
+    if (num(reported.num_turns) !== null) u.turns = num(reported.num_turns);
     if (num(reported.cost_usd) !== null) {
       u.reported_cost_usd = num(reported.cost_usd);
       u.cost_status = "REPORTED";

@@ -94,7 +94,7 @@ export function safeRelative(repoRoot, p) {
 // ---------------------------------------------------------------------- git
 
 export const git = (cwd, ...args) => {
-  try { return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+  try { return execFileSync("git", ["-C", cwd, ...args], { windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
   catch { return null; }
 };
 

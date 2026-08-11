@@ -6,12 +6,13 @@
 // shared token below; set SCH_BIND (e.g. a Tailscale IP) to reach it from a phone.
 
 import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, watch } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, watch, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
-import { loadRegistry, saveRegistry, loadState, getProject, event, OFFENSIVE, suggestInterval } from "./state.mjs";
+import { loadRegistry, saveRegistry, loadState, mutateState, getProject, event, OFFENSIVE, suggestInterval } from "./state.mjs";
 import { projection as capabilityProjection } from "./skills.mjs";
 import { runProjection } from "./runner.mjs";
 import { deliveryProjection } from "./delivery.mjs";
@@ -125,8 +126,263 @@ const snapshot = (project) => {
   const state = loadState(project);
   // recomputed from the live queue every push — the right interval changes as the
   // queue drains or the loop ends up waiting on the operator
-  return { project: getProject(project), state, advice: suggestInterval(state), graph: graphView(project) };
+  return { project: getProject(project), state, advice: suggestInterval(state), graph: graphView(project),
+           supervisor: supervisorView(project), worker: workerView(project),
+           spend: spendView(project) };
 };
+
+// Is a queue process actually alive for this project? Read directly rather than
+// inferred from the last heartbeat, so the buttons reflect the machine and not a
+// guess about it. Never throws: a dashboard that 500s because the supervisor
+// file is malformed is worse than one that says NOT_RUNNING.
+function supervisorView(project) {
+  try {
+    const p = join(PROJECTS_DIR, project, "supervisor.json");
+    const c = JSON.parse(readFileSync(p, "utf8"));
+    let alive = false;
+    if (c.pid) { try { process.kill(c.pid, 0); alive = true; } catch {} }
+    return { intent: c.intent ?? "STOPPED", running: alive, pid: alive ? c.pid : null,
+             started_at: c.started_at ?? null,
+             // "STARTING" was a lie whenever the queue had exited on its own —
+             // which it does at every human gate, and after every completed run.
+             // EXITED says the intent was to run and the process is gone, which
+             // is the state an operator has to actually respond to.
+             state: alive ? "RUNNING" : (c.intent === "RUNNING" ? "EXITED" : c.intent ?? "STOPPED") };
+  } catch { return { intent: "STOPPED", running: false, pid: null, started_at: null, state: "STOPPED" }; }
+}
+
+// WHAT THE WORKER IS ACTUALLY DOING — the question a progress bar cannot answer.
+// The newest run directory holds the prompt SCH built and everything the worker
+// printed, so this is the real transcript rather than a summary of it. Capped
+// hard: a live tail is for watching, and shipping a megabyte of stdout to a
+// phone on every SSE push would cost more than the run.
+
+// The CLI envelope, made readable. `result` is what the model said; the handoff
+// block inside it is machinery the operator does not need to read, so it is
+// separated rather than deleted.
+
+function modelSplit(mu){
+  if(!mu||typeof mu!=="object") return [];
+  return Object.entries(mu).map(([model,v])=>({ model,
+    output: Number(v&&v.outputTokens)||0, cost_usd: Number(v&&v.costUSD)||0 }))
+    .sort((a,b)=>b.cost_usd-a.cost_usd);
+}
+function pickPrimaryModel(mu){ const b=modelSplit(mu); return b.length?b[0].model:null; }
+
+function readCliShown(raw) {
+  const text = String(raw ?? "");
+  const trimmed = text.trim();
+  let said = text, usage = null;
+  if (trimmed.startsWith("{")) {
+    try {
+      const d = JSON.parse(trimmed);
+      if (typeof d.result === "string") {
+        said = d.result;
+        const u = d.usage ?? {};
+        usage = { input: u.input_tokens ?? null, output: u.output_tokens ?? null,
+                  cache_read: u.cache_read_input_tokens ?? null,
+                  cache_write: u.cache_creation_input_tokens ?? null,
+                  cost_usd: d.total_cost_usd ?? null, turns: d.num_turns ?? null,
+                  // same rule as the runner: the model that cost the most did
+                  // the work. Two different rules produced two different answers
+                  // for one run, which is how this was found.
+                  model: pickPrimaryModel(d.modelUsage),
+                  models: modelSplit(d.modelUsage) };
+      }
+    } catch { /* not the envelope; show it as-is */ }
+  }
+  const i = said.indexOf("<<<SCH_HANDOFF_JSON>>>");
+  const handoff = i === -1 ? "" : said.slice(i);
+  if (i !== -1) said = said.slice(0, i).trim();
+  return { said, handoff, usage };
+}
+const WORKER_TAIL = 6000;
+function workerView(project) {
+  try {
+    const p = getProject(project); if (!p) return null;
+    const runs = join(repositoryRootOf(p), ".sch-loop", "runs");
+    const dirs = readdirSync(runs).filter((d) => d.startsWith("RUN-")).sort();
+    if (!dirs.length) return null;
+    const dir = join(runs, dirs[dirs.length - 1]);
+    const grab = (f, n) => { try { const s = readFileSync(join(dir, f), "utf8"); return s.length > n ? s.slice(-n) : s; } catch { return ""; } };
+    // stdout.log is now the CLI's own JSON envelope. Showing it raw put an
+    // escaped wall of "\\n\\\"summary\\\":..." on the page — technically the
+    // truth, and unreadable. Unwrap to what the model actually said, and lift
+    // the token counts out as facts rather than leaving them buried in it.
+    const shown = readCliShown(grab("stdout.log", WORKER_TAIL * 4));
+    let meta = {}; try { meta = JSON.parse(readFileSync(join(dir, "run.json"), "utf8")); } catch {}
+    const st = (() => { try { return statSync(join(dir, "stdout.log")); } catch { return null; } })();
+    return {
+      run_id: dirs[dirs.length - 1],
+      task_id: meta.task_id ?? null, role: meta.role ?? meta.semantic ?? null,
+      updated_at: st ? st.mtime.toISOString() : null,
+      said: shown.said.slice(-WORKER_TAIL),
+      handoff: (() => { try { return JSON.parse(readFileSync(join(dir, "handoff.json"), "utf8")); }
+                        catch { return null; } })(),
+      usage: shown.usage,
+      stderr: grab("stderr.log", 1500),
+      // the instruction half, so "what is it doing" includes what it was asked
+      task_prompt: grab("user-prompt.txt", 2500),
+    };
+  } catch { return null; }
+}
+function repositoryRootOf(p) { return p.path; }
+
+// SPEND, per task and for the project. Read once from the run records and
+// attached to the snapshot, so the token cost of a task is visible in the queue
+// rather than only after opening it — the question "what did that cost" should
+// never require a click.
+//
+// Cost per hour is deliberately measured over the WALL CLOCK the project has
+// been running, not the sum of worker durations: an operator budgeting a day
+// needs the burn rate they will actually be billed at.
+function spendView(project) {
+  const p = getProject(project); if (!p) return null;
+  const runsDir = join(repositoryRootOf(p), ".sch-loop", "runs");
+  let dirs = [];
+  try { dirs = readdirSync(runsDir).filter((d) => d.startsWith("RUN-")); } catch { return null; }
+  const perTask = {};
+  let input = 0, output = 0, cacheRead = 0, cacheWrite = 0, fresh = 0, cost = 0, measured = 0, first = null, last = null;
+  let apiMs = 0, ctxWindow = null, ctxLast = null;
+  const models = new Map();
+  for (const d of dirs) {
+    const dir = join(runsDir, d);
+    let run = null, u = null;
+    try { run = JSON.parse(readFileSync(join(dir, "run.json"), "utf8")); } catch { continue; }
+    try { u = JSON.parse(readFileSync(join(dir, "usage.json"), "utf8")); } catch {}
+    const t = String(run.task_id ?? "");
+    const started = run.started_at ? Date.parse(run.started_at) : null;
+    if (started) { first = first === null ? started : Math.min(first, started); last = Math.max(last ?? 0, started); }
+    if (!u || u.usage_status !== "REPORTED") continue;
+    measured++;
+    apiMs += Number(u.duration_ms) || 0;
+    // the model's own declared window, so "how full was the context" is the
+    // model's number rather than an assumption about which model ran
+    const win = Number(u.context_window) || null;
+    if (win) ctxWindow = Math.max(ctxWindow || 0, win);
+    ctxLast = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
+    // "input" means everything the model read: fresh + cache-read + cache-write.
+    const freshIn = u.input_tokens || 0, cr = u.cache_read_tokens || 0, cw = u.cache_write_tokens || 0;
+    const inn = freshIn + cr + cw, out = u.output_tokens || 0;
+    const c = u.reported_cost_usd ?? u.estimated_cost_usd ?? 0;
+    input += inn; output += out; cacheRead += cr; cacheWrite += cw; fresh += freshIn; cost += c;
+    if (u.model) models.set(u.model, (models.get(u.model) || 0) + c);
+    const e = perTask[t] || (perTask[t] = { input: 0, output: 0, cache_read: 0, cost: 0, runs: 0, models: [] });
+    e.input += inn; e.output += out; e.cache_read += cr; e.fresh = (e.fresh||0) + freshIn; e.cost += c; e.runs++;
+    if (u.model && !e.models.includes(u.model)) e.models.push(u.model);
+  }
+  const hours = first && last && last > first ? (last - first) / 3600000 : 0;
+  // lines changed across everything this project delivered — the "+1883/-69"
+  // of a status line, from git rather than from anybody's report of it
+  let added = 0, removed = 0;
+  // Delivered work lives on its task branches, not on master — diffing master
+  // reported "+0/-0" for a project that had shipped seven tasks. Sum each
+  // delivered branch against the base it forked from.
+  try {
+    const root = repositoryRootOf(p);
+    const g = (...a) => execFileSync("git", ["-C", root, ...a], { encoding: "utf8", windowsHide: true, maxBuffer: 1 << 20 });
+    const done = (loadState(project).tasks || []).filter((x) => ["merged", "delivered"].includes(x.status));
+    for (const task of done) {
+      const branch = task.branch || ("sch/task-" + task.id);
+      try {
+        const base = g("merge-base", "HEAD", branch).trim();
+        for (const ln of g("diff", "--numstat", base + ".." + branch).split("\n")) {
+          const m = /^(\d+)\s+(\d+)\s/.exec(ln);
+          if (m) { added += +m[1]; removed += +m[2]; }
+        }
+      } catch { /* branch pruned after delivery: nothing to count */ }
+    }
+  } catch { /* not a git repo, or git unavailable */ }
+  const totalTok = input + output;
+  const minutes = hours * 60;
+  return {
+    input, output, cache_read: cacheRead, cache_write: cacheWrite, fresh, cost,
+    cache_hit: input > 0 ? cacheRead / input : null,
+    measured_runs: measured, unmeasured_runs: dirs.length - measured,
+    hours, cost_per_hour: hours > 0.02 ? cost / hours : null,
+    api_ms: apiMs,
+    tokens_total: totalTok,
+    tokens_per_min: minutes > 0.5 ? totalTok / minutes : null,
+    context_window: ctxWindow, context_last: ctxLast,
+    lines_added: added, lines_removed: removed,
+    by_model: [...models.entries()].map(([m, c]) => ({ model: m, cost: c })).sort((a, b) => b.cost - a.cost),
+    per_task: perTask,
+  };
+}
+
+// One task, every attempt: what it was asked, what it printed, what it decided,
+// what it actually changed, and what it cost. Read from the run directories the
+// engine already writes — nothing new is recorded to make this view possible.
+const MAX_DIFF = 40000, MAX_OUT = 20000;
+function taskDetail(project, taskId) {
+  const p = getProject(project);
+  const root = repositoryRootOf(p);
+  const task = (loadState(project).tasks || []).find((t) => t.id === taskId) || null;
+  const runsDir = join(root, ".sch-loop", "runs");
+  const read = (f, n) => { try { const s = readFileSync(f, "utf8"); return s.length > n ? s.slice(-n) : s; } catch { return ""; } };
+  const jread = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } };
+
+  let dirs = [];
+  try { dirs = readdirSync(runsDir).filter((d) => d.startsWith("RUN-")).sort(); } catch {}
+  const attempts = [];
+  for (const d of dirs) {
+    const dir = join(runsDir, d);
+    const run = jread(join(dir, "run.json"));
+    if (!run || String(run.task_id ?? "") !== String(taskId)) continue;
+    const handoff = jread(join(dir, "handoff.json"));
+    const usage = jread(join(dir, "usage.json"));
+    const worker = jread(join(dir, "worker.json"));
+    attempts.push({
+      run_id: d, attempt: run.attempt ?? null, role: run.role ?? run.semantic ?? null,
+      outcome: run.outcome ?? null, failure: run.failure ?? null,
+      started_at: run.started_at ?? null, duration_ms: worker?.duration_ms ?? null,
+      // what it was asked, what it printed, what it concluded
+      task_prompt: read(join(dir, "user-prompt.txt"), 4000),
+      output: read(join(dir, "stdout.log"), MAX_OUT),
+      stderr: read(join(dir, "stderr.log"), 2000),
+      summary: handoff?.summary ?? null,
+      decisions: handoff?.decisions ?? [],
+      issues: handoff?.issues ?? [],
+      files_reported: handoff?.files_reported_changed ?? [],
+      commands: handoff?.commands_reported ?? [],
+      tests: handoff?.tests_reported ?? [],
+      effects: jread(join(dir, "git-effects.json"))?.counts ?? null,
+      usage: usage ? {
+        status: usage.usage_status, model: usage.model,
+        fresh_input: usage.input_tokens,
+        input: (usage.input_tokens || 0) + (usage.cache_read_tokens || 0) + (usage.cache_write_tokens || 0),
+        output: usage.output_tokens,
+        cache_read: usage.cache_read_tokens, cache_write: usage.cache_write_tokens,
+        total: typeof usage.output_tokens === "number"
+          ? (usage.input_tokens || 0) + (usage.cache_read_tokens || 0) + (usage.cache_write_tokens || 0) + usage.output_tokens : null,
+        cost_usd: usage.reported_cost_usd ?? usage.estimated_cost_usd ?? null,
+        characters: usage.characters ?? null,
+      } : null,
+    });
+  }
+
+  // THE DIFF, from git rather than from the worker's account of it. A task's
+  // branch against the base it started from is the only honest answer to "what
+  // did this actually change".
+  let diff = "", diffStat = "", branch = task?.branch || `sch/task-${taskId}`;
+  try {
+    const g = (...a) => execFileSync("git", ["-C", root, ...a], { windowsHide: true, encoding: "utf8", maxBuffer: 1 << 22 });
+    const base = g("merge-base", "HEAD", branch).trim();
+    diffStat = g("diff", "--stat", `${base}..${branch}`).trim();
+    diff = g("diff", `${base}..${branch}`);
+    if (diff.length > MAX_DIFF) diff = diff.slice(0, MAX_DIFF) + `\n… truncated at ${MAX_DIFF} characters`;
+  } catch (e) { diffStat = `no diff available (${String(e.message).split("\n")[0]})`; }
+
+  const totals = attempts.reduce((a, x) => ({
+    input: a.input + (x.usage?.input ?? 0), output: a.output + (x.usage?.output ?? 0),
+    cache_read: a.cache_read + (x.usage?.cache_read ?? 0),
+    cost: a.cost + (x.usage?.cost_usd ?? 0),
+  }), { input: 0, output: 0, cache_read: 0, cost: 0 });
+
+  return { project, task_id: taskId, title: task?.title ?? null, status: task?.status ?? null,
+           ac: task?.ac ?? [], ng: task?.ng ?? [], branch, diff, diff_stat: diffStat,
+           attempts, totals };
+}
 
 // ---- SSE ----
 const clients = new Set();
@@ -193,6 +449,47 @@ const unauthorized = (res) => {
   res.end("unauthorized");
 };
 
+// A LOGIN PAGE, not a second secret. The passphrase IS the existing token, so
+// there is exactly one credential to rotate and the bookmarked ?token= URL keeps
+// working. Browsers get a form; scripts and the event stream still get a bare
+// 401, because a login page returned to `curl` is just a confusing 200.
+//
+// The page itself leaks nothing: no project names, no counts, no version. A
+// wrong passphrase and an unreachable server look identical from outside.
+const wantsHtml = (req) => (req.headers.accept || "").includes("text/html");
+const loginPage = (res, failed = false) => {
+  res.writeHead(failed ? 401 : 200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  res.end(`<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SCH·LOOP</title>
+<style>
+  :root{--bg:#0b0b0b;--fg:#e8e6e3;--dim:#6b6964;--line:#242424;--red:#ff3b30;--panel:#111}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100svh;display:grid;place-items:center;background:var(--bg);color:var(--fg);
+       font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom))}
+  form{width:100%;max-width:340px}
+  h1{font-size:26px;letter-spacing:-.02em;margin:0 0 2px;text-transform:uppercase}
+  p{color:var(--dim);font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin:0 0 22px}
+  label{display:block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  input{width:100%;font:inherit;font-size:16px;padding:12px;background:var(--panel);color:var(--fg);
+        border:1px solid var(--line)}
+  input:focus{outline:none;border-color:var(--fg)}
+  button{width:100%;margin-top:12px;font:inherit;font-weight:700;font-size:13px;letter-spacing:.1em;
+         text-transform:uppercase;padding:13px;background:var(--fg);color:#000;border:0;cursor:pointer}
+  button:active{opacity:.8}
+  .e{margin-top:14px;padding:9px 11px;border-left:2px solid var(--red);color:var(--red);font-size:12px}
+</style>
+<form method="POST" action="/login">
+  <h1>SCH&middot;Loop</h1>
+  <p>operations</p>
+  <label for="p">Passphrase</label>
+  <input id="p" name="passphrase" type="password" autocomplete="current-password" autofocus required>
+  <button type="submit">Unlock</button>
+  ${failed ? '<div class="e">Incorrect passphrase.</div>' : ""}
+</form>`);
+};
+
 const CSRF = randomUUID();
 const sameOrigin = (req) => { const h = req.headers.host, s = req.headers.origin || req.headers.referer; if (!h || !s) return false; try { return new URL(s).host === h; } catch { return false; } };
 const forbid = (res) => { res.writeHead(403); res.end("forbidden"); };
@@ -202,8 +499,31 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/favicon.ico") { res.writeHead(204); res.end(); return; }
 
+  // The login form is the ONE route reachable unauthenticated, so it is kept
+  // deliberately small: same-origin only, no CSRF token (the caller has no
+  // session yet to carry one), and it grants nothing but the same cookie the
+  // ?token= URL already grants.
+  if (url.pathname === "/login") {
+    if (req.method !== "POST") return tokenOk(presentedToken(req, url)) ? (res.writeHead(302, { location: "/" }), res.end()) : loginPage(res);
+    if (!sameOrigin(req)) return forbid(res);
+    const given = (await body(req)).get("passphrase") || "";
+    if (!tokenOk(given.trim())) return loginPage(res, true);
+    res.writeHead(303, {
+      "set-cookie": `sch_token=${encodeURIComponent(TOKEN)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`,
+      location: "/",
+    });
+    return res.end();
+  }
+  if (url.pathname === "/logout") {
+    res.writeHead(303, { "set-cookie": "sch_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0", location: "/login" });
+    return res.end();
+  }
+
   // Before anything else, including the event stream.
-  if (!tokenOk(presentedToken(req, url))) return unauthorized(res);
+  // A browser gets the login page; curl, the event stream and every API caller
+  // still get a bare 401, because an HTML form returned to a script is noise.
+  if (!tokenOk(presentedToken(req, url)))
+    return req.method === "GET" && wantsHtml(req) && url.pathname !== "/events" ? loginPage(res) : unauthorized(res);
   // A token that arrived in the query becomes a cookie and leaves the URL, so it
   // stops appearing in browser history, bookmarks and any proxy log.
   if (url.searchParams.get("token")) {
@@ -229,6 +549,50 @@ const server = createServer(async (req, res) => {
     const p = await body(req);
     if (p.get("csrf") !== CSRF) return forbid(res);
     const back = (id) => { res.writeHead(303, { location: id ? "/?project=" + encodeURIComponent(id) : "/" }); res.end(); };
+    // RUN CONTROL. The dashboard owns the operator's intent and nothing else:
+    // it never decides what to build, what passes, or what ships. Pause and stop
+    // release the scheduler's lease, which the scheduler checks before each
+    // task — so the task in flight always finishes and a delivery is never torn
+    // in half. There is deliberately no "force kill" button.
+    if (url.pathname === "/run") {
+      const project = p.get("project"), action = p.get("action");
+      if (getProject(project) && ["start", "pause", "resume", "stop"].includes(action)) {
+        try {
+          const SUP = await import("./supervisor.mjs");
+          if (action === "pause") await SUP.pause(project);
+          else if (action === "stop") await SUP.stop(project);
+          else SUP[action](project, { maxTasks: 50, env: { ...process.env, SCH_CLAUDE_ARGS: process.env.SCH_CLAUDE_ARGS ?? "-p --dangerously-skip-permissions" } });
+          mutateState(project, (s) => event(s, `run control: ${action} (dashboard)`));
+        } catch (e) { try { mutateState(project, (s) => event(s, `run control ${action} failed: ${e.message}`)); } catch {} }
+      }
+      return back(project);
+    }
+
+    // WHICH MODEL RUNS WHICH ROLE. Stored on the project, applied by roles.mjs
+    // at resolve time — the scheduler and the executor learn nothing new.
+    if (url.pathname === "/models") {
+      const project = p.get("project"), role = p.get("role"), model = p.get("model");
+      try {
+        const R = await import("./roles.mjs");
+        if (getProject(project) && R.ROLE_IDS.includes(role) && R.SELECTABLE_MODELS.includes(model)) {
+          const reg = loadRegistry();
+          const proj = reg.projects.find((x) => x.id === project);
+          if (proj) {
+            proj.modelPolicy = proj.modelPolicy || {};
+            proj.modelPolicy.models = proj.modelPolicy.models || {};
+            // choosing the profile default again clears the override rather than
+            // pinning a value that would then stop tracking the profile
+            const def = R.modelForRole(role, { }).model;
+            if (model === def) delete proj.modelPolicy.models[role];
+            else proj.modelPolicy.models[role] = model;
+            saveRegistry(reg);
+            mutateState(project, (s) => event(s, `model: ${role} -> ${model}`));
+          }
+        }
+      } catch { /* a bad value simply does not apply */ }
+      return back(project);
+    }
+
     if (url.pathname === "/inbox") {
       const project = p.get("project"), text = (p.get("text") || "").trim();
       if (project && text && getProject(project)) { mutateState(project, (s) => { s.inbox.unshift({ id: ++s.seq.inbox, text, status: "new", createdAt: new Date().toISOString() }); event(s, `inbox +: ${text.slice(0, 60)}`); }); }
@@ -277,7 +641,37 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/projects") return json(res, rollup());
+  if (url.pathname === "/api/models") {
+    const project = url.searchParams.get("project");
+    if (!getProject(project)) return json(res, { error: "no such project" });
+    try {
+      const R = await import("./roles.mjs");
+      const proj = getProject(project);
+      return json(res, {
+        choices: R.SELECTABLE_MODELS,
+        roles: R.ROLE_IDS.map((id) => ({
+          id, purpose: R.ROLES[id].purpose,
+          writes: !R.ROLES[id].writes_from_task_policy ? R.ROLES[id].writes.length > 0 : true,
+          ...R.modelForRole(id, proj),
+        })),
+      });
+    } catch (e) { return json(res, { error: String(e?.message || e).slice(0, 140) }); }
+  }
+  if (url.pathname === "/api/limits") {
+    try { const L = await import("./limits.mjs"); return json(res, await L.fetchLimits()); }
+    catch (e) { return json(res, { available: false, reason: String(e?.message || e).slice(0, 140) }); }
+  }
   if (url.pathname === "/api/state") { const s = snapshot(url.searchParams.get("project")); return json(res, s); }
+
+  // EVERYTHING ABOUT ONE TASK. A fresh agent is spawned per task, so per-task is
+  // the only grouping that matches reality: its own worker, its own diff, its
+  // own token bill. Fetched on demand rather than pushed on the SSE stream —
+  // diffs and transcripts are large, and nobody is reading all of them at once.
+  if (url.pathname === "/api/task") {
+    const project = url.searchParams.get("project"), taskId = url.searchParams.get("task");
+    if (!getProject(project) || !taskId) return json(res, { error: "no such task" });
+    return json(res, taskDetail(project, Number(taskId)));
+  }
   // live search over what the loop knows — the same query the agents make
   // A denser map on demand. The default is a readable core, not the whole graph —
   // but the operator must be able to see more when they want to.
@@ -532,15 +926,15 @@ const PAGE = `<!doctype html>
   body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:9;background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(255,255,255,.015) 2px 3px)}
   .wrap{width:100%;max-width:min(1600px,100%);margin-inline:auto;position:relative;z-index:1}
   a{color:var(--fg);text-decoration:none}
-  h1{font-family:"Archivo Black",Inter,system-ui,sans-serif;font-weight:900;text-transform:uppercase;letter-spacing:-.03em;line-height:.92;font-size:clamp(1.7rem,5vw,3.4rem);margin:.15em 0 .05em}
+  h1{font-family:"Archivo Black",Inter,system-ui,sans-serif;font-weight:900;text-transform:uppercase;letter-spacing:-.03em;line-height:.92;font-size:clamp(1.7rem,5vw,3.4rem);margin:0 0 .08em}
   h2{font-size:clamp(10px,1vw,12px);text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:0;padding:10px 0 6px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:baseline;gap:8px}
   h2::before{content:"[ "}h2 .n{color:var(--dim)}h2 .n::after{content:" ]"}
   .mono{font-variant-numeric:tabular-nums}
-  .bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--red);padding-bottom:8px;margin-bottom:8px}
+  .bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--red);padding-bottom:9px;margin-bottom:22px}
   .dot{width:8px;height:8px;background:var(--green);display:inline-block;margin-right:6px;animation:blink 1.6s step-end infinite}
   .live{color:var(--green)} .stale{color:var(--red)}
   @keyframes blink{50%{opacity:.25}}
-  .sub{color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-size:11px;margin:0 0 12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .sub{color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-size:11px;margin:0 0 18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   .back{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);padding:8px 14px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--fg);transition:border-color .15s,background .15s}
   .back:hover{border-color:var(--red);background:#1d1d1d}
   section{margin-bottom:14px;animation:fade .18s ease}
@@ -771,7 +1165,46 @@ const PAGE = `<!doctype html>
   .chips{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line)}
   .chip{background:var(--panel);padding:8px 11px;flex:1;min-width:82px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}.chip b{display:block;font-size:clamp(15px,2vw,18px);color:var(--fg);line-height:1;margin-bottom:2px}
   .chip.active b{color:var(--amber)}.chip.inprogress b,.chip.review b{color:var(--blue)}.chip.completed b{color:var(--green)}.chip.attention b,.chip.awaiting b,.chip.failed b{color:var(--red)}
+  /* ---- phone project list -------------------------------------------------
+     Hidden on desktop, where the nine-column table is the right instrument. */
+  #mobsec{display:none}
+  .mb-h{display:flex;align-items:baseline;gap:8px;text-transform:uppercase;letter-spacing:.14em;
+        font-size:10px;color:var(--dim);padding:14px 12px 6px;border-bottom:1px solid var(--line)}
+  .mb-n{color:var(--fg);font-weight:700}
+  .mb-r{display:grid;grid-template-columns:1fr auto auto;align-items:center;column-gap:8px;row-gap:5px;
+        padding:10px 12px;min-height:44px;text-decoration:none;color:var(--fg);
+        border-bottom:1px solid var(--line);border-left:3px solid transparent}
+  .mb-r.st-attention,.mb-r.st-blocked{border-left-color:var(--red)}
+  .mb-r.st-active{border-left-color:var(--amber)}
+  .mb-r.st-inprogress{border-left-color:var(--blue)}
+  .mb-r.st-completed{border-left-color:var(--green)}
+  .mb-r:active{background:#181818}
+  .mb-nm{font-weight:700;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mb-d{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+  .mb-f{font-size:9px;padding:1px 5px;text-transform:uppercase;letter-spacing:.06em}
+  .mb-a{grid-column:3;min-width:20px;height:20px;padding:0 6px;background:var(--red);color:#fff;
+        font-weight:700;font-size:11px;display:grid;place-items:center}
+  .mb-2{grid-column:1/-1;display:flex;align-items:center;gap:7px;min-width:0}
+  .mb-2 .bar2{flex:1 1 auto;width:auto;min-width:40px;margin:0;height:6px}
+  /* an untouched project should read as empty, not as a filled grey slab */
+  .mb-r.p0 .bar2{opacity:.35}
+  .mb-p{font-size:11px;color:var(--dim);min-width:26px;text-align:right;font-variant-numeric:tabular-nums}
+  .mb-c{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .mb-l{font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;padding:1px 5px;border:1px solid var(--line)}
+  .mb-l.l-running{color:var(--green);border-color:var(--green)}
+  .mb-l.l-late{color:var(--amber);border-color:var(--amber)}
+  .mb-l.l-stopped{color:var(--dim)}
+  .mb-2 .st{font-size:9.5px;padding:1px 5px}
+
   @media(max-width:640px){
+    /* A phone gets the purpose-built list; the tables are a desktop instrument. */
+    #mobsec{display:block}
+    #devsec,#secsec{display:none}
+    body{padding-left:max(0px,env(safe-area-inset-left));padding-right:max(0px,env(safe-area-inset-right))}
+    #app{padding-bottom:max(16px,env(safe-area-inset-bottom))}
+    /* the search stays reachable at a hundred projects */
+    .toolbar{position:sticky;top:0;z-index:20;background:var(--bg);padding:6px 0;margin:0}
+    .toolbar input{font-size:16px}  /* iOS zooms the page below 16px */
     /* The card layout used flex + space-between, so a long value was pushed off
        the right edge instead of wrapping — every row rendered as a label with an
        apparently empty value. Grid with a fixed label column and a wrapping value
@@ -899,9 +1332,209 @@ const PAGE = `<!doctype html>
              color:var(--fg);border:1px solid var(--line);font-size:11px;letter-spacing:.08em;
              text-transform:uppercase;cursor:pointer}
   .moretasks:hover{border-color:var(--red)}
+
+  /* run control + worker transcript */
+  .rcw{display:inline-flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}
+  .rcs{font-size:9.5px;letter-spacing:.1em;padding:2px 7px;border:1px solid var(--line);color:var(--dim)}
+  .rcs.running{color:var(--green);border-color:var(--green)}
+  .rcs.paused{color:var(--amber);border-color:var(--amber)}
+  .rcs.exited{color:var(--red);border-color:var(--red)}
+  .rc{font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+      padding:7px 13px;min-height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);cursor:pointer}
+  .rc.go{background:var(--green);color:#000;border-color:var(--green)}
+  .rc.warn{color:var(--amber);border-color:var(--amber)}
+  .rc.danger{color:var(--red);border-color:var(--red)}
+  .rc:active{opacity:.75}
+  .wkw{border:1px solid var(--line);margin:8px 0}
+  .wkh{display:flex;gap:8px;align-items:baseline;padding:8px 11px;background:var(--panel2);
+       font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .wkh b{color:var(--fg)}
+  .wkm{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wk>summary{cursor:pointer;padding:8px 11px;font-size:11px;color:var(--dim);border-top:1px solid var(--line)}
+  .wk>summary:hover{color:var(--fg)}
+  .wk pre{margin:0;padding:10px 11px;background:var(--bg);font-size:11.5px;line-height:1.45;
+          white-space:pre-wrap;overflow-wrap:anywhere;max-height:46vh;overflow:auto;border-top:1px solid var(--line)}
+  .wk.err pre{color:var(--red)}
+
+  /* per-task detail: diff, reasoning, tokens */
+  .tdt{color:var(--fg);text-decoration:none;border-bottom:1px dotted var(--dim)}
+  .tdt:hover{color:var(--blue);border-bottom-color:var(--blue)}
+  .tdrow>td{padding:0!important;border-bottom:0!important}
+  .tdslot:empty{display:none}
+  .td{border:1px solid var(--line);border-left:3px solid var(--blue);margin:0 0 8px}
+  .tdh{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:9px 11px;background:var(--panel2);
+       font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+  .tdh b{color:var(--fg)}
+  .tdl{padding:12px;color:var(--dim);font-size:12px}
+  .tdu{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+  .tdu.tot{border-top:1px solid var(--line)}
+  .tk{background:var(--panel);padding:7px 10px;font-size:10.5px;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--dim);flex:1;min-width:82px}
+  .tk b{display:block;font-size:14px;color:var(--fg);font-variant-numeric:tabular-nums;letter-spacing:0}
+  .tk.cost b,.tk.cost{color:var(--green)}
+  .tk.mdl,.tk.none{color:var(--dim);text-transform:none;letter-spacing:0}
+  .tdk{padding:9px 11px 3px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber)}
+  .tdul{margin:0;padding:0 11px 9px 26px;font-size:12px;line-height:1.5}
+  .tdsum{padding:9px 11px;font-size:12.5px;border-bottom:1px solid var(--line)}
+  .tda{border-top:1px solid var(--line)}
+  .tda>summary{cursor:pointer;padding:9px 11px;font-size:11px;color:var(--dim)}
+  .tda>summary:hover{color:var(--fg)}
+  .tda>summary .ok{color:var(--green)}.tda>summary .bad{color:var(--red)}
+  pre.dif{font-size:11px}
+
+  .settled{padding:7px 11px;margin:6px 0;border-left:2px solid var(--line);
+           color:var(--dim);font-size:11px;letter-spacing:.02em}
+
+  /* One disclosure bar, one look. The activity log and the other collapsibles
+     used .box, which had no rules at all — so they rendered as a bare bold line
+     with the browser's default triangle next to the styled SYSTEM bar. */
+  .sysbox,.box{border:1px solid var(--line);margin:14px 0}
+  .sysbox>summary,.box>summary{cursor:pointer;padding:11px 13px;font-size:10.5px;letter-spacing:.12em;
+                  text-transform:uppercase;color:var(--dim);background:var(--panel2)}
+  .sysbox>summary:hover,.box>summary:hover{color:var(--fg)}
+  .sysbox[open]>summary,.box[open]>summary{border-bottom:1px solid var(--line)}
+  .sysbox>section,.boxin{padding:0 11px}
+
+  /* ---- diff -------------------------------------------------------------
+     Colour carries meaning here, so it is spent ONLY on added and removed
+     lines. Context is deliberately quiet: a diff where every line competes is
+     a diff nobody reads. Line numbers sit in fixed gutters so the eye tracks
+     down one column instead of hunting a leading +/-.                        */
+  .dfd>summary{display:flex;align-items:baseline;gap:10px}
+  .dfs{color:var(--dim);font-size:10.5px;letter-spacing:.04em;text-transform:none}
+  .dfw{border-top:1px solid var(--line);max-height:60vh;overflow:auto;
+       font-size:12px;line-height:1.55;background:var(--bg)}
+  .dfh{position:sticky;top:0;z-index:2;padding:7px 12px;background:var(--panel2);
+       border-bottom:1px solid var(--line);color:var(--fg);font-size:11.5px;font-weight:700}
+  .dfhunk{display:grid;grid-template-columns:44px 44px 1fr;gap:0;
+          background:#101216;color:var(--dim);font-size:11px;
+          border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:3px 0}
+  .dfhunk>span:last-child{padding-left:10px}
+  .dl{display:grid;grid-template-columns:44px 44px 1fr;gap:0}
+  .dfn{text-align:right;padding:0 8px;color:#4a4a4a;font-variant-numeric:tabular-nums;
+       user-select:none;border-right:1px solid #1b1b1b}
+  .dc{padding:0 10px;white-space:pre-wrap;overflow-wrap:anywhere}
+  .dl.ctx .dc{color:#9a9a95}
+  .dl.add{background:rgba(46,160,67,.13)}
+  .dl.add .dc{color:#7ee787}
+  .dl.add .dc::before{content:"+";color:#3fb950;margin-left:-10px;padding-right:4px}
+  .dl.del{background:rgba(248,81,73,.12)}
+  .dl.del .dc{color:#ffa198}
+  .dl.del .dc::before{content:"-";color:#f85149;margin-left:-10px;padding-right:4px}
+  .dl.add .dfn,.dl.del .dfn{color:#6a6a6a}
+
+  /* ---- quieter chrome ---------------------------------------------------
+     Red was doing three jobs: section borders, headings and real alerts. It
+     now means one thing — something needs a person — so an actual alert is
+     visible instead of being one more red thing on a red page.              */
+  .wkw,.td{border-left-width:1px}
+  .td{border-left:1px solid var(--line)}
+  h2{color:var(--dim)}
+  .loop{align-items:center}
+
+  /* ---- the glance ------------------------------------------------------
+     One block, read in under a second: state word, what it is doing, how far
+     along, and the controls. Colour is the state, so the page can be judged
+     from across a room without reading a single label.                      */
+  .hero{border:1px solid var(--line);border-top:3px solid var(--dim);margin:0 0 14px;background:var(--panel)}
+  .hero.run{border-top-color:var(--green)}
+  .hero.need{border-top-color:var(--red)}
+  .hero.hold{border-top-color:var(--amber)}
+  .hero.done{border-top-color:var(--green)}
+  .hrow{display:flex;align-items:flex-start;gap:14px;padding:15px 16px 12px;flex-wrap:wrap}
+  .hmain{flex:1;min-width:0}
+  .hhead{font-family:"Archivo Black",Inter,system-ui,sans-serif;font-weight:900;
+         font-size:clamp(1.5rem,4.5vw,2.1rem);line-height:1;letter-spacing:-.02em;text-transform:uppercase}
+  .hero.run .hhead{color:var(--green)}
+  .hero.need .hhead{color:var(--red)}
+  .hero.hold .hhead{color:var(--amber)}
+  .hero.done .hhead{color:var(--green)}
+  .hsub{margin-top:6px;color:var(--dim);font-size:13px;line-height:1.45;
+        overflow:hidden;text-overflow:ellipsis}
+  .hbar{height:4px;background:#1c1c1c;overflow:hidden}
+  .hbar>span{display:block;height:100%;background:var(--green);transition:width .4s ease-out}
+  .hfacts{display:flex;flex-wrap:wrap;gap:0 20px;padding:10px 16px 13px;
+          font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+  .hfacts b{color:var(--fg);font-size:14px;font-variant-numeric:tabular-nums;letter-spacing:0;margin-right:5px}
+  .hfacts .bad b,.hfacts .bad{color:var(--red)}
+  .hero .rcw{margin-left:0}
+  @media(max-width:640px){
+    .hrow{padding:13px 13px 10px}
+    .hero .rcw{width:100%;margin-top:4px}
+    .hero .rc{flex:1}
+    .hfacts{gap:0 14px;padding:9px 13px 12px}
+  }
+
+  .spd{display:flex;flex-wrap:wrap;gap:0 18px;align-items:baseline;padding:9px 2px 13px;
+       font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+  .spd b{color:var(--fg);font-size:14px;font-variant-numeric:tabular-nums;letter-spacing:0;margin-right:5px}
+  .spd .cost b{color:var(--green)}
+  .spd .mdl,.spd .none{text-transform:none;letter-spacing:0;color:#5d5d5d}
+  .tcost{white-space:nowrap}
+  .tcv{color:var(--green);font-variant-numeric:tabular-nums}
+  .tct{display:block;font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+  @media(max-width:640px){ .spd{gap:0 12px} }
+
+  /* account budget — fixed, on every page */
+  .limitbar{position:fixed;left:0;right:0;bottom:0;z-index:60;background:var(--panel2);
+            border-top:1px solid var(--line);
+            padding-bottom:env(safe-area-inset-bottom)}
+  .lbin{display:flex;gap:0;align-items:center;max-width:1600px;margin:0 auto;
+        padding:7px 14px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .lbseg{display:flex;align-items:center;gap:7px;flex:1;min-width:0}
+  .lbseg+.lbseg{margin-left:16px}
+  .lbl{color:#5d5d5d;min-width:64px;white-space:nowrap}
+  .lbbar{flex:1;min-width:40px;height:6px;background:#1c1c1c;border:1px solid var(--line);overflow:hidden}
+  .lbbar>span{display:block;height:100%;background:var(--green);transition:width .5s ease}
+  .lbbar.warn>span{background:var(--amber)} .lbbar.crit>span{background:var(--red)}
+  .lbv{font-variant-numeric:tabular-nums;color:var(--fg);letter-spacing:0}
+  .lbv.warn{color:var(--amber)} .lbv.crit{color:var(--red)}
+  .lbr{color:#5d5d5d;letter-spacing:0;white-space:nowrap}
+  .lbnone{color:#5d5d5d;text-transform:none;letter-spacing:0}
+  .wrap{padding-bottom:52px}
+  @media(max-width:640px){ .lbin{padding:6px 11px;font-size:10px} .lbseg+.lbseg{margin-left:11px} .lbr{display:none} }
+
+  .spd .lbl2{color:#5d5d5d;text-transform:uppercase;letter-spacing:.12em;font-size:9.5px;margin-right:2px}
+
+  .spd .dl2 b{margin-right:7px}
+  .spd .pl{color:#3fb950} .spd .mi{color:#f85149}
+
+  .hnd .hbody{padding:2px 0 10px}
+  .hsum{padding:10px 12px;font-size:13px;line-height:1.5;border-bottom:1px solid var(--line)}
+  .hk{padding:11px 12px 4px;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber)}
+  .hul{margin:0;padding:0 12px 4px 28px;font-size:12.5px;line-height:1.6}
+  .hul code{background:var(--panel2);padding:1px 6px;font-size:12px}
+  .hx{margin-left:8px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border:1px solid var(--line)}
+  .hx.ok{color:var(--green);border-color:var(--green)} .hx.bad{color:var(--red);border-color:var(--red)}
+  .hnx{padding:0 12px 6px;font-size:12.5px;line-height:1.55;color:var(--dim)}
+  .hnd>summary .ok{color:var(--green)} .hnd>summary .warn{color:var(--amber)} .hnd>summary .bad{color:var(--red)}
+
+  .mbox{border:1px solid var(--line);margin:10px 0}
+  .mhead{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:9px 12px;background:var(--panel2);
+         font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg)}
+  .mhead span{color:var(--dim);letter-spacing:.04em;text-transform:none;font-size:11px}
+  .mrow{display:grid;grid-template-columns:130px 1fr auto;gap:10px;align-items:center;
+        padding:9px 12px;border-top:1px solid var(--line)}
+  .mrow.pinned{border-left:2px solid var(--amber)}
+  .mr1 b{font-size:12.5px}
+  .mpin{margin-left:7px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber)}
+  .mr2{color:var(--dim);font-size:11.5px;line-height:1.4}
+  .mr3{display:flex;align-items:center;gap:9px}
+  .mr3 select{font-family:inherit;font-size:12px;padding:6px 9px;background:var(--panel);
+              color:var(--fg);border:1px solid var(--line);min-height:34px}
+  .mnote{font-size:10.5px;color:var(--dim);white-space:nowrap}
+  @media(max-width:640px){
+    .mrow{grid-template-columns:1fr;gap:5px}
+    .mnote{white-space:normal}
+  }
+
+  /* a prompt is a document, not a log line */
+  .wk pre.docpre{font-size:12.5px;line-height:1.65;padding:14px 16px;max-height:60vh}
 </style></head>
-<body><div class="wrap" id="app">connecting…</div>
+<body><div class="wrap" id="app">connecting…</div><div id="limitbar" class="limitbar"></div>
 <script>
+const DONE=new Set(["merged","delivered"]);
+const isDone=(t)=>DONE.has(t.status);
 const esc=(s)=>(s??"").toString().replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const qp=(k)=>new URLSearchParams(location.search).get(k);
 const OFFSET=new Set(["web-pentest","api-pentest","mobile-android","mobile-ios","red-team-external","red-team-internal","external-network","internal-network"]);
@@ -938,7 +1571,7 @@ function nowBar(run,st){
   const RUN={building:"BUILDING",review:"IN REVIEW",changes:"FIXING"};
   const t=(st.tasks||[]).find(x=>RUN[x.status]);
   const total=(st.tasks||[]).filter(x=>x.status!=="superseded").length;
-  const done=(st.tasks||[]).filter(x=>x.status==="merged").length;
+  const done=(st.tasks||[]).filter(isDone).length;
   const pct=total?Math.round(done/total*100):0;
   const bar='<span class="pgw"><i style="width:'+pct+'%"></i></span><span class="pgn mono">'+
     done+'/'+total+' · '+pct+'%</span>';
@@ -1298,18 +1931,292 @@ function lastBar(st){
   return '<div class="lastev"><span class="lel">last</span>'+
     '<span class="let">'+esc(e.msg)+'</span><span class="lea mono">'+ago+'</span></div>';
 }
-function loopBar(run,advice,st){
-  const h=loopHealth(run);
+// START / PAUSE / RESUME / STOP. Which buttons exist is decided by what the
+// machine is doing, not by what the operator last clicked: a queue that died on
+// its own must still offer Start, and one that is running must not offer it
+// twice. Pause and stop are never a kill — the task in flight finishes.
+function runControls(pid,sup){
+  const s=(sup&&sup.state)||"STOPPED";
+  const b=(a,l,t,c)=>'<form class="inl" method="POST" action="/run">'+csrf+
+    '<input type="hidden" name="project" value="'+esc(pid)+'">'+
+    '<input type="hidden" name="action" value="'+a+'">'+
+    '<button class="rc '+(c||'')+'" title="'+t+'">'+l+'</button></form>';
+  const parts=[];
+  if(s==="RUNNING"){
+    parts.push(b("pause","Pause","Finish the task in flight, then stop starting new ones","warn"));
+    parts.push(b("stop","Stop","Finish the task in flight, then stop. Nothing is killed","danger"));
+  }else if(s==="PAUSED"){
+    parts.push(b("resume","Resume","Start the queue again from where it stopped","go"));
+    parts.push(b("stop","Stop","Leave it stopped","danger"));
+  }else{
+    parts.push(b("start","Start","Run the queue until it is empty or something needs you","go"));
+  }
+  return '<span class="rcw"><span class="rcs '+s.toLowerCase()+'">'+s+'</span>'+parts.join("")+'</span>';
+}
+
+// PER-TASK DETAIL. A fresh agent runs each task, so this is opened per task and
+// fetched on demand: diffs and transcripts are far too large to push to a phone
+// on every update.
+// esc() escapes & < > — correct for text nodes, NOT for attribute values, which
+// can still be closed with a quote. Anything that lands in an attribute goes
+// through this one instead. The diff and the worker transcript are arbitrary
+// repository and model content, so this is not a theoretical distinction.
+const escA=(s)=>esc(s).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+// Delegation rather than inline onclick: no interpolated string ever becomes
+// executable markup, whatever a task title or project id happens to contain.
+document.addEventListener("click",(e)=>{
+  const b=e.target.closest?.("[data-task-toggle]");
+  if(!b) return;
+  e.preventDefault();
+  toggleTask(b.getAttribute("data-project"),Number(b.getAttribute("data-task-toggle")));
+});
+
+let TASKOPEN=null;
+let TASKCACHE=null;
+async function toggleTask(pid,id){
+  const el=document.getElementById("taskdetail");
+  if(!el) return;
+  if(TASKOPEN===id){ TASKOPEN=null; TASKCACHE=null; el.innerHTML=""; return; }
+  TASKOPEN=id; el.innerHTML='<div class="tdl">loading task #'+id+'…</div>';
+  try{
+    const r=await fetch("/api/task?project="+encodeURIComponent(pid)+"&task="+id);
+    TASKCACHE=await r.json();
+    if(TASKOPEN===id) el.innerHTML=taskDetailView(TASKCACHE);
+  }catch(e){ el.innerHTML='<div class="tdl">could not load: '+esc(String(e))+'</div>'; }
+}
+// A live page redraws constantly; the panel the operator opened must not vanish
+// underneath them because a heartbeat arrived.
+function repaintTaskDetail(){
+  const el=document.getElementById("taskdetail");
+  if(el&&TASKOPEN!=null&&TASKCACHE) el.innerHTML=taskDetailView(TASKCACHE);
+}
+// A unified diff rendered as a diff, not as a wall of text. Line numbers on both
+// sides, additions and removals coloured on the LINE rather than by a leading
+// character the eye has to hunt for, hunk headers as separators, and the file
+// header promoted out of the body so a multi-file change is navigable.
+//
+// Everything is escaped before it becomes markup: a diff is arbitrary repository
+// content and is the least trustworthy string on this page.
+function diffView(raw){
+  if(!raw) return '<div class="tdl">no diff</div>';
+  const out=[]; let ol=0,nl=0,file=null;
+  for(const line of String(raw).split("\\n")){
+    if(line.startsWith("diff --git")){ file=null; continue; }
+    if(line.startsWith("index ")||line.startsWith("new file")||line.startsWith("deleted file")||
+       line.startsWith("similarity ")||line.startsWith("rename ")) continue;
+    if(line.startsWith("--- ")) { continue; }
+    if(line.startsWith("+++ ")){
+      file=line.slice(4).replace(/^b\\//,"");
+      out.push('<div class="dfh">'+esc(file)+'</div>'); continue;
+    }
+    const hunk=/^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@(.*)$/.exec(line);
+    if(hunk){
+      ol=+hunk[1]; nl=+hunk[2];
+      out.push('<div class="dfhunk"><span class="dfn"></span><span class="dfn"></span><span>'+esc(hunk[3].trim())+'</span></div>');
+      continue;
+    }
+    if(line.charAt(0)==="\\\\") continue;
+    const k=line[0];
+    const body=esc(line.slice(1));
+    if(k==="+"){ out.push('<div class="dl add"><span class="dfn"></span><span class="dfn">'+(nl++)+'</span><span class="dc">'+body+'</span></div>'); }
+    else if(k==="-"){ out.push('<div class="dl del"><span class="dfn">'+(ol++)+'</span><span class="dfn"></span><span class="dc">'+body+'</span></div>'); }
+    else if(k===" "||k===undefined||line===""){ out.push('<div class="dl ctx"><span class="dfn">'+(ol++)+'</span><span class="dfn">'+(nl++)+'</span><span class="dc">'+body+'</span></div>'); }
+    else { out.push('<div class="dl ctx"><span class="dfn"></span><span class="dfn"></span><span class="dc">'+esc(line)+'</span></div>'); }
+  }
+  return '<div class="dfw">'+out.join("")+'</div>';
+}
+
+const nfmt=(n)=>typeof n==="number"?n.toLocaleString():"—";
+function usageRow(u){
+  if(!u) return '<span class="tk none">no usage recorded</span>';
+  if(u.status!=="REPORTED"||u.input===null||u.input===undefined)
+    return '<span class="tk none">tokens not measured — this run predates usage capture</span>';
+  return '<span class="tk">in <b>'+nfmt(u.input)+'</b></span>'+
+         '<span class="tk">out <b>'+nfmt(u.output)+'</b></span>'+
+         '<span class="tk">total <b>'+nfmt(u.total)+'</b></span>'+
+         (u.cache_read?'<span class="tk">cached <b>'+nfmt(u.cache_read)+'</b></span>':'')+
+         (u.cost_usd!=null?'<span class="tk cost">$'+u.cost_usd.toFixed(4)+'</span>':'')+
+         (u.model?'<span class="tk mdl">'+esc(u.model)+'</span>':'');
+}
+function taskDetailView(d){
+  if(!d||d.error) return '<div class="tdl">nothing recorded for this task yet</div>';
+  const t=d.totals||{};
+  const list=(xs)=>xs&&xs.length?'<ul class="tdul">'+xs.map(x=>'<li>'+esc(typeof x==="string"?x:JSON.stringify(x))+'</li>').join("")+'</ul>':"";
+  const att=(a)=>'<details class="tda"><summary>attempt '+(a.attempt??"?")+' · '+esc(a.role||"worker")+
+      ' · <span class="'+(["ACCEPTED","COMPLETED","VERIFIED","DELIVERED"].includes(a.outcome)?"ok":
+          a.outcome==="NEEDS_DECISION"?"warn":"bad")+'">'+esc(a.outcome||"?")+'</span>'+
+      (a.duration_ms?' · '+Math.round(a.duration_ms/1000)+'s':'')+'</summary>'+
+    '<div class="tdu">'+usageRow(a.usage)+'</div>'+
+    (a.summary?'<div class="tdsum">'+esc(a.summary)+'</div>':'')+
+    (a.decisions&&a.decisions.length?'<div class="tdk">decisions it made on its own</div>'+list(a.decisions):'')+
+    (a.issues&&a.issues.length?'<div class="tdk">issues it flagged</div>'+list(a.issues):'')+
+    (a.commands&&a.commands.length?'<div class="tdk">commands it ran</div>'+list(a.commands):'')+
+    (a.tests&&a.tests.length?'<div class="tdk">tests</div>'+list(a.tests):'')+
+    '<details class="wk"><summary>Full output — everything it printed</summary><pre>'+esc(a.output||"(empty)")+'</pre></details>'+
+    (a.stderr?'<details class="wk err"><summary>Errors</summary><pre>'+esc(a.stderr)+'</pre></details>':'')+
+    '<details class="wk"><summary>The task it was given</summary><pre>'+esc(a.task_prompt||"")+'</pre></details>'+
+    '</details>';
+  return '<div class="td">'+
+    '<div class="tdh"><b>TASK #'+d.task_id+'</b><span>'+esc(d.title||"")+'</span></div>'+
+    ((t.input||t.output)?'<div class="tdu tot">'+
+      '<span class="tk">in <b>'+nfmt(t.input)+'</b></span><span class="tk">out <b>'+nfmt(t.output)+'</b></span>'+
+      '<span class="tk">total <b>'+nfmt((t.input||0)+(t.output||0))+'</b></span>'+
+      (t.cache_read?'<span class="tk">cached <b>'+nfmt(t.cache_read)+'</b></span>':'')+
+      (t.cost?'<span class="tk cost">$'+t.cost.toFixed(4)+'</span>':'')+
+      '<span class="tk none">'+d.attempts.length+' attempt(s)</span></div>'
+      :'<div class="tdu tot"><span class="tk none">tokens not measured · '+d.attempts.length+' attempt(s)</span></div>')+
+    (d.ac&&d.ac.length?'<div class="tdk">acceptance criteria</div>'+list(d.ac):'')+
+    '<details class="wk dfd" open><summary>Diff'+(d.diff_stat?' <span class="dfs">'+esc(d.diff_stat.split("\\n").pop().trim())+'</span>':'')+'</summary>'+
+      diffView(d.diff)+'</details>'+
+    d.attempts.map(att).join("")+
+    '</div>';
+}
+
+// The transcript. "What is it doing" is answered by what the worker printed and
+// what it was asked — not by a spinner.
+
+// The handoff is a contract with named fields — reading it as raw JSON to find
+// out what the worker decided is work the page should have done.
+function handoffView(h){
+  if(!h||typeof h!=="object") return "";
+  const li=(xs,f)=>(xs&&xs.length)?'<ul class="hul">'+xs.map(x=>'<li>'+(f?f(x):esc(String(x)))+'</li>').join("")+'</ul>':"";
+  const sec=(t,body)=>body?'<div class="hk">'+t+'</div>'+body:"";
+  const st=String(h.worker_status||"");
+  const cls=st==="COMPLETED"?"ok":st==="BLOCKED"?"warn":"bad";
+  return '<details class="wk hnd"><summary>What it reported'+
+      ' · <span class="'+cls+'">'+esc(st)+'</span></summary><div class="hbody">'+
+    (h.summary?'<div class="hsum">'+esc(h.summary)+'</div>':"")+
+    sec("files changed",li(h.files_reported_changed,x=>'<code>'+esc(String(x))+'</code>'))+
+    sec("commands it ran",li(h.commands_reported,c=>
+      '<code>'+esc(String(c&&c.command!=null?c.command:c))+'</code>'+
+      (c&&c.exit_code!=null?'<span class="hx '+(c.exit_code===0?"ok":"bad")+'">exit '+esc(String(c.exit_code))+'</span>':"")))+
+    sec("tests",li(h.tests_reported,x=>
+      esc(String(x&&x.name!=null?x.name:x))+
+      (x&&x.result!=null?'<span class="hx '+(String(x.result).toUpperCase()==="PASSED"?"ok":"bad")+'">'+esc(String(x.result))+'</span>':"")))+
+    sec("decisions it made on its own",li(h.decisions))+
+    sec("issues it flagged",li(h.issues))+
+    sec("lessons",li(h.candidate_lessons))+
+    (h.recommended_next_action?sec("recommended next",'<div class="hnx">'+esc(h.recommended_next_action)+'</div>'):"")+
+    '</div></details>';
+}
+function workerPanel(w){
+  if(!w) return "";
+  const when=w.updated_at?new Date(w.updated_at).toLocaleTimeString():"";
+  const box=(t,v,cls,open,doc)=>v?'<details class="wk'+(cls?" "+cls:"")+'"'+(open?" open":"")+'><summary>'+t+'</summary><pre'+(doc?' class="docpre"':'')+'>'+esc(v)+'</pre></details>':"";
+  return '<section class="wkw"><div class="wkh">'+
+      '<b>LAST WORKER</b><span class="wkm">'+esc(w.run_id||"")+(w.task_id?' · task #'+esc(String(w.task_id)):"")+
+      (when?' · '+when:"")+'</span></div>'+
+    (w.usage?(()=>{const inn=(w.usage.input||0)+(w.usage.cache_read||0)+(w.usage.cache_write||0);
+      return '<div class="tdu">'+usageRow({status:"REPORTED",input:inn,output:w.usage.output,
+        total:inn+(w.usage.output||0),cache_read:w.usage.cache_read,
+        cost_usd:w.usage.cost_usd,model:w.usage.model})+
+        (w.usage.turns?'<span class="tk">turns <b>'+w.usage.turns+'</b></span>':'')+'</div>';})():'')+
+    box("What Claude said",w.said)+
+    box("Errors",w.stderr,"err")+
+    handoffView(w.handoff)+
+    box("The task it was given",w.task_prompt,"",false,true)+
+    '</section>';
+}
+
+
+// THE GLANCE. One block that answers, without scrolling and without reading:
+// is it running, what is it doing right now, how far along, does it need me,
+// what has it cost. Previously those five answers were spread across a loop
+// bar, a "now" strip, a last-event line, a worker panel and a seven-chip row —
+// each individually reasonable, together a page you had to study.
+//
+// Everything here is derived from state that already exists; nothing new is
+// recorded to render it.
+
+// What this project has cost, under its own name. Tokens and money are the
+// operator's real constraint, so they sit with the title rather than three
+// screens down.
+const money=(n)=>n==null?"—":(n<1?"$"+n.toFixed(3):"$"+n.toFixed(2));
+function spendStrip(sp){
+  if(!sp||!sp.measured_runs) return '<div class="spd"><span class="none">no measured spend yet</span></div>';
+  const hit=sp.cache_hit!=null?Math.round(sp.cache_hit*1000)/10:null;
+  const m=sp.by_model&&sp.by_model.length?sp.by_model.map(x=>x.model).join(" + "):null;
+  const dur=(ms)=>{const mn=Math.round(ms/60000); return mn<60?mn+"m":Math.floor(mn/60)+"h"+String(mn%60).padStart(2,"0")+"m";};
+  const k=(n)=>n>=1000?(n/1000).toFixed(1)+"k":String(Math.round(n));
+  // one line, the same facts a status line gives: what it cost, how fast it
+  // burned, how long it ran, how much it read and wrote, and how well the
+  // cache held. Context is the LAST worker against its model's own window.
+  const ctx=(sp.context_last&&sp.context_window)
+    ?Math.round(sp.context_last/sp.context_window*1000)/10 : null;
+  return '<div class="spd">'+
+    '<span class="cost"><b>'+money(sp.cost)+'</b>spent</span>'+
+    (sp.cost_per_hour!=null?'<span class="cost"><b>'+money(sp.cost_per_hour)+'</b>/hour</span>':'')+
+    (sp.hours?'<span><b>'+dur(sp.hours*3600000)+'</b>elapsed</span>':'')+
+    (sp.api_ms?'<span><b>'+dur(sp.api_ms)+'</b>api</span>':'')+
+    '<span><b>'+k(sp.tokens_total)+'</b>tok</span>'+
+    (sp.tokens_per_min!=null?'<span><b>'+k(sp.tokens_per_min)+'</b>tpm</span>':'')+
+    (hit!=null?'<span><b>'+hit+'%</b>cache</span>':'')+
+    ((sp.lines_added||sp.lines_removed)?'<span class="dl2"><b class="pl">+'+nfmt(sp.lines_added)+'</b><b class="mi">-'+nfmt(sp.lines_removed)+'</b></span>':'')+
+    (ctx!=null?'<span><b>'+ctx+'%</b>ctx '+k(sp.context_last)+'/'+k(sp.context_window)+'</span>':'')+
+    (m?'<span class="mdl">'+esc(m)+'</span>':'')+
+    (sp.unmeasured_runs?'<span class="none">'+sp.unmeasured_runs+' unmeasured</span>':'')+
+    '</div>';
+}
+function heroBar(s,sup,w,pid){
+  const ts=s.tasks||[];
+  const live=ts.filter(x=>x.status==="building"||x.status==="review"||x.status==="changes");
+  const blocked=ts.filter(x=>x.status==="blocked"||x.status==="stuck");
+  const done=ts.filter(isDone).length;
+  const total=ts.filter(x=>x.status!=="superseded").length;
+  const pct=total?Math.round(done/total*100):0;
+  const st=(sup&&sup.state)||"STOPPED";
+
+  // The headline is the ANSWER, not the machine's word for its own state.
+  let mood="idle", head="IDLE", sub="nothing running";
+  if(blocked.length){ mood="need"; head="NEEDS YOU";
+    sub=blocked.length+" task"+(blocked.length>1?"s":"")+" waiting on a decision"; }
+  else if(st==="RUNNING"&&live.length){ mood="run"; head="BUILDING";
+    sub="#"+live[0].id+" "+(live[0].title||""); }
+  else if(st==="RUNNING"){ mood="run"; head="RUNNING"; sub="looking for the next task"; }
+  else if(st==="PAUSED"){ mood="hold"; head="PAUSED"; sub="the task in flight finishes, then it stops"; }
+  else if(done===total&&total){ mood="done"; head="ALL DONE";
+    sub=total+" of "+total+" delivered"; }
+  else { mood="idle"; head="STOPPED"; sub=(total-done)+" task"+((total-done)===1?"":"s")+" left"; }
+
+  const cost=(w&&w.usage&&w.usage.cost_usd!=null)?"$"+w.usage.cost_usd.toFixed(2):null;
+  return '<div class="hero '+mood+'">'+
+    '<div class="hrow">'+
+      '<div class="hmain"><div class="hhead">'+esc(head)+'</div>'+
+        '<div class="hsub">'+esc(sub)+'</div></div>'+
+      runControls(pid,sup)+
+    '</div>'+
+    '<div class="hbar"><span style="width:'+pct+'%"></span></div>'+
+    '<div class="hfacts">'+
+      '<span><b>'+done+'/'+total+'</b> delivered</span>'+
+      '<span><b>'+pct+'%</b></span>'+
+      (live.length?'<span><b>'+live.length+'</b> running</span>':'')+
+      (blocked.length?'<span class="bad"><b>'+blocked.length+'</b> blocked</span>':'')+
+      (cost?'<span><b>'+cost+'</b> last task</span>':'')+
+    '</div></div>';
+}
+function loopBar(run,advice,st,pid,sup){
+  // The scheduler is the loop now. Its supervisor state is authoritative; the
+  // legacy per-pass heartbeat only describes the old in-session path, and
+  // reading it alone made a working queue report "LOOP NEVER RAN".
+  const h=(sup&&sup.state==="RUNNING")
+    ?{cls:"ok",label:"LOOP RUNNING",detail:"queue running"+(sup.pid?" · pid "+sup.pid:""),dead:false}
+    :(sup&&sup.state==="PAUSED")
+    ?{cls:"late",label:"LOOP PAUSED",detail:"the task in flight finishes; nothing new starts",dead:false}
+    :(sup&&sup.state==="EXITED")
+    ?{cls:"late",label:"LOOP STOPPED",detail:"the queue exited — press start to continue",dead:false}
+    :(sup&&sup.started_at)
+    ?{cls:"dead",label:"LOOP STOPPED",detail:"not running",dead:false}
+    :loopHealth(run);
   const m=advice?advice.minutes:30;
   // --project is auto-detected from the folder the terminal is in; showing it
   // makes the command longer than it needs to be.
   let s='<div class="loop '+h.cls+'"><span class="lb"></span><b>'+h.label+'</b>'+
-    '<span class="lx">'+esc(h.detail)+'</span>'+
-    (h.dead?'<span class="lx">start it:</span><span class="cmd">/loop '+m+'m /sch-run</span>':'')+
+    '<span class="lx">'+esc(h.detail)+'</span>'+runControls(pid,sup)+
     '</div>'+(st&&!h.dead?nowBar(run,st)+lastBar(st):'');
   // The right interval is not a fixed preference — it depends on what the queue
   // looks like right now, so say what it should be and why.
-  if(advice){
+  if(advice && !(sup && sup.started_at)){
     const cur=run&&run.intervalMin?run.intervalMin:0;
     const off=cur&&Math.abs(cur-m)>=10;
     s+='<div class="advice'+(off?' off':'')+'"><b>suggested interval '+m+'m</b>'+
@@ -1450,9 +2357,10 @@ function homeSkeleton(){
     <section id="xattn"></section>
     <section id="pchips"></section>
     <div class="toolbar"><input id="pq" placeholder="search projects…" title="Search by project name, id or domain" value="" oninput="projQ=this.value;reapplyHome()"></div>
+    <section id="mobsec"></section>
     <section id="devsec"></section>
     <section id="secsec"></section>\`;
-  CACHE.xattn=CACHE.pchips=CACHE.devsec=CACHE.secsec=undefined;
+  CACHE.xattn=CACHE.pchips=CACHE.mobsec=CACHE.devsec=CACHE.secsec=undefined;
 }
 function reapplyHome(){ if(LAST&&LAST.projects)homeApply(LAST.projects); }
 function projRows(list){
@@ -1468,6 +2376,57 @@ function projRows(list){
     <td data-l="Done">\${p.done}</td><td data-l="Total">\${p.total}</td><td data-l="Pending">\${p.pending}</td>\${p.offensive?'<td data-l="Findings">'+p.findings+'</td>':''}
     <td data-l="Inbox">\${p.inboxNew?'<span class="in">'+p.inboxNew+'</span>':'0'}</td></tr>\`;}).join("");
 }
+// ---- phone list ----------------------------------------------------------
+// A phone is not a narrow desktop. The desktop table is nine columns wide and
+// correct there; folding those nine cells into stacked label/value rows spent a
+// whole screen per project, so at 50+ projects the operator scrolled past
+// everything that mattered. This is a purpose-built list: two lines per project,
+// every project ranked by how much it needs a human, dev and pentest in ONE
+// sequence so a blocked engagement can never sit below sixty idle builds.
+// Rendered always, shown only under 640px; the tables are hidden there.
+// "running" must mean work is actually moving. Ranking by p.status alone put
+// projects whose loop reads STOPPED under a RUNNING heading — a band that lies
+// is worse than no band, because it is the one an operator trusts to skip.
+const URGENCY=[
+  {id:"needs", label:"needs you", of:(p)=>p.status==="attention"||p.blocked>0||p.stuck>0||
+                                          p.inboxNew>0||(p.blockers||[]).length>0},
+  {id:"run",   label:"running",   of:(p)=>p.building>0||p.review>0||loopHealth(p.run).cls==="ok"},
+  {id:"idle",  label:"idle",      of:(p)=>p.status!=="completed"},
+  {id:"done",  label:"completed", of:()=>true},
+];
+const bandOf=(p)=>URGENCY.findIndex((b)=>b.of(p));
+function projList(list){
+  if(!list.length) return '<div class="empty">no project matches</div>';
+  const sorted=list.slice().sort((a,b)=>
+    bandOf(a)-bandOf(b) ||
+    (b.inboxNew+((b.blockers||[]).length))-(a.inboxNew+((a.blockers||[]).length)) ||
+    b.pct-a.pct || a.name.localeCompare(b.name));
+  let band=-1,out="";
+  for(const p of sorted){
+    const b=bandOf(p);
+    if(b!==band){ band=b;
+      out+='<div class="mb-h">'+URGENCY[b].label+'<span class="mb-n">'+sorted.filter(x=>bandOf(x)===b).length+'</span></div>'; }
+    const[lab,cl]=PSTAT[p.status]||[p.status,""];
+    const h=loopHealth(p.run);
+    const loop=h.cls==="ok"?"running":h.cls==="late"?"late":"stopped";
+    const flag=(p.offensive&&p.halt)?'<span class="mb-f b-halt">halt</span>'
+      :(p.offensive&&!p.authorized)?'<span class="mb-f b-off">unauth</span>':'';
+    const alerts=p.inboxNew+((p.blockers||[]).length);
+    out+='<a class="mb-r '+cl+(p.pct?'':' p0')+'" href="/?project='+encodeURIComponent(p.id)+'">'+
+      '<span class="mb-nm">'+esc(p.name)+'</span>'+
+      '<span class="mb-d">'+esc(p.domain)+'</span>'+flag+
+      (alerts?'<span class="mb-a">'+alerts+'</span>':'')+
+      '<span class="mb-2">'+
+        '<span class="bar2"><span style="width:'+p.pct+'%"></span></span>'+
+        '<span class="mb-p">'+p.pct+'%</span>'+
+        (p.total?'<span class="mb-c">'+p.done+'/'+p.total+'</span>':'')+
+        '<span class="st '+cl+'">'+lab+'</span>'+
+        '<span class="mb-l l-'+loop+'">'+loop+'</span>'+
+      '</span></a>';
+  }
+  return out;
+}
+
 // per-project loop health, compact: this is where you notice a cron that died
 function loopCell(p){
   const h=loopHealth(p.run);
@@ -1503,6 +2462,8 @@ function homeApply(ps){
   const match=(p)=>!q||((p.name+" "+p.id+" "+p.domain).toLowerCase().includes(q));
   const dev=ps.filter(p=>!p.offensive&&match(p));
   const sec=ps.filter(p=>p.offensive&&match(p));
+  // one sequence for the phone; the split tables below are desktop-only
+  set("mobsec",'<div class="mb">'+projList(ps.filter(match))+'</div>');
   set("devsec",projTable("development",dev,q?"no development project matches":"no development projects — run /sch-spec",false));
   set("secsec",projTable("security // pentest",sec,q?"no engagement matches":"no engagements — run /sch-spec with a target",true));
 }
@@ -1512,20 +2473,27 @@ function projSkeleton(id){
   document.getElementById("app").innerHTML=\`
     <div class="bar"><a class="back" href="/">‹ ALL PROJECTS</a><span><span class="dot"></span><span id="livemark" class="live">live</span></span><span class="mono" id="clk"></span></div>
     <h1 id="pname">…</h1><div class="sub" id="pmeta"></div>
-    <section id="loop"></section>
-    <section id="brief"></section>
+    <section id="spend"></section>
     <section id="attn"></section>
     <section id="scope"></section>
+    <section id="loop"></section>
+    <section id="worker"></section>
     <section id="chips"></section>
+    <section id="phase"></section>
     <form class="row-form" method="POST" action="/inbox">\${csrf}<input type="hidden" name="project" value="\${esc(id)}"><input type="text" name="text" title="Describe a feature, fix or lead — the next loop pass reasons it into the right place in the queue" placeholder="NEW LEAD / TASK / FEATURE — reasoned into the queue next pass" autocomplete="off" required><button title="Send to the inbox — the next loop pass plans it into the queue">Add</button></form>
     <section id="inboxsec"></section>
-    <section id="phase"></section>
-    <section id="capsec"></section>
-    <section id="queuesec"></section>
-    <section id="graphsec"></section>
+    <section id="taskdetail"></section>
     <section id="tasksec"></section>
     <section id="findsec"></section>
-    <details class="box"><summary>activity log</summary><div class="boxin"><section id="actsec"></section></div></details>\`;
+    <details class="sysbox"><summary>system — graph, scheduler, capabilities, knowledge, activity</summary>
+      <section id="brief"></section>
+      <section id="queuesec"></section>
+      <section id="graphsec"></section>
+      <section id="modelsec"></section>
+      <section id="capsec"></section>
+      <section id="actsec"></section>
+    </details>
+    <details class="box"><summary>activity log</summary><div class="boxin"></div></details>\`;
   for(const k in CACHE)delete CACHE[k];
 }
 // every action button carries a tooltip + aria-label so an icon is never mystery meat
@@ -1533,13 +2501,60 @@ const ACT_TIP={bump:"Bump to the front of the queue (priority 1)",hold:"Put on h
   requeue:"Requeue — put it back in the queue to be retried",close:"Close as superseded — replaced by other tasks, stop showing it"};
 function actForm(pid,id,a,l,c){const tip=ACT_TIP[a]||a;
   return \`<form class="inl" method="POST" action="/task">\${csrf}<input type="hidden" name="project" value="\${esc(pid)}"><input type="hidden" name="id" value="\${id}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${tip}" aria-label="\${tip}">\${l}</button></form>\`;}
+
+// Per-task spend, straight from the snapshot. "What did that task cost" is the
+// question an operator asks about a QUEUE, so it belongs in the queue.
+let SPEND=null;
+function taskCost(id){
+  const e=SPEND&&SPEND.per_task?SPEND.per_task[String(id)]:null;
+  if(!e) return '<span class="none">—</span>';
+  return '<span class="tcv">'+money(e.cost)+'</span><span class="tct">'+
+    nfmt(e.input+e.output)+' tok</span>';
+}
+
+// WHICH MODEL DOES WHAT. Roles are the unit an operator reasons about — "what
+// writes my code", "what reviews it" — so the control is per role, and the cost
+// consequence is stated next to it rather than left to be discovered on a bill.
+const MODEL_NOTE={haiku:"cheapest · search and docs",sonnet:"the coding model",
+  opus:"most capable · planning and review",inherited:"whatever the session uses"};
+function modelsView(d,pid){
+  if(!d||d.error) return '<div class="tdl">model policy unavailable</div>';
+  const row=(r)=>'<div class="mrow'+(r.source==="project"?" pinned":"")+'">'+
+    '<div class="mr1"><b>'+esc(r.id)+'</b>'+
+      (r.source==="project"?'<span class="mpin">pinned</span>':'')+'</div>'+
+    '<div class="mr2">'+esc(r.purpose)+'</div>'+
+    '<form class="mr3" method="POST" action="/models">'+csrf+
+      '<input type="hidden" name="project" value="'+escA(pid)+'">'+
+      '<input type="hidden" name="role" value="'+escA(r.id)+'">'+
+      '<select name="model" onchange="this.form.submit()">'+
+        d.choices.map(m=>'<option value="'+escA(m)+'"'+(m===r.model?' selected':'')+'>'+esc(m)+'</option>').join("")+
+      '</select>'+
+      '<span class="mnote">'+esc(MODEL_NOTE[r.model]||"")+'</span>'+
+    '</form></div>';
+  return '<div class="mbox"><div class="mhead">MODEL PER ROLE'+
+    '<span>changing one takes effect on the next task</span></div>'+
+    d.roles.map(row).join("")+'</div>';
+}
+async function loadModels(pid){
+  try{ const r=await fetch("/api/models?project="+encodeURIComponent(pid));
+       set("modelsec",modelsView(await r.json(),pid)); }
+  catch(e){ /* leave the section empty rather than shout */ }
+}
 function projApply(id,r){
   if(r.error){location.href="/";return;}
   const p=r.project,s=r.state,sc=p.scope||{},by=(st)=>s.tasks.filter(t=>t.status===st);
+  // The queue paints before spend has ever been read, and on an idle project
+  // nothing changes afterwards — so the cost column stayed "—" forever even
+  // though the numbers were there. Repaint once, the first time spend arrives.
+  const hadSpend=!!SPEND; SPEND=r.spend||null;
+  if(!hadSpend&&SPEND) setTimeout(()=>{try{reapplyTasks();}catch(e){}},0);
   document.getElementById("clk").textContent=clock();
   document.getElementById("pname").textContent=p.name;
   document.getElementById("pmeta").innerHTML=\`\${esc(p.domain)} · \${esc(p.path)||"no path"} \${OFF(p.domain)?(sc.authorized?'<span class="badge b-auth">authorized</span>':'<span class="badge b-off">unauthorized</span>'):''}\${sc.halt?' <span class="badge b-halt">halt</span>':''}\`;
-  set("loop",loopBar(s.run,r.advice,s));
+  set("spend",spendStrip(r.spend));
+  set("loop",heroBar(s,r.supervisor,r.worker,id));
+  set("worker",workerPanel(r.worker));
+  repaintTaskDetail();
   // brief + tech stack — what this project actually is, at a glance
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
@@ -1561,7 +2576,7 @@ function projApply(id,r){
   }
   // Decisions the loop made on its own rather than stopping to ask. These are
   // FYI, not a queue of chores: the work is already moving. Tap to overrule.
-  const assumed=s.tasks.filter(t=>t.assumed&&t.status!=="merged"&&t.status!=="superseded");
+  const assumed=s.tasks.filter(t=>t.assumed&&!isDone(t)&&t.status!=="superseded");
   if(assumed.length){
     attnHtml+='<details class="assumed"><summary>'+assumed.length+' decision'+(assumed.length>1?'s':'')+
       ' the loop made on its own — work is proceeding, tap to change</summary>';
@@ -1581,9 +2596,9 @@ function projApply(id,r){
   const scForm=(a,l,c)=>\`<form class="inl" method="POST" action="/scope">\${csrf}<input type="hidden" name="project" value="\${esc(id)}"><input type="hidden" name="action" value="\${a}"><button class="mini \${c||''}" title="\${SCOPE_TIP[a]||a}" aria-label="\${SCOPE_TIP[a]||a}">\${l}</button></form>\`;
   set("scope",OFF(p.domain)?\`<div class="scope"><b>SCOPE //</b> \${sc.authorized?'authorized':'NOT authorized'}\${sc.halt?' · <span style="color:var(--red)">HALT</span>':''}<br>TARGETS: \${esc((sc.targets||[]).join(", "))||"(none)"}<br>REF: \${esc(sc.ref)||"(none)"}\${sc.expiry?' · EXPIRES '+esc(sc.expiry):''}<div class="acts">\${sc.halt?scForm("resume","▶ resume","go"):scForm("halt","■ halt","danger")} \${sc.authorized?scForm("disarm","disarm"):scForm("arm","arm","go")}</div></div>\`:"");
   // chips
-  const done=by("merged").length,total=s.tasks.filter(t=>t.status!=="superseded").length,pct=total?Math.round(done/total*100):0;
+  const done=s.tasks.filter(isDone).length,total=s.tasks.filter(t=>t.status!=="superseded").length,pct=total?Math.round(done/total*100):0;
   const finds=s.findings||[];
-  set("chips",'<div class="chips">'+[["active",by("building").length,"active"],["in progress",by("review").length+by("changes").length,"inprogress"],["queued",by("queued").length,""],["completed",done,"completed"],["awaiting",by("blocked").length,"awaiting"],["failed",by("stuck").length,"failed"],["findings",finds.length,""]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
+  set("chips","");void ('<div class="chips">'+[["active",by("building").length,"active"],["in progress",by("review").length+by("changes").length,"inprogress"],["queued",by("queued").length,""],["completed",done,"completed"],["awaiting",by("blocked").length,"awaiting"],["failed",by("stuck").length,"failed"],["findings",finds.length,""]].map(([n,v,c])=>\`<div class="chip \${c}"><b class="mono">\${v}</b>\${n}</div>\`).join("")+'</div>');
   // phase strip
   const ph=s.tasks.slice().sort((a,b)=>a.phase-b.phase||a.id-b.id);
   // Phase progress grouped: category (frontend/backend/…) → named phase, each
@@ -1603,20 +2618,20 @@ function projApply(id,r){
   for(const cat of Object.keys(groups).sort()){
     const phases=groups[cat];
     const all=Object.values(phases).flat();
-    const cd=all.filter(t=>t.status==="merged").length;
+    const cd=all.filter(isDone).length;
     const nPh=Object.keys(phases).length;
     const catRunning=all.some(t=>RUNNING.has(t.status));
     const catPct=all.length?Math.round(cd/all.length*100):0;
     phHtml+='<div class="cat'+(catRunning?' running':'')+'"><div class="cat-h"><span class="cat-n">'+esc(cat)+'</span>'+
       '<span class="cat-c mono">'+nPh+' phase'+(nPh>1?'s':'')+' · '+cd+'/'+all.length+' done · '+catPct+'%</span></div>';
     for(const name of Object.keys(phases)){
-      const list=phases[name], d=list.filter(t=>t.status==="merged").length;
+      const list=phases[name], d=list.filter(isDone).length;
       const phRunning=list.some(t=>RUNNING.has(t.status));
       phHtml+='<div class="ph'+(phRunning?' running':'')+'">'+
         '<div class="ph-h"><span class="ph-n">'+esc(name)+'</span><span class="ph-c mono">'+d+'/'+list.length+'</span>'+
         '<div class="pbar"><i style="width:'+(list.length?Math.round(d/list.length*100):0)+'%"></i></div></div>';
       const sorted=list.sort((a,b)=>(a.priority??3)-(b.priority??3)||a.id-b.id);
-      const open=sorted.filter(t=>t.status!=="merged"), doneList=sorted.filter(t=>t.status==="merged");
+      const open=sorted.filter(t=>!isDone(t)), doneList=sorted.filter(isDone);
       const line=(t)=>{const run=RUNNING.has(t.status);
         return '<div class="tk st-'+t.status+(run?' running':'')+'" data-task="'+t.id+'" title="'+esc(t.title)+(t.notes?' — '+esc(t.notes.slice(0,120)):'')+'">'+
           '<span class="tk-d"></span><span class="tk-id mono">#'+t.id+'</span>'+
@@ -1666,19 +2681,20 @@ function projApply(id,r){
   const hidden=Math.max(0,ts.length-CAP);
   const shown=taskFilter.showAll?ts:ts.slice(0,CAP);
   const trows=shown.map(t=>{const[lab,cl]=stL(t.status);return \`<tr class="\${cl}"><td data-l="#" class="id">\${t.id}</td>
-    <td data-l="Task"><span class="cellv"><strong>\${esc(t.title)}</strong>\${t.active?' <span class="badge b-off">active</span>':''}\${srcChip(t)}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</span></td>
+    <td data-l="Task"><span class="cellv"><a href="#" class="tdt" data-task-toggle="\${t.id}" data-project="\${escA(id)}" title="Show the diff, the worker's reasoning and its token cost">\${esc(t.title)}</a>\${t.active?' <span class="badge b-off">active</span>':''}\${srcChip(t)}\${(t.skills&&t.skills.length)?'<div class="skl">'+t.skills.map(x=>'<span>'+esc(x)+'</span>').join("")+'</div>':''}</span></td>
     <td data-l="Phase"><span class="cellv">\${t.category?'<span class="catchip">'+esc(t.category)+'</span> ':''}\${esc(t.phaseName||("P"+t.phase))}</span></td><td data-l="Pri">\${t.priority??3}</td>
     <td data-l="Status"><span class="st \${cl}">\${lab}</span></td>
+    <td data-l="Cost" class="tcost">\${taskCost(t.id)}</td>
     <td data-l="Target">\${esc(t.target||"—")}</td>
     <td data-l="Activity">\${esc(t.notes||t.branch||"—")}</td>
-    <td data-l="" class="ac">\${rowActs(t)}</td></tr>\`;}).join("")||'<tr><td colspan="8" class="empty">no tasks match</td></tr>';
+    <td data-l="" class="ac">\${rowActs(t)}</td></tr>\`;}).join("")||'<tr><td colspan="9" class="empty">no tasks match</td></tr>';
   const statuses=["","queued","building","review","changes","blocked","stuck","merged","superseded"];
   const supN=s.tasks.filter(t=>t.status==="superseded").length;
   set("tasksec",'<h2>tasks<span class="n mono">'+shown.length+' of '+ts.length+' shown</span></h2>'+
     '<div class="toolbar"><input id="tq" placeholder="filter tasks…" title="Filter by task title, note or phase" value="'+esc(taskFilter.q)+'" oninput="taskFilter.q=this.value;reapplyTasks()">'+
     '<select id="ts" title="Show only tasks in this status" onchange="taskFilter.status=this.value;reapplyTasks()">'+statuses.map(x=>'<option value="'+x+'"'+(x===taskFilter.status?' selected':'')+'>'+(x?x:'all statuses')+'</option>').join("")+'</select>'+
     (supN?'<button class="mini" title="Superseded = tasks replaced by other/smaller tasks. Their work still exists elsewhere; hidden by default to keep the queue clean." onclick="taskFilter.showSuperseded=!taskFilter.showSuperseded;reapplyTasks()">'+(taskFilter.showSuperseded?'hide':'show')+' superseded ('+supN+')</button>':'')+'</div>'+
-    '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>'+((hidden&&!taskFilter.showAll)?'<button class="moretasks" onclick="taskFilter.showAll=true;reapplyTasks()">show all '+ts.length+' tasks (+'+hidden+' more)</button>':(taskFilter.showAll&&ts.length>CAP)?'<button class="moretasks" onclick="taskFilter.showAll=false;reapplyTasks()">show fewer</button>':''));
+    '<div class="tbl-wrap"><table class="t"><thead><tr><th>#</th><th>Task</th><th>Phase</th><th>Pri</th><th>Status</th><th>Cost</th><th>Target</th><th>Activity</th><th></th></tr></thead><tbody>'+trows+'</tbody></table></div>'+((hidden&&!taskFilter.showAll)?'<button class="moretasks" onclick="taskFilter.showAll=true;reapplyTasks()">show all '+ts.length+' tasks (+'+hidden+' more)</button>':(taskFilter.showAll&&ts.length>CAP)?'<button class="moretasks" onclick="taskFilter.showAll=false;reapplyTasks()">show fewer</button>':''));
   // findings
   const srank=(x)=>["critical","high","medium","low","info"].indexOf((x||"info").toLowerCase());
   const fsev=(x)=>({critical:"f-critical",high:"f-high",medium:"f-medium",low:"f-low"}[(x||"info").toLowerCase()]||"f-info");
@@ -1858,11 +2874,21 @@ function queueSec(g,s,h,pj,rp){
   const runs=(rp&&!rp.error&&rp.runs)?rp.runs:[];
   // A worker that wrote into another task's checkout is worse than anything else
   // on this page, so it goes above everything else on this page.
-  const viol=runs.filter(r=>r.territory&&r.territory.verdict==="VIOLATED");
+  // A violation on a task that has since been re-run and delivered is history,
+  // not an alarm. Keeping it pinned to the top forever trains the operator to
+  // ignore the one banner that must never be ignored, so it is scoped to tasks
+  // still open. The evidence stays in the run directory either way — nothing
+  // here deletes a record to quieten a warning.
+  const doneIds=new Set(((LAST&&LAST.state&&LAST.state.tasks)||[]).filter(isDone).map(t=>String(t.id)));
+  const allViol=runs.filter(r=>r.territory&&r.territory.verdict==="VIOLATED");
+  const viol=allViol.filter(r=>!doneIds.has(String(r.task_id)));
+  const settled=allViol.length-viol.length;
   if(viol.length)out+='<div class="attn"><b>&#9888; A WORKER WROTE OUTSIDE ITS WORKTREE</b>'+
     viol.map(r=>'<div class="attn-row">'+esc(r.run_id)+' · task #'+esc(String(r.task_id))+' — '+
       r.territory.violated.map(v=>esc(v.id)).join(", ")+
       '<div class="why">nothing was reverted; the evidence is kept in the run directory</div></div>').join("")+'</div>';
+  if(settled)out+='<div class="settled">'+settled+' earlier territory violation'+(settled>1?'s':'')+
+    ' on task'+(settled>1?'s':'')+' since delivered — kept in the run records, not repeated here</div>';
   // --- project graph
   if(g&&!g.error){
     const st=(n)=>'<span class="badge">'+esc(n.state)+'</span>';
@@ -1933,10 +2959,48 @@ function queueSec(g,s,h,pj,rp){
 }
 
 // ---- live stream (SSE) + graceful fallback ----
+
+// THE ACCOUNT'S BUDGET, not this project's bill. Fixed to the bottom of every
+// page because it is the number that decides whether to start anything at all.
+// Values come from Anthropic's own usage endpoint; SCH never estimates them.
+let LIMITS=null;
+function limitBar(){
+  const el=document.getElementById("limitbar");
+  if(!el) return;
+  if(!LIMITS||!LIMITS.available){
+    el.innerHTML='<div class="lbin"><span class="lbnone">account usage unavailable'+
+      (LIMITS&&LIMITS.reason?' — '+esc(LIMITS.reason):'')+'</span></div>';
+    return;
+  }
+  const seg=(label,w)=>{
+    if(!w) return '';
+    const p=Math.round(w.utilization*10)/10;
+    const cls=p>=90?'crit':p>=70?'warn':'';
+    return '<span class="lbseg"><span class="lbl">'+label+'</span>'+
+      '<span class="lbbar '+cls+'"><span style="width:'+Math.min(100,p)+'%"></span></span>'+
+      '<span class="lbv '+cls+'">'+p+'%</span>'+
+      (w.resets_at?'<span class="lbr">resets '+esc(untilText(w.resets_at))+'</span>':'')+'</span>';
+  };
+  el.innerHTML='<div class="lbin">'+seg("session · 5h",LIMITS.five_hour)+seg("weekly · 7d",LIMITS.seven_day)+'</div>';
+}
+function untilText(iso){
+  const ms=Date.parse(iso)-Date.now();
+  if(!(ms>0)) return "resetting";
+  const m=Math.round(ms/60000);
+  if(m<60) return m+"m";
+  const h=Math.floor(m/60), rm=m%60;
+  if(h<24) return h+"h "+rm+"m";
+  return Math.floor(h/24)+"d "+(h%24)+"h";
+}
+async function loadLimits(){
+  try{ const r=await fetch("/api/limits"); LIMITS=await r.json(); }
+  catch(e){ LIMITS={available:false,reason:"unreachable"}; }
+  limitBar();
+}
 let LAST=null, curProject=null, es=null;
 function connect(){
   const pj=qp("project"); curProject=pj;
-  if(pj){projSkeleton(pj);loadCaps(pj);loadQueue(pj);setInterval(()=>loadQueue(pj),15000);} else homeSkeleton();
+  if(pj){projSkeleton(pj);loadCaps(pj);loadModels(pj);loadQueue(pj);setInterval(()=>loadQueue(pj),15000);} else homeSkeleton();
   const url="/events"+(pj?"?project="+encodeURIComponent(pj):"");
   es=new EventSource(url);
   // never swallow silently: an empty catch here hid a render crash that blanked
@@ -1947,6 +3011,8 @@ function connect(){
 function apply(d){ if(d.projects)homeApply(d.projects); else projApply(curProject,d); }
 function mark(ok){const el=document.getElementById("livemark");if(el){el.textContent=ok?"live":"reconnecting…";el.className=ok?"live":"stale";}}
 setInterval(()=>{const el=document.getElementById("clk");if(el)el.textContent=clock();},1000);
+loadLimits(); setInterval(()=>{ if(!document.hidden) loadLimits(); },300000);
+setInterval(limitBar,30000);   // keep the reset countdown honest between fetches
 connect();
 </script>
 </body></html>`;

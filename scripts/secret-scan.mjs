@@ -22,7 +22,7 @@ const pathsAt = arg.indexOf("--paths");
 const EXPLICIT = pathsAt === -1 ? null : arg.slice(pathsAt + 1).filter((a) => !a.startsWith("--"));
 const ALL = arg.includes("--all") || (EXPLICIT !== null);
 // git with a fixed arg array — no shell, so filenames can't inject.
-const git = (...a) => { try { return execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return ""; } };
+const git = (...a) => { try { return execFileSync("git", a, { windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return ""; } };
 
 // Files that must never be committed (by name / glob-ish).
 const BLOCK_FILES = [

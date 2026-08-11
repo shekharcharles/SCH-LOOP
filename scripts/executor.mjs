@@ -18,8 +18,8 @@
 //   * stdout/stderr are capped, and truncation is recorded rather than hidden.
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { join, isAbsolute, delimiter } from "node:path";
+import { existsSync, statSync, readFileSync } from "node:fs";
+import { join, isAbsolute, delimiter, dirname } from "node:path";
 
 export const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;   // 20 min — SCH's, not the worker's
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024; // 1 MiB per stream
@@ -193,16 +193,48 @@ export const redactEnv = (env) =>
 // entry with the command name and stats it, so a relative entry is resolved
 // against SCH'S OWN cwd — the managed repository — and a file sitting there
 // would decide which `claude` SCH launches.
+// Node refuses to spawn a .cmd/.bat without a shell (the CVE-2024-27980
+// hardening), and this executor will not take a shell — an interpolated command
+// string is exactly the injection surface the whole file is built to avoid.
+//
+// npm's Windows shim is a two-line batch file that calls one quoted path, so we
+// read the target out of it and spawn that directly. Real executable, array
+// arguments, no shell. If the shim is not the shape we expect, the original path
+// is returned unchanged and the caller fails loudly rather than silently running
+// something else.
+function unwrapWindowsShim(p) {
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(p)) return p;
+  try {
+    const text = readFileSync(p, "utf8");
+    const m = text.match(/"%(?:dp0|~dp0)%\\?([^"]+\.exe)"/i) || text.match(/"([A-Za-z]:\\[^"]+\.exe)"/);
+    if (!m) return p;
+    const target = m[1].includes(":") ? m[1] : join(dirname(p), m[1]);
+    return statSync(target).isFile() ? target : p;
+  } catch { return p; }
+}
+
 export function resolveExecutable(cmd, env = process.env) {
   if (!cmd) return null;
   const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
   if (cmd.includes("/") || cmd.includes("\\") || isAbsolute(cmd)) return isFile(cmd) ? cmd : null;
   const exts = process.platform === "win32"
     ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+  // ORDER MATTERS ON WINDOWS, and getting it wrong fails at spawn, not here.
+  //
+  // npm-style installers ship BOTH `claude` (a #!/bin/sh shim for Git Bash/MSYS)
+  // and `claude.cmd` in the same directory. `statSync().isFile()` is true for the
+  // extensionless shim, so trying "" first resolved to a shell script that
+  // CreateProcess cannot execute — every worker died with ENOENT in ~3ms and the
+  // scheduler reported AGENT_PROTOCOL_ERROR, three attempts deep, with no clue
+  // that the executable was the problem.
+  //
+  // So on Windows the PATHEXT candidates come first and the bare name is the
+  // fallback; elsewhere the bare name is the only candidate and this is a no-op.
+  const order = process.platform === "win32" ? [...exts, ""] : ["", ...exts];
   for (const dir of String(env.PATH || "").split(delimiter).filter((d) => d !== "" && isAbsolute(d)))
-    for (const ext of ["", ...exts]) {
+    for (const ext of order) {
       const p = join(dir, cmd + ext);
-      if (isFile(p)) return p;
+      if (isFile(p)) return unwrapWindowsShim(p);
     }
   return null;
 }
@@ -276,7 +308,12 @@ export class ClaudeCliExecutor extends AgentExecutor {
                 maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES, env = process.env } = {}) {
     super();
     this.configured = executable ?? env.SCH_CLAUDE_EXECUTABLE ?? "claude";
-    this.baseArgs = baseArgs ?? (env.SCH_CLAUDE_ARGS ? env.SCH_CLAUDE_ARGS.split(" ").filter(Boolean) : ["-p"]);
+    // `--output-format json` is not optional machinery, it is the only way the
+    // CLI reports token counts and cost at all. It is appended rather than
+    // required of the operator, so SCH_CLAUDE_ARGS stays about the operator's
+    // choices (permissions, model) and never has to remember SCH's plumbing.
+    const wanted = baseArgs ?? (env.SCH_CLAUDE_ARGS ? env.SCH_CLAUDE_ARGS.split(" ").filter(Boolean) : ["-p"]);
+    this.baseArgs = wanted.includes("--output-format") ? wanted : [...wanted, "--output-format", "json"];
     this.timeoutMs = Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
     this.maxOutputBytes = Number(maxOutputBytes) || DEFAULT_MAX_OUTPUT_BYTES;
     this.parentEnv = env;

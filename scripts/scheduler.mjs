@@ -59,6 +59,7 @@ export const STOP_REASONS = [
   "PROJECT_COMPLETED", "PHASE_COMPLETED", "NO_READY_TASK", "NEEDS_DECISION",
   "BLOCKED", "FAILED", "CANCELLED", "MAX_TASKS_REACHED", "MAX_DURATION_REACHED",
   "PROJECT_BUDGET_EXCEEDED", "CONSECUTIVE_FAILURE_LIMIT", "SCHEDULER_LEASE_LOST",
+  "COST_CEILING_REACHED",
   "POLICY_VIOLATION", "STOP_AFTER_TASK", "DRY_RUN",
 ];
 
@@ -268,8 +269,34 @@ export const DEFAULT_BUDGETS = {
   max_consecutive_failures: 3,
   max_total_attempts: 30,
   max_prompt_characters_per_attempt: 60000,
+  // A hard money stop. Everything else here bounds effort; this bounds the
+  // bill, which is the bound an operator actually feels. Null means unlimited
+  // and is the only way to get unlimited — there is no implicit one.
+  max_cost_usd_per_run: 10,
   max_output_bytes_per_attempt: 1024 * 1024,
 };
+
+
+// What this scheduler run has cost so far, read from the usage records the
+// runner already writes. Deliberately re-read rather than accumulated in
+// memory: a resumed run must not start its budget again from zero.
+function runCostSoFar(repoRoot, sinceMs) {
+  let total = 0;
+  try {
+    const dir = join(repoRoot, ".sch-loop", "runs");
+    for (const d of readdirSync(dir)) {
+      if (!d.startsWith("RUN-")) continue;
+      try {
+        const u = JSON.parse(readFileSync(join(dir, d, "usage.json"), "utf8"));
+        if (u.usage_status !== "REPORTED") continue;
+        const at = Date.parse(u.recorded_at || u.started_at || 0) || 0;
+        if (sinceMs && at && at < sinceMs) continue;
+        total += Number(u.reported_cost_usd ?? u.estimated_cost_usd ?? 0) || 0;
+      } catch { /* a run without usage contributes nothing */ }
+    }
+  } catch { /* no runs directory yet */ }
+  return total;
+}
 
 export const budgetsFor = (project) => ({ ...DEFAULT_BUDGETS, ...(project?.schedulerBudgets ?? {}) });
 
@@ -546,6 +573,15 @@ export async function runQueue({
       if (record.tasks_delivered >= limitTasks) return finishDraining("MAX_TASKS_REACHED");
       if (record.consecutive_failures >= budgets.max_consecutive_failures) return finishDraining("CONSECUTIVE_FAILURE_LIMIT");
       if (record.total_attempts >= budgets.max_total_attempts) return finishDraining("PROJECT_BUDGET_EXCEEDED");
+      // The money stop, checked in the same place as every other bound: before a
+      // task is selected, so nothing is torn off half-done when it trips.
+      if (budgets.max_cost_usd_per_run != null) {
+        const spent = runCostSoFar(repoRoot, started);
+        if (spent >= budgets.max_cost_usd_per_run) {
+          emit("scheduler.budget_exhausted", { spent_usd: Number(spent.toFixed(4)), ceiling_usd: budgets.max_cost_usd_per_run });
+          return finishDraining("COST_CEILING_REACHED");
+        }
+      }
       if (!liveSchedulerLease(wsDir) || liveSchedulerLease(wsDir)?.scheduler_id !== id) return finishDraining("SCHEDULER_LEASE_LOST");
 
       // ---- validate the graph, every pass. It is cheap, and a queue edited by
@@ -1151,7 +1187,9 @@ async function runAttempt({ projectId, taskId, attempt, wsDir, repoRoot, workRoo
       }
       // 1. Resolve the ROLE. An unavailable executor or model profile fails the
       //    phase here, before a process is started.
-      const resolved = ROLES.resolve(handler.role, { task, project, skills: [] });
+      // `attempt` decides the model: a retry escalates once rather than
+      // repeating the attempt that just failed on the same model.
+      const resolved = ROLES.resolve(handler.role, { task, project, skills: [], attempt });
       if (!resolved.ok) return { ok: false, state: "FAILED", failure: resolved.failure };
       const roleConfig = { ...resolved.config, semantic_handler: semanticId, phase_execution_id: `PEX-${randomBytes(6).toString("hex").toUpperCase()}` };
 

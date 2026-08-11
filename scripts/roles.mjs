@@ -41,28 +41,31 @@ export const TOOLS = ["read", "search", "edit", "shell", "browser"];
 export const MODEL_PROFILES = {
   economical: {
     id: "economical", version: 1, executor: "claude-cli", provider: "anthropic",
-    model: "inherited", reasoning: "low",
+    // finding things and writing docs does not need a frontier model
+    model: "haiku", reasoning: "low",
     max_prompt_characters: 30000, max_output_bytes: 512 * 1024,
     cost_policy: { max_estimated_cost_usd: 2 },
     fallback_profiles: [],
   },
   workhorse: {
     id: "workhorse", version: 1, executor: "claude-cli", provider: "anthropic",
-    model: "inherited", reasoning: "medium",
+    // the bulk of the bill: implementation, where sonnet is the right trade
+    model: "sonnet", reasoning: "medium",
     max_prompt_characters: 60000, max_output_bytes: 1024 * 1024,
     cost_policy: { max_estimated_cost_usd: 10 },
     fallback_profiles: ["economical"],
   },
   "high-reasoning": {
     id: "high-reasoning", version: 1, executor: "claude-cli", provider: "anthropic",
-    model: "inherited", reasoning: "high",
+    // planning and review decide what everything else does; pay here
+    model: "opus", reasoning: "high",
     max_prompt_characters: 60000, max_output_bytes: 1024 * 1024,
     cost_policy: { max_estimated_cost_usd: 20 },
     fallback_profiles: ["workhorse"],
   },
   "frontier-review": {
     id: "frontier-review", version: 1, executor: "claude-cli", provider: "anthropic",
-    model: "inherited", reasoning: "high",
+    model: "opus", reasoning: "high",
     max_prompt_characters: 80000, max_output_bytes: 1024 * 1024,
     cost_policy: { max_estimated_cost_usd: 40 },
     fallback_profiles: [],   // a review that silently ran on a cheaper model is not the review that was asked for
@@ -198,8 +201,42 @@ const fail = (code, message, extra = {}) => ({ ok: false, failure: { code, messa
 // with — or fail closed. Nothing here is implicit: an unavailable executor, an
 // unavailable model profile and an unapproved fallback are all preflight
 // failures, never a quiet substitution.
+
+// The models an operator may assign to a role. A closed set on purpose: an
+// unknown value must fail here, where it can be explained, and never reach the
+// CLI as an unrecognised --model.
+export const SELECTABLE_MODELS = ["haiku", "sonnet", "opus", "inherited"];
+
+// Where a role goes when its first attempt failed. Repeating a failed attempt
+// on the same model mostly reproduces the same mistake; a stronger model is the
+// cheapest way to avoid a third attempt. Never downward — a retry must not
+// quietly become a weaker review than the one that was asked for.
+export const ESCALATION = { haiku: "sonnet", sonnet: "opus", opus: "opus", inherited: "inherited" };
+
+// The model for a role on a given attempt. Attempt 1 is the role's own model;
+// later attempts escalate once and then hold.
+export function modelForAttempt(roleId, project = null, attempt = 1) {
+  const base = modelForRole(roleId, project);
+  if (attempt <= 1) return base;
+  const up = ESCALATION[base.model] ?? base.model;
+  return up === base.model ? base : { model: up, source: base.source + "+escalated" };
+}
+
+// Which model this role will actually run on, given the project's policy. The
+// profile still decides budgets, tools and reasoning; this decides only the
+// model, because "which model writes my code" is the question an operator
+// actually asks and it should not require learning what a profile is.
+export function modelForRole(roleId, project = null) {
+  const chosen = project?.modelPolicy?.models?.[roleId];
+  if (chosen && SELECTABLE_MODELS.includes(chosen)) return { model: chosen, source: "project" };
+  const role = ROLES[roleId];
+  const prof = role ? MODEL_PROFILES[project?.modelPolicy?.roles?.[roleId] ?? role.model_profile] : null;
+  return { model: prof?.model ?? "inherited", source: "profile" };
+}
+
 export function resolve(roleId, {
   task = null, project = null, skills = [], allowFallback = null, availableExecutors = AVAILABLE_EXECUTORS,
+  attempt = 1,
 } = {}) {
   const role = ROLES[roleId];
   if (!role) return fail("UNKNOWN_ROLE", `no agent role "${roleId}" (${ROLE_IDS.join(", ")})`);
@@ -260,7 +297,13 @@ export function resolve(roleId, {
     model_profile: profile.id, model_profile_version: profile.version,
     // What the CLI actually used is filled in AFTER the process runs. "inherited"
     // is honest here: SCH did not choose it and does not yet know it.
-    model: profile.model, resolved_model: null, reasoning: profile.reasoning,
+    // An operator may name the model for a role; the profile keeps deciding
+    // budgets, tools and reasoning. Recorded with its source so a run can be
+    // audited for WHY it ran on what it ran on.
+    model: modelForAttempt(roleId, project, attempt).model,
+    model_source: modelForAttempt(roleId, project, attempt).source,
+    attempt,
+    resolved_model: null, reasoning: profile.reasoning,
     prompt_template: role.prompt_template,
     context_policy: role.context_policy,
     tools, writes,

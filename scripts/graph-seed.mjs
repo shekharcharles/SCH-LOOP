@@ -102,11 +102,11 @@ if (repo && existsSync(join(repo, "CLAUDE.md"))) {
 // 4. Recent commits give files a reason for existing beyond "a task named it".
 if (repo && existsSync(join(repo, ".git"))) {
   try {
-    const log = execFileSync("git", ["-C", repo, "log", "-40", "--pretty=%h%x09%s"], { encoding: "utf8" });
+    const log = execFileSync("git", ["-C", repo, "log", "-40", "--pretty=%h%x09%s"], { windowsHide: true, encoding: "utf8" });
     for (const line of log.trim().split("\n")) {
       const [sha, subject] = line.split("\t");
       if (!subject || /^(chore|docs)\b/.test(subject)) continue;
-      const files = execFileSync("git", ["-C", repo, "show", "--name-only", "--pretty=", sha], { encoding: "utf8" })
+      const files = execFileSync("git", ["-C", repo, "show", "--name-only", "--pretty=", sha], { windowsHide: true, encoding: "utf8" })
         .trim().split("\n").filter((f) => f && PATH_RE.test(f));
       if (!files.length) continue;
       const c = put({ kind: "note", name: subject.slice(0, 90), summary: `commit ${sha}` });

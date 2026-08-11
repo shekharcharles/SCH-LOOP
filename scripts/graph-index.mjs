@@ -136,10 +136,10 @@ try {
     if (!p?.path) { console.error("project has no path"); process.exit(1); }
     repoRoot = p.path;
     if (has("changed")) {
-      const out = execFileSync("git", ["-C", repoRoot, "diff", "--name-only", "HEAD~1", "HEAD"], { encoding: "utf8" });
+      const out = execFileSync("git", ["-C", repoRoot, "diff", "--name-only", "HEAD~1", "HEAD"], { windowsHide: true, encoding: "utf8" });
       files = out.trim().split("\n").filter(Boolean).map((f) => join(repoRoot, f));
     } else {
-      const out = execFileSync("git", ["-C", repoRoot, "ls-files"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+      const out = execFileSync("git", ["-C", repoRoot, "ls-files"], { windowsHide: true, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
       files = out.trim().split("\n").filter(Boolean).map((f) => join(repoRoot, f));
     }
   }
