@@ -8,7 +8,7 @@
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, watch, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, watch, readdirSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { statSync } from "node:fs";
@@ -964,9 +964,27 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/") { res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE.replace("__CSRF__", CSRF)); return; }
   res.writeHead(404); res.end("not found");
 });
+// WHO TO STOP, said by the only process that knows. dashboard-ctl used to find
+// the dashboard by asking the OS what was LISTENING on the port and killing it —
+// which kills whatever happens to hold that port, dashboard or not. It reads
+// this file instead, so a stop can only ever stop the process that wrote it.
+const PIDFILE = join(ROOT, "dashboard.pid");
+const dropPidfile = () => { try { if (readFileSync(PIDFILE, "utf8").trim() === String(process.pid)) unlinkSync(PIDFILE); } catch {} };
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { dropPidfile(); process.exit(0); });
+process.on("exit", dropPidfile);
+
+// A second dashboard racing for the same port is EXPECTED — five terminals can
+// open at once and each ask for one. Losing that race is not an error worth a
+// stack trace: say so and leave, so the winner serves everybody.
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE") { console.log(`a dashboard is already listening on ${BIND}:${PORT} — leaving it alone`); process.exit(0); }
+  throw e;
+});
+
 server.listen(Number(PORT), BIND, () => {
   // The port ACTUALLY bound, which is not PORT when PORT is 0.
   const p = server.address()?.port ?? PORT;
+  try { writeFileSync(PIDFILE, JSON.stringify({ pid: process.pid, port: p, bind: BIND, started_at: new Date().toISOString() })); } catch {}
   console.log(`SCH Loop dashboard (live) on http://${BIND}:${p}`);
   console.log(`open it with: http://${BIND}:${p}/?token=${TOKEN}`);
 });
