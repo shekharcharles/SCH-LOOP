@@ -26,3 +26,4 @@
 - Claiming a protection whose effect no hermetic test can reach (network, OS boundary, remote behaviour) → implement only the part the test CAN see, and write the residual into the README and a KNOWN-GAP test in the same commit as the mechanism.
 - A long background command piped through `tail`/`head` leaves its output file empty until it exits → run it unpiped so progress is visible; "no output yet" is not evidence of a hang.
 - Reaching for PowerShell here-string syntax (`@'...'@`) inside the Bash tool → its markers land verbatim in the argument; use a bash heredoc or `-F file` for any multi-line string.
+- Treating `fs.watch(dir,{recursive:true})` as a reliable change signal for a "live" view → measured on Windows it silently coalesced and dropped a file creation entirely; pair every watcher with a cheap stat-stamp poll and push only when the stamp moves.

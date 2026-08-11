@@ -386,11 +386,68 @@ function taskDetail(project, taskId) {
 
 // ---- SSE ----
 const clients = new Set();
-const send = (c) => { try { c.res.write("data: " + JSON.stringify(snapshot(c.project)) + "\n\n"); } catch {} };
+const send = (c) => {
+  try { c.res.write("data: " + JSON.stringify(snapshot(c.project)) + "\n\n"); c.stamp = stampOf(c.project); } catch {}
+};
 let deb;
 const pushAll = () => { clearTimeout(deb); deb = setTimeout(() => clients.forEach(send), 200); };
+
+// A snapshot is ~95KB, and the operator watches this from a phone. So the poll
+// below asks a much cheaper question first: have the files this page is built
+// from changed at all? Four stats beat a re-serialized snapshot, and an idle
+// project costs nothing on the wire.
+function mtime(p) { try { return statSync(p).mtimeMs; } catch { return 0; } }
+function stampOf(project) {
+  if (!project) {
+    let s = mtime(REGISTRY);
+    try { for (const p of loadRegistry().projects ?? []) s += mtime(join(PROJECTS_DIR, p.id, "state.json")); } catch {}
+    return String(s);
+  }
+  let s = mtime(join(PROJECTS_DIR, project, "state.json")) + mtime(join(PROJECTS_DIR, project, "supervisor.json"));
+  try {
+    const p = getProject(project);
+    const runs = join(repositoryRootOf(p), ".sch-loop", "runs");
+    const dirs = readdirSync(runs).filter((d) => d.startsWith("RUN-")).sort();
+    // only the newest run is on the page; the rest cannot change what is shown
+    if (dirs.length) { const d = join(runs, dirs[dirs.length - 1]); s += mtime(join(d, "stdout.log")) + mtime(join(d, "run.json")); }
+  } catch {}
+  return String(s);
+}
 try { watch(PROJECTS_DIR, { recursive: true }, pushAll); } catch {}
 try { watch(REGISTRY, pushAll); } catch {}
+
+// WATCH THE WORKSPACE TOO. Everything a worker produces — run transcripts, the
+// diff, token usage, scheduler records, deliveries — lands in the repository's
+// .sch-loop directory, NOT in PROJECTS_DIR. Watching only the latter meant the
+// worker panel, the spend strip and the diff refreshed when something happened
+// to touch projects/, and otherwise sat still until the operator reloaded. The
+// page called itself live while showing a snapshot.
+const watchedDirs = new Set();
+function watchWorkspaces() {
+  let projects = [];
+  try { projects = loadRegistry().projects ?? []; } catch { return; }
+  for (const p of projects) {
+    if (!p.path) continue;
+    let dir;
+    try { dir = join(repositoryRootOf(p), ".sch-loop"); } catch { continue; }
+    if (!dir || watchedDirs.has(dir) || !existsSync(dir)) continue;
+    // A watcher that throws (deleted folder, permissions) must not take the
+    // dashboard with it — the interval below retries it on the next sweep.
+    try { watch(dir, { recursive: true }, pushAll); watchedDirs.add(dir); console.log("watching workspace: " + dir); }
+    catch (e) { console.error("cannot watch " + dir + ": " + e.message); }
+  }
+}
+watchWorkspaces();
+// A project added after startup gets watched without a restart.
+setInterval(watchWorkspaces, 30000).unref?.();
+// The safety net. Recursive watch on Windows drops and coalesces events under
+// load and says nothing when it does — measured here: a file created inside a
+// watched workspace produced no event at all, while the next write did. So
+// "live" cannot rest on the watcher alone. Every 3s, ask the cheap question and
+// push only what actually moved.
+setInterval(() => {
+  for (const c of clients) { try { if (stampOf(c.project) !== c.stamp) send(c); } catch {} }
+}, 3000).unref?.();
 setInterval(() => clients.forEach((c) => { try { c.res.write(": ping\n\n"); } catch {} }), 25000); // keep-alive
 
 // CSRF: same-origin headers alone are spoofable by a non-browser client on the
@@ -1974,22 +2031,42 @@ document.addEventListener("click",(e)=>{
 
 let TASKOPEN=null;
 let TASKCACHE=null;
+let TASKPID=null;
+let TASKSTAMP=null;
+async function loadTaskDetail(pid,id,placeholder){
+  const el=document.getElementById("taskdetail");
+  if(!el) return;
+  if(placeholder) el.innerHTML='<div class="tdl">loading task #'+id+'…</div>';
+  try{
+    const r=await fetch("/api/task?project="+encodeURIComponent(pid)+"&task="+id);
+    const d=await r.json();
+    if(TASKOPEN!==id) return;          // closed, or another task opened, while in flight
+    TASKCACHE=d; el.innerHTML=taskDetailView(d);
+  }catch(e){ if(placeholder) el.innerHTML='<div class="tdl">could not load: '+esc(String(e))+'</div>'; }
+}
 async function toggleTask(pid,id){
   const el=document.getElementById("taskdetail");
   if(!el) return;
-  if(TASKOPEN===id){ TASKOPEN=null; TASKCACHE=null; el.innerHTML=""; return; }
-  TASKOPEN=id; el.innerHTML='<div class="tdl">loading task #'+id+'…</div>';
-  try{
-    const r=await fetch("/api/task?project="+encodeURIComponent(pid)+"&task="+id);
-    TASKCACHE=await r.json();
-    if(TASKOPEN===id) el.innerHTML=taskDetailView(TASKCACHE);
-  }catch(e){ el.innerHTML='<div class="tdl">could not load: '+esc(String(e))+'</div>'; }
+  if(TASKOPEN===id){ TASKOPEN=null; TASKCACHE=null; TASKSTAMP=null; el.innerHTML=""; return; }
+  TASKOPEN=id; TASKPID=pid; TASKSTAMP=null;
+  await loadTaskDetail(pid,id,true);
 }
 // A live page redraws constantly; the panel the operator opened must not vanish
 // underneath them because a heartbeat arrived.
-function repaintTaskDetail(){
+//
+// It must also not FREEZE. The panel was fetched once, when it was clicked, and
+// never again — so the diff, the reasoning and the token count of a task you
+// were watching build stayed at whatever they were the moment you opened it.
+// Re-fetch when the task itself moves rather than on every push: the payload
+// carries the whole diff, and a heartbeat is not news.
+function repaintTaskDetail(st){
   const el=document.getElementById("taskdetail");
-  if(el&&TASKOPEN!=null&&TASKCACHE) el.innerHTML=taskDetailView(TASKCACHE);
+  if(!el||TASKOPEN==null) return;
+  if(TASKCACHE) el.innerHTML=taskDetailView(TASKCACHE);
+  const t=st&&(st.tasks||[]).find(x=>x.id===TASKOPEN);
+  if(!t) return;
+  const stamp=(t.updatedAt||"")+"|"+(t.status||"")+"|"+(t.state||"");
+  if(stamp!==TASKSTAMP){ TASKSTAMP=stamp; loadTaskDetail(TASKPID,TASKOPEN,false); }
 }
 // A unified diff rendered as a diff, not as a wall of text. Line numbers on both
 // sides, additions and removals coloured on the LINE rather than by a leading
@@ -2554,7 +2631,7 @@ function projApply(id,r){
   set("spend",spendStrip(r.spend));
   set("loop",heroBar(s,r.supervisor,r.worker,id));
   set("worker",workerPanel(r.worker));
-  repaintTaskDetail();
+  repaintTaskDetail(s);
   // brief + tech stack — what this project actually is, at a glance
   const stack=(p.stack||[]);
   set("brief",(p.description||stack.length)?'<div class="brief">'+
