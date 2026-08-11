@@ -62,3 +62,7 @@ external-skills/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
+
+# dashboard runtime — auth token and logs, machine-local, NEVER committed.
+dashboard-token
+dashboard.*.log
