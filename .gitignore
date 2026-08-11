@@ -66,3 +66,5 @@ graft/
 # dashboard runtime — auth token and logs, machine-local, NEVER committed.
 dashboard-token
 dashboard.*.log
+dashboard.pid
+.dashboard-start.lock
