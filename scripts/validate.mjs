@@ -289,13 +289,24 @@ for (const [cond, msg] of [
   {
     const dash = read("scripts/dashboard.mjs");
     const post = dash.slice(dash.indexOf('if (req.method === "POST")'), dash.indexOf('url.pathname === "/api/projects"'));
+    // A ROUTE, not a word. Matching bare substrings failed on the word
+    // "delivery" inside a comment explaining why pause never tears a delivery
+    // in half — a check that fires on prose teaches everyone to ignore it, and
+    // the next real regression lands in an already-red validator.
     for (const route of ["human-gate", "approve", "deliver", "task-transition", "scheduler-cancel"])
-      ok(!post.includes(route), `the dashboard must not expose "${route}" as a write — that authority is the operator's, on the CLI`);
+      ok(!new RegExp(`url\\.pathname === "/${route}`).test(post),
+        `the dashboard must not expose "${route}" as a write — that authority is the operator's, on the CLI`);
     // The README states both of these as facts about the running server.
     ok(/const BIND = process\.env\.SCH_BIND \|\| "127\.0\.0\.1"/.test(dash),
       "the dashboard must default to loopback — the README says listening on every interface is an explicit choice");
-    ok(/if \(!tokenOk\(presentedToken\(req, url\)\)\) return unauthorized\(res\)/.test(dash),
+    // The PROPERTY is that nothing routes before the token is checked. Pinning
+    // the exact return expression broke the moment an unauthenticated browser
+    // started getting a login page instead of a bare 401 — which is a better
+    // answer to the same check, not a weaker one.
+    ok(/if \(!tokenOk\(presentedToken\(req, url\)\)\)\s*\n?\s*return /.test(dash),
       "every dashboard request must be authenticated before it is routed — the README claims exactly that");
+    ok(/return .*unauthorized\(res\)/.test(dash),
+      "an unauthenticated non-browser request must still get 401 — a login page is for browsers, not for curl");
   }
 
   // The README's containment section names sch-run-task.mjs as THE exception:

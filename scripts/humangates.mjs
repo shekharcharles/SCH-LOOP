@@ -32,7 +32,18 @@ export const GATE_TYPES = [
   "SCHEMA_CHANGE", "MIGRATION_CHANGE", "PUBLIC_API_BREAK", "SCOPE_EXPANSION",
   "DESTRUCTIVE_ACTION", "UNRELATED_FAILURE", "AMBIGUOUS_EVIDENCE",
   "BUDGET_INCREASE", "DELIVERY_APPROVAL",
+  // FINDING A VULNERABILITY IS NOT PERMISSION TO EXPLOIT IT. Every phase up to
+  // validation asks "is this vulnerable"; from exploitation onward the question
+  // is "what can an attacker actually achieve", and answering it means acting on
+  // a live system holding real customer data. Nothing in this engine separated
+  // those two until this gate: `active: true` was one boolean covering both.
+  "EXPLOITATION_AUTHORIZED",
 ];
+
+// The phases that may not begin without an approved EXPLOITATION_AUTHORIZED
+// gate. Numbers, not names, because the pack owns the names and this must not
+// silently stop gating when one is reworded.
+export const GATED_PHASES = new Set([9, 10, 11, 12, 13]);
 
 export const GATE_STATUSES = ["PENDING", "APPROVED", "REJECTED", "EXPIRED", "INVALIDATED"];
 export const DECISIONS = ["APPROVED", "REJECTED"];
@@ -205,5 +216,102 @@ export function projection(projectId, { state = null, limit = 50 } = {}) {
     decisions_require_local_operator: true,
     decide_with: `node scripts/state.mjs human-gate-decide --project ${projectId} --gate <id> --decision APPROVED --approver <name>`,
     generated_at: now(),
+  };
+}
+
+// ------------------------------------------------- exploitation authorization
+
+// The subject of an exploitation gate is the whole reason it can be trusted:
+// it is hashed into the proposal, so an approval survives only while every one
+// of these facts still holds. Change the authorization reference — which is what
+// happens when a real signed reference finally replaces a placeholder — and the
+// approval granted under the old one is no longer an approval.
+export function exploitationSubject({ target, action, findings = [], authRef, authExpiry = null, roe = "" }) {
+  return {
+    target: String(target ?? ""),
+    action: clamp(action, 800),
+    // Sorted, so the same set of findings in a different order is the same
+    // subject and does not re-ask a question the operator already answered.
+    findings: findings.map((f) => ({ id: String(f.id ?? f), title: clamp(f.title ?? "", 200) }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    authorization_ref: String(authRef ?? ""),
+    authorization_expiry: authExpiry ?? null,
+    roe: clamp(roe, 800),
+  };
+}
+
+// Open the gate for one phase task. Granularity is deliberate: one gate per
+// task, listing the findings it intends to exploit. Per-finding would ask the
+// operator forty times; per-phase-with-no-list would let the set change under an
+// approval that was granted for something else. Listing them inside the hashed
+// subject gets both — one decision, and a NEW decision the moment the set moves.
+export function openExploitationGate(projectId, {
+  taskId, phase, target, action, findings = [], authRef, authExpiry = null, roe = "",
+  runId = null, attempt = null, stateVersion = null, ttlMs = DEFAULT_TTL_MS, requestedBy = "scheduler",
+}) {
+  // FAIL CLOSED ON A MISSING AUTHORIZATION. A gate whose subject has no
+  // reference would still hash, still be approvable, and would record an
+  // operator authorising exploitation against nothing in particular.
+  if (!String(authRef ?? "").trim())
+    return { ok: false, failure: { code: "AUTHORIZATION_REF_MISSING", message:
+      `task #${taskId} is in phase ${phase}, which cannot begin without a recorded authorization reference. ` +
+      `Record one first: node scripts/state.mjs auth-add --client "<client>" --ref "<signed reference>" --domains "<target>" --expiry <YYYY-MM-DD>` } };
+  if (!GATED_PHASES.has(Number(phase)))
+    return { ok: false, failure: { code: "PHASE_NOT_GATED", message: `phase ${phase} is not an exploitation phase (${[...GATED_PHASES].join(", ")})` } };
+
+  const subject = exploitationSubject({ target, action, findings, authRef, authExpiry, roe });
+  const list = findings.length
+    ? findings.map((f) => `  · ${f.id ?? f}${f.title ? " — " + clamp(f.title, 120) : ""}`).join("\n")
+    : "  · none recorded — this phase would begin with nothing validated to act on";
+
+  const question =
+    `Authorize EXPLOITATION against ${subject.target}?\n\n` +
+    `Task #${taskId} (phase ${phase}) intends to: ${subject.action}\n\n` +
+    `Findings it would act on:\n${list}\n\n` +
+    `Authorization on record: ${subject.authorization_ref}` +
+    (subject.authorization_expiry ? ` (expires ${subject.authorization_expiry})` : " (NO EXPIRY RECORDED)") +
+    (subject.roe ? `\nRules of engagement: ${subject.roe}` : "\nRules of engagement: NONE RECORDED") +
+    `\n\nApproving means acting on a live system, not testing whether it is vulnerable. ` +
+    `This approval covers exactly the findings listed above — if that set changes, you will be asked again.`;
+
+  return create(projectId, {
+    gateType: "EXPLOITATION_AUTHORIZED", question,
+    options: [
+      "APPROVED — proceed with exploitation within the rules of engagement above",
+      "REJECTED — stop here; the phase is recorded as not-covered with this reason",
+    ],
+    recommended: "REJECTED unless the authorization reference above is a real signed reference and the rules of engagement are the client's own words",
+    taskId, runId, attempt, phaseId: `phase-${phase}`, stateVersion, subject, ttlMs, requestedBy,
+  });
+}
+
+// Is this task allowed to run right now? The scheduler's question, answered in
+// one place so "gated" cannot mean two different things in two files.
+export function exploitationAllowed(projectId, task, { state = null, subject = null } = {}) {
+  const phase = Number(task?.phase);
+  if (!GATED_PHASES.has(phase)) return { allowed: true, gated: false };
+  const gates = list(projectId, { taskId: task.id, state })
+    .filter((g) => g.gate_type === "EXPLOITATION_AUTHORIZED");
+
+  // An approval is an approval OF SOMETHING. Accepting any approved gate on the
+  // task would let the finding set grow, or a placeholder authorization ref be
+  // replaced, under a decision the operator made about something smaller — which
+  // is precisely the failure the hashed subject exists to prevent.
+  const approved = gates.find((g) => g.status === "APPROVED" &&
+    (subject === null || stable(g.subject ?? null) === stable(subject)));
+  if (approved) return { allowed: true, gated: true, gate: approved };
+  const staleApproval = subject !== null && gates.some((g) => g.status === "APPROVED");
+  if (staleApproval)
+    return { allowed: false, gated: true, gate: gates.find((g) => g.status === "APPROVED"),
+             reason: "EXPLOITATION_SUBJECT_CHANGED" };
+  const pending = gates.find((g) => g.status === "PENDING");
+  const rejected = gates.find((g) => g.status === "REJECTED");
+  const invalid = gates.find((g) => g.status === "INVALIDATED" || g.status === "EXPIRED");
+  return {
+    allowed: false, gated: true, gate: pending ?? rejected ?? invalid ?? null,
+    reason: pending ? "EXPLOITATION_GATE_PENDING"
+      : rejected ? "EXPLOITATION_REJECTED"
+      : invalid ? "EXPLOITATION_GATE_INVALIDATED"
+      : "EXPLOITATION_GATE_MISSING",
   };
 }
