@@ -637,6 +637,65 @@ export async function runQueue({
 
       if (pick.selected) {
         const task = pick.selected;
+
+        // ---- EXPLOITATION_AUTHORIZED: phases 9-13 cannot run without an
+        // approved gate that lists the findings the worker will act on. This
+        // is the boundary between "send a request and see whether it is
+        // vulnerable" (phases 1-8) and "act on the vulnerability against a
+        // live production system" (phases 9-13). They are the same phase,
+        // different authority, and this engine could not tell them apart until
+        // this gate existed. A gate is opened automatically if the task is
+        // selected — the operator gets a decidable card on the dashboard, not
+        // an error they must translate into a CLI command.
+        const gateCheck = HG.exploitationAllowed(projectId, task);
+        if (!gateCheck.allowed && gateCheck.gated) {
+          // An open gate that was invalidated (e.g. because the authorization
+          // ref changed) does not need a new one — it just needs a decision.
+          const needsNewGate = !gateCheck.gate || gateCheck.gate.status === "INVALIDATED" || gateCheck.gate.status === "EXPIRED";
+          if (needsNewGate) {
+            const projScope = getProject(projectId)?.scope ?? {};
+            const findings = (task.findings ?? []).map((f) => ({ id: String(f.id ?? f), title: String(f.title ?? "") }));
+            HG.openExploitationGate(projectId, {
+              taskId: task.id, phase: task.phase,
+              target: projScope.targets?.slice(0, 1)[0] ?? task.target ?? "",
+              action: `phase ${task.phase}${task.phaseName ? " (" + task.phaseName + ")" : ""}: ${task.category || "offensive action"}`,
+              findings,
+              authRef: projScope.ref ?? "",
+              authExpiry: projScope.expiry ?? null,
+              roe: projScope.roe ?? "",
+              runId: record.run_id, stateVersion: task.stateVersion,
+              ttlMs: 4 * 60 * 60 * 1000,   // exploitation decisions are time-sensitive
+            });
+          }
+          // The gate status may have changed (newly opened, or answered since
+          // the first check). Re-read once, then branch on the live answer.
+          const after = HG.exploitationAllowed(projectId, task);
+          const gate = after.gate;
+          if (gate?.status === "REJECTED") {
+            // The operator answered the gate: this task was planned to exploit
+            // findings, and the operator said it must not. Move it to FAILED
+            // with the gate's reason, so the queue does not re-select it on
+            // the next loop and the record says why it did not run.
+            TR.transition(projectId, task.id, {
+              to: "FAILED", actor: "scheduler",
+              reason: `exploitation gate ${gate.id} REJECTED by ${gate.approver}${gate.conditions ? ": " + gate.conditions : ""}`,
+              causation: lastEventId,
+            });
+            emit("scheduler.task_blocked", { human_gate: gate.id, code: "EXPLOITATION_REJECTED", phase: task.phase, transitioned: "FAILED" }, { taskId: task.id });
+            return finishDraining("NEEDS_DECISION", { code: "EXPLOITATION_REJECTED",
+              message: `task #${task.id} (phase ${task.phase}) was rejected by operator ${gate.approver}${gate.conditions ? " (" + gate.conditions + ")" : ""}: ${gate.id}` });
+          }
+          if (gate?.status === "APPROVED") {
+            // Approved since the first check: this can happen when the
+            // operator answers quickly between two loop iterations.
+            continue;
+          }
+          // Still PENDING, INVALIDATED or EXPIRED — block and wait.
+          emit("scheduler.task_blocked", { human_gate: gate?.id, code: after.reason, phase: task.phase });
+          return finishDraining("NEEDS_DECISION", { code: after.reason,
+            message: `task #${task.id} (phase ${task.phase}) requires an approved EXPLOITATION_AUTHORIZED gate before it can run: ${gate?.id ?? "none on record"}` });
+        }
+
         emit("scheduler.task_ready", { title: clamp(task.title, 120), priority: task.priority, phase: task.phase }, { taskId: task.id });
 
         if (dryRun) {

@@ -529,6 +529,100 @@ test("human gates: the CLI decides them and the projection never offers a remote
   assert.equal(JSON.parse(fx.cli("human-gate-show", "--project", fx.P, "--gate", opened.gate)).status, "APPROVED");
 });
 
+// ======================================================= A2. EXPLOITATION_AUTHORIZED
+
+// Arm the project against a real target with a real signed-looking authorization
+// reference, so a gated task can be planned and its gate approved under facts
+// rather than placeholders. Same scaffolding the operator would use for a real
+// engagement.
+function armedProject(name) {
+  const fx = queueFixture(name);
+  fx.cli("auth-add", "--client", "ACME", "--ref", "ACME-SOW-2026-77",
+    "--domains", "app.example.com", "--expiry", "2027-01-01", "--roe", "no destructive payloads");
+  fx.cli("scope-arm-from-auth", "--project", fx.P, "--target", "app.example.com");
+  return fx;
+}
+
+test("scheduler: phases 1-8 run without an exploitation gate", async (t) => {
+  const fx = armedProject("sched-nongated"); t.after(() => fx.done());
+  const a = addTask(fx, { title: "recon work", allow: "src/**", phase: 5 });
+  const r = await SCHED.runQueue({ projectId: fx.P, env: fakeQueueEnv(fx,
+    { [a]: { write: [{ path: "src/a.js", content: "// recon\n" }] } }), maxTasks: 1 });
+  // Reaches the delivery gate if approval is enabled, but never the exploitation gate.
+  assert.notEqual(r.failure?.code, "EXPLOITATION_GATE_MISSING");
+  assert.notEqual(r.failure?.code, "EXPLOITATION_GATE_PENDING");
+  assert.equal(HG.list(fx.P).filter((g) => g.gate_type === "EXPLOITATION_AUTHORIZED").length, 0);
+});
+
+test("scheduler: a phase-9 task is selected, blocked, and opens its gate", async (t) => {
+  const fx = armedProject("sched-phase9"); t.after(() => fx.done());
+  const a = addTask(fx, { title: "exploit", allow: "src/**", phase: 9 });
+  const r = await SCHED.runQueue({ projectId: fx.P, env: fakeQueueEnv(fx,
+    { [a]: { write: [{ path: "src/exploit.js", content: "// exploit\n" }] } }), maxTasks: 1 });
+
+  // The worker never starts; the queue stops with the gate in hand.
+  assert.equal(r.stop_reason, "NEEDS_DECISION");
+  assert.equal(r.failure?.code, "EXPLOITATION_GATE_PENDING");
+  assert.equal(r.tasks_delivered, 0);
+  assert.equal(invocations(fx).length, 0, "the worker was never spawned");
+
+  // Exactly one EXPLOITATION_AUTHORIZED gate exists, on task a, in PENDING.
+  const gates = HG.list(fx.P).filter((g) => g.gate_type === "EXPLOITATION_AUTHORIZED");
+  assert.equal(gates.length, 1);
+  assert.equal(gates[0].task_id, a);
+  assert.equal(gates[0].status, "PENDING");
+  // The question carries the target, the authorization ref, and the warning.
+  assert.match(gates[0].question, /app\.example\.com/);
+  assert.match(gates[0].question, /ACME-SOW-2026-77/);
+  assert.match(gates[0].question, /live system/i);
+});
+
+test("scheduler: approving an exploitation gate resumes the queue", async (t) => {
+  const fx = armedProject("sched-exploit-approve"); t.after(() => fx.done());
+  const a = addTask(fx, { title: "exploit", allow: "src/**", phase: 9 });
+  const env = fakeQueueEnv(fx, { [a]: { write: [{ path: "src/e.js", content: "// exploit\n" }] } });
+
+  await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  const gate = HG.list(fx.P).find((g) => g.gate_type === "EXPLOITATION_AUTHORIZED");
+  HG.decide(fx.P, gate.id, { decision: "APPROVED", approver: "operator" });
+
+  const r2 = await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  // Reaches the delivery approval or completes; never the exploitation gate again.
+  assert.notEqual(r2.failure?.code, "EXPLOITATION_GATE_MISSING");
+  assert.notEqual(r2.failure?.code, "EXPLOITATION_GATE_PENDING");
+  assert.equal(invocations(fx).length, 1, "exactly one worker process spawned for task a");
+});
+
+test("scheduler: rejecting an exploitation gate stops the queue and marks the task FAILED", async (t) => {
+  const fx = armedProject("sched-exploit-reject"); t.after(() => fx.done());
+  const a = addTask(fx, { title: "exploit", allow: "src/**", phase: 9 });
+  const env = fakeQueueEnv(fx, { [a]: { write: [{ path: "src/e.js", content: "// exploit\n" }] } });
+
+  await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  const gate = HG.list(fx.P).find((g) => g.gate_type === "EXPLOITATION_AUTHORIZED");
+  HG.decide(fx.P, gate.id, { decision: "REJECTED", approver: "operator" });
+
+  const r2 = await SCHED.runQueue({ projectId: fx.P, env, maxTasks: 1 });
+  assert.equal(r2.tasks_delivered, 0);
+  assert.equal(invocations(fx).length, 0, "the worker was never spawned");
+  assert.equal(states(fx)[a], "FAILED");
+});
+
+test("scheduler: a missing authorization reference blocks the task without opening a gate", async (t) => {
+  // A project whose scope has no ref is the state a fresh engagement is in
+  // before `auth-add` is called. Gating on a missing reference is a wall with
+  // a sign — refusing to open a gate about nothing.
+  const fx = queueFixture("sched-noauth");
+  const a = addTask(fx, { title: "exploit", allow: "src/**", phase: 9 });
+  const r = await SCHED.runQueue({ projectId: fx.P, env: fakeQueueEnv(fx,
+    { [a]: { write: [{ path: "src/e.js", content: "// exploit\n" }] } }), maxTasks: 1 });
+
+  assert.equal(r.stop_reason, "NEEDS_DECISION");
+  assert.equal(r.failure?.code, "EXPLOITATION_GATE_MISSING");
+  assert.equal(HG.list(fx.P).filter((g) => g.gate_type === "EXPLOITATION_AUTHORIZED").length, 0,
+    "no gate was opened because there is no authorization to gate under");
+});
+
 // ======================================================= 82–88. delivery rules
 
 test("scheduler: an unrelated outgoing commit stops the queue and nothing is force-pushed", async (t) => {
