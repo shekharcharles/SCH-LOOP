@@ -5,7 +5,7 @@ import { createStore } from "../src/todo.mjs";
 test("add returns a copy with an id and lists it", () => {
   const s = createStore();
   const a = s.add("  write tests ");
-  assert.deepEqual(a, { id: 1, title: "write tests", done: false });
+  assert.deepEqual(a, { id: 1, title: "write tests", done: false, priority: "normal" });
   assert.deepEqual(s.list(), [a]);
 });
 
@@ -30,4 +30,27 @@ test("remove deletes and unknown ids throw", () => {
   assert.deepEqual(s.list(), []);
   assert.throws(() => s.remove(99), /no item 99/);
   assert.throws(() => s.complete(99), /no item 99/);
+});
+
+test("add defaults priority to normal", () => {
+  const s = createStore();
+  assert.equal(s.add("x").priority, "normal");
+});
+
+test("add accepts an explicit priority", () => {
+  const s = createStore();
+  assert.equal(s.add("x", "high").priority, "high");
+  assert.equal(s.add("y", "low").priority, "low");
+});
+
+test("add rejects an unknown priority", () => {
+  const s = createStore();
+  assert.throws(() => s.add("x", "urgent"), /priority/);
+});
+
+test("list and complete carry the priority through", () => {
+  const s = createStore();
+  const a = s.add("x", "high");
+  assert.equal(s.list()[0].priority, "high");
+  assert.equal(s.complete(a.id).priority, "high");
 });
