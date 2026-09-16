@@ -1,0 +1,32 @@
+{
+  "_comment": "Seed values only — everything here is edited from the dashboard Roles page, nothing is hard-coded in engine code. model=null means the provider's own default; the dashboard lists models per provider (live where the CLI can enumerate, seed list + free text otherwise) and the engine inserts model_arg only when model is set. spawn is the full argv, editable as an array; flag presets (bypass permissions, read-only tools, stream events) add/remove known fragments so an upstream flag rename is a one-line edit here, not an engine change. Executor gets write tools; reviewer, judge and council are tool-restricted read-only even in bypass mode.",
+  "_presets": {
+    "claude": {
+      "bypass_permissions": ["--dangerously-skip-permissions"],
+      "read_only_tools": ["--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit"],
+      "stream_events": ["-p", "--output-format", "stream-json", "--verbose"],
+      "remote_control": ["--remote-control"]
+    },
+    "codex": { "read_only_sandbox": ["--sandbox", "read-only"], "bypass_all": ["--dangerously-bypass-approvals-and-sandbox"] },
+    "opencode": { "json_events": ["--format", "json"] }
+  },
+  "executor": {
+    "provider": "claude", "model": null, "model_arg": ["--model", "{model}"],
+    "spawn": ["claude", "--dangerously-skip-permissions", "-p", "--output-format", "stream-json", "--verbose"],
+    "interactive_pane": ["claude", "--dangerously-skip-permissions", "--remote-control"]
+  },
+  "reviewer": {
+    "provider": "claude", "model": null, "model_arg": ["--model", "{model}"],
+    "spawn": ["claude", "--dangerously-skip-permissions", "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "-p", "--output-format", "stream-json", "--verbose"]
+  },
+  "judge": {
+    "provider": "claude", "model": null, "model_arg": ["--model", "{model}"],
+    "spawn": ["claude", "--dangerously-skip-permissions", "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "-p", "--output-format", "stream-json", "--verbose"]
+  },
+  "council": [
+    { "role": "architect", "provider": "claude", "model": null, "model_arg": ["--model", "{model}"], "spawn": ["claude", "--dangerously-skip-permissions", "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "-p"] },
+    { "role": "skeptic", "provider": "codex", "model": null, "model_arg": ["-m", "{model}"], "spawn": ["codex", "exec", "--sandbox", "read-only"] },
+    { "role": "pragmatist", "provider": "opencode", "model": null, "model_arg": ["-m", "{model}"], "spawn": ["opencode", "run", "--format", "json"] },
+    { "role": "critic", "provider": "antigravity", "model": null, "model_arg": null, "spawn": ["antigravity", "-p"], "enabled": false, "_why": "not on PATH on this machine" }
+  ]
+}

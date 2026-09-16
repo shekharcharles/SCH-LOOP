@@ -1,0 +1,17 @@
+{
+  "name": "sch-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sample app under test for the SCH-LOOP v4 lab. Tiny on purpose.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "typecheck": "node --check src/todo.mjs",
+    "hooks:test": "node --test .claude/hooks/hooks.test.mjs",
+    "engine:test": "node --test \".claude/sch/runtime/*.test.mjs\"",
+    "check": "npm test && npm run hooks:test && npm run engine:test",
+    "engine:doctor": "node .claude/sch/runtime/cli.mjs doctor",
+    "engine:providers": "node .claude/sch/runtime/cli.mjs providers"
+  }
+}
