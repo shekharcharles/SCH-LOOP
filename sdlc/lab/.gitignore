@@ -1,0 +1,21 @@
+.sch-loop/private/
+.sch-loop/evidence/
+.sch-loop/council/*/transcript/
+.sch-loop/heartbeat
+.sch-loop/events.jsonl
+.worktrees/
+node_modules/
+.env
+.env.*
+*.log
+
+# Engine snapshot: a local copy of the SCH-LOOP runtime, refreshed by sch-setup.
+# Not committed — the repository root is the engine's home, and a second copy in
+# git would drift. The executor's worktree does not need it (it runs verify
+# commands and hooks, never the skills).
+.claude/sch/
+
+# Engine run state and the lessons log: regenerated on every run.
+.sch-loop/runs/
+.sch-loop/learning/
+.sch-loop/workflow.json

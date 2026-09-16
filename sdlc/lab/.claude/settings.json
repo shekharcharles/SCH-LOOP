@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/write-guard.mjs\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/destructive-bash.mjs\"", "timeout": 5 }]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Read(./.sch-loop/private/**)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}

@@ -26,3 +26,8 @@
 - Claiming a protection whose effect no hermetic test can reach (network, OS boundary, remote behaviour) → implement only the part the test CAN see, and write the residual into the README and a KNOWN-GAP test in the same commit as the mechanism.
 - A long background command piped through `tail`/`head` leaves its output file empty until it exits → run it unpiped so progress is visible; "no output yet" is not evidence of a hang.
 - Reaching for PowerShell here-string syntax (`@'...'@`) inside the Bash tool → its markers land verbatim in the argument; use a bash heredoc or `-F file` for any multi-line string.
+- `node --test <dir>/` on Node 24 / Windows treated the directory as a test file and failed → pass a quoted glob (`node --test "tests/**/*.test.mjs"`), never a bare directory.
+- Herder on this machine is the `herdr` binary (`Herdr/bin/herdr.exe`), not `herder` → probe PATH for the real name before writing transport commands; never assume a CLI name from a chat transcript.
+- `printf` with a Windows path containing `\b` produced a backspace control char in a file → write literal paths with a quoted heredoc, never through `printf` format strings.
+- `git diff --name-only` never lists untracked files, so a scope/path gate built on it is escapable by CREATING a file → enumerate changes with `git status --porcelain -uall` (and strip `rev-parse --show-prefix` when the project is a subfolder of its repo).
+- A delivery step ignored a failed `git add` and merged an empty branch while reporting PASS → every stage/commit/merge result is checked, and a failed delivery is a blocker, never a silent success.

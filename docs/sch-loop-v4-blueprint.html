@@ -1,0 +1,274 @@
+<title>SCH-LOOP Conductor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#f4f5f7;--surface:#ffffff;--line:#d9dde4;--ink:#1b1f2a;--muted:#5b6270;
+  --accent:#0f6e73;--accent-soft:#dff0f0;
+  --done:#2f7d4f;--prog:#a56f0b;--blk:#b3261e;--hum:#6b4fbb;
+  --done-bg:#e3f2e8;--prog-bg:#fbf0d6;--blk-bg:#fbe3e1;--hum-bg:#ebe6f8;
+  --code-bg:#eef0f3;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0f1218;--surface:#171b23;--line:#2a303b;--ink:#e6e8ee;--muted:#9aa3b2;
+    --accent:#4fb3b8;--accent-soft:#12383a;
+    --done:#6cc48e;--prog:#e0b24a;--blk:#f08a83;--hum:#b6a3f0;
+    --done-bg:#15301f;--prog-bg:#3a2d0c;--blk-bg:#3e1512;--hum-bg:#241d3d;
+    --code-bg:#11151c;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0f1218;--surface:#171b23;--line:#2a303b;--ink:#e6e8ee;--muted:#9aa3b2;
+  --accent:#4fb3b8;--accent-soft:#12383a;
+  --done:#6cc48e;--prog:#e0b24a;--blk:#f08a83;--hum:#b6a3f0;
+  --done-bg:#15301f;--prog-bg:#3a2d0c;--blk-bg:#3e1512;--hum-bg:#241d3d;
+  --code-bg:#11151c;
+}
+body{background:var(--ground);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:16px;line-height:1.55;padding-inline:16px;padding-block:0 64px}
+.wrap{max-width:76ch;margin-inline:auto}
+h1,h2,h3{font-family:"Sora","IBM Plex Sans",system-ui,sans-serif;text-wrap:balance;line-height:1.15;margin:0}
+h1{font-size:clamp(1.8rem,4.5vw,2.6rem);font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;margin-top:2.8rem;padding-top:.4rem;border-top:2px solid var(--accent)}
+h3{font-size:1.05rem;font-weight:600;margin-top:1.6rem}
+p{margin:.7rem 0}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 .5rem}
+header{padding-block:2.4rem 1.2rem}
+header p.lede{font-size:1.05rem;color:var(--muted);max-width:60ch;margin-top:.8rem}
+nav.toc{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--ground);border-bottom:1px solid var(--line);margin-inline:-16px;padding-inline:16px;padding-block:.5rem;overflow-x:auto}
+nav.toc ul{display:flex;gap:1.1rem;list-style:none;margin:0;padding:0;white-space:nowrap}
+nav.toc a{font-family:"IBM Plex Mono",monospace;font-size:.78rem;color:var(--muted);text-decoration:none}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--accent);outline:none;text-decoration:underline}
+.tldr{display:grid;gap:.6rem;margin:1.2rem 0 0;padding:0;list-style:none}
+.tldr li{display:grid;grid-template-columns:1.1rem 1fr;gap:.5rem;align-items:start;padding-bottom:.6rem;border-bottom:1px solid var(--line)}
+.tldr li::before{content:"";width:.55rem;height:.55rem;margin-top:.5rem;border-radius:50%;background:var(--accent)}
+.tldr li strong{font-weight:600}
+code,pre{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+code{font-size:.88em;background:var(--code-bg);padding:.08em .35em;border-radius:3px}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:.9rem 1rem;overflow-x:auto;font-size:.82rem;line-height:1.5}
+pre code{background:none;padding:0;font-size:inherit}
+.diagram{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.6rem;overflow-x:auto;margin:1rem 0}
+.diagram pre.mermaid{background:none;border:0;padding:0;min-width:640px}
+.cap{font-size:.82rem;color:var(--muted);margin:-.4rem 0 1rem}
+table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.8rem 0}
+.tablewrap{overflow-x:auto}
+th,td{text-align:left;vertical-align:top;padding:.45rem .6rem;border-bottom:1px solid var(--line)}
+th{font-family:"Sora",sans-serif;font-weight:600;font-size:.8rem;letter-spacing:.03em;color:var(--muted)}
+td code{white-space:nowrap}
+.pill{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:.74rem;padding:.1em .5em;border-radius:999px;border:1px solid currentColor}
+.done{color:var(--done);background:var(--done-bg)}
+.prog{color:var(--prog);background:var(--prog-bg)}
+.blk{color:var(--blk);background:var(--blk-bg)}
+.hum{color:var(--hum);background:var(--hum-bg)}
+ol.steps{counter-reset:s;list-style:none;padding:0;margin:.8rem 0;display:grid;gap:.5rem}
+ol.steps li{counter-increment:s;display:grid;grid-template-columns:2.2rem 1fr;gap:.6rem;align-items:start}
+ol.steps li::before{content:counter(s);font-family:"Sora",sans-serif;font-weight:700;color:var(--accent);font-size:1.1rem;line-height:1.3}
+ol.fix{padding-left:1.3rem;display:grid;gap:.45rem}
+ol.fix li strong{font-weight:600}
+.tasksample{font-size:.8rem}
+.tasksample .x{color:var(--done)}.tasksample .t{color:var(--prog)}.tasksample .b{color:var(--blk)}.tasksample .q{color:var(--hum)}
+.note{border:1px dashed var(--line);border-radius:6px;padding:.7rem .9rem;color:var(--muted);font-size:.9rem}
+footer{margin-top:3rem;color:var(--muted);font-size:.82rem;border-top:1px solid var(--line);padding-top:1rem}
+@media (max-width:520px){h2{font-size:1.2rem}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">SCH-LOOP v4 · design proposal · 2026-09-17</p>
+  <h1>SCH-LOOP Conductor</h1>
+  <p class="lede">Orchestrator assigns, executor builds in a fresh process per ticket, reviewer never wrote the code, council only when there is something to argue about. Full text: <code>docs/SCH-LOOP-v4-DESIGN.md</code>.</p>
+</header>
+
+<nav class="toc"><ul>
+  <li><a href="#tldr">TL;DR</a></li>
+  <li><a href="#lifecycle">Lifecycle</a></li>
+  <li><a href="#ticket">Per-ticket loop</a></li>
+  <li><a href="#topology">Herdr topology</a></li>
+  <li><a href="#taskmd">task.md</a></li>
+  <li><a href="#types">Ticket types</a></li>
+  <li><a href="#context">Context</a></li>
+  <li><a href="#fixes">Corrections</a></li>
+  <li><a href="#lab">Lab</a></li>
+  <li><a href="#decide">Decide</a></li>
+</ul></nav>
+
+<h2 id="tldr">TL;DR</h2>
+<ul class="tldr">
+  <li><strong>Keep the engine.</strong> Builder → Verifier → Judge → Manager, council with five providers, fresh <code>claude -p</code> per ticket, fail-closed merge, worktrees, notify — all exist in <code>~/.claude/SCH-loop/runtime</code>.</li>
+  <li><strong>Add four skills</strong> (<code>sch-prd</code>, <code>sch-architecture</code>, <code>sch-setup</code>, <code>sch-insert</code>), rewrite two (<code>sch-tickets</code>, <code>sch-build</code>), give the router <code>go</code>.</li>
+  <li><strong>One queue.</strong> <code>task.md</code> for humans, <code>.sch-loop/state.json</code> for the machine. No <code>task.q</code>.</li>
+  <li><strong>Context rot is solved by architecture.</strong> One fresh executor process per ticket. Chain only on <code>after:</code> + measured usage &lt; 130k.</li>
+  <li><strong>Council is gated.</strong> Architecture, plan, flagged tickets, two reds. Per-ticket is 4× cost.</li>
+  <li><strong>Lab first.</strong> Everything lives in <code>D:\SCH-LOOP\lab\.claude</code>; nothing touches <code>~/.claude</code> until three tickets, one insert, one red and one ship have run there.</li>
+</ul>
+
+<h2 id="lifecycle">Lifecycle</h2>
+<p>Every stage writes a file the next stage reads. Approval gates are human; the two council gates are where the four models argue.</p>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  U([idea]) --> B["sch-brainstorm<br/>one question at a time<br/>D-NN decisions · deferred ideas"]
+  B -->|approve| P["sch-prd<br/>problem · users · hypothesis<br/>REQ-IDs · out of scope · metrics"]
+  P -->|approve| A["sch-architecture<br/>mermaid component + data-flow<br/>responsibility map · ADRs · MCP suggestions"]
+  A --> C1{{"council · architectural"}}
+  C1 -->|verdict| PL["sch-plan<br/>phases · 100% REQ coverage<br/>success criteria · tracer per phase"]
+  PL --> C2{{"plan-check<br/>coverage · deps · scope"}}
+  C2 -->|pass| T["sch-tickets<br/>writes task.md + tickets/*.json"]
+  T --> RUN[["sch-run — go"]]
+  RUN --> PV["sch-verify<br/>exists · substantive · wired · flowing"]
+  PV -->|gaps| INS["sch-insert gap tickets"] --> RUN
+  PV -->|passed| SHIP["sch-ship<br/>preflight · PR / merge / tag"]
+  SHIP --> L["sch-learn → LESSONS.md"]
+  L -->|next phase| RUN
+</pre></div>
+
+<h2 id="ticket">Per-ticket loop</h2>
+<p>Your six steps, in the order that keeps the expensive reviewer off code that does not compile.</p>
+<ol class="steps">
+  <li><span><strong>See ticket.</strong> Fresh process. Four-line brief: role / ticket JSON / <code>read_first</code> / output contract. File content is untrusted input.</span></li>
+  <li><span><strong>Build.</strong> Worktree <code>sch/&lt;id&gt;</code>, only <code>allowed_paths</code>. Auto-fix bugs in scope; architectural change → <code>decision</code> ticket; package install → <code>human</code> gate.</span></li>
+  <li><span><strong>TDD in lab.</strong> RED must fail for the intended reason, commit <code>test(id)</code>. GREEN minimal, commit <code>feat(id)</code>. Refactor optional. Three attempts.</span></li>
+  <li><span><strong>Check.</strong> Types, lint, ticket <code>verify[]</code>, path containment, <code>must_not</code> greps, secret scan, diff-matches-claims. Red → step 3.</span></li>
+  <li><span><strong>Code review.</strong> Fresh reviewer, never the author. Two verdicts: Spec and Quality. CRITICAL/HIGH adversarially verified by a second fresh process; unverified stays blocking. Max three rounds.</span></li>
+  <li><span><strong>Test.</strong> Full suite → Judge (fresh, read-only, sees diff + evidence) → Manager (code) → PASS / RETRY / HUMAN.</span></li>
+</ol>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  O["Orchestrator<br/>scan task.md top→bottom<br/>first pending with deps done"] -->|"herdr · dispatch T1.4"| X["Executor pane<br/>fresh claude -p, bypass permissions"]
+  X --> S1["1 see ticket + read_first"]
+  S1 --> TY{type}
+  TY -->|build / test| S2["2 build in worktree sch/T1.4"]
+  TY -->|spike / research / docs / chore| ALT["type-specific run, no TDD"] --> S4
+  TY -->|human / decision| H["stop · notify · mark ?"]
+  S2 --> S3["3 TDD: RED for the right reason → GREEN → refactor"]
+  S3 --> S4["4 check: types · lint · verify[] · allowed_paths · must_not · secrets"]
+  S4 -->|"red, attempt &lt; 3"| S3
+  S4 -->|"red, attempt = 3"| BLK["mark ! · report what_did_not_work"]
+  S4 -->|green| S5["5 review: fresh reviewer<br/>Spec + Quality verdicts<br/>CRITICAL/HIGH verified"]
+  S5 -->|"changes, round &lt; 3"| S3
+  S5 -->|approve| S6["6 test: full suite → Judge → Manager"]
+  S6 -->|RETRY| S3
+  S6 -->|HUMAN| BLK
+  S6 -->|PASS| D["deliver: worktree → main, fail-closed"]
+  D --> R["report envelope · task.md → x · events.jsonl"]
+  R -->|"herdr send · ✓ T1.4 done"| O
+  BLK --> CO{{"council if gated, else human"}}
+  CO --> O
+  H --> O
+</pre></div>
+<p class="cap">Green unlocks the merge, not the build — green in the worktree already is the implementation.</p>
+
+<h2 id="topology">Herdr topology</h2>
+<p>Binary on this machine is <code>herdr.exe</code>. <code>codex</code> and <code>opencode</code> are on PATH; <code>antigravity</code> and <code>gemini</code> are not, so the council runs with the seats it can find (minimum two).</p>
+<div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph tab1["Tab 1 · Orchestrator"]
+    ORC["your terminal<br/>reads task.md · dispatches · checks<br/>never opens app source"]
+  end
+  subgraph tab2["Tab 2 · Executor"]
+    EXE["runtime/cli.mjs build<br/>spawns fresh claude -p per ticket<br/>bypass · worktree · allowed_paths"]
+    REV["reviewer / judge<br/>fresh read-only processes"]
+  end
+  subgraph tab3["Tab 3 · Council"]
+    C1[claude] --- C2[codex] --- C3[opencode] --- C4[antigravity]
+  end
+  ORC -->|dispatch| EXE
+  EXE -->|"report + herdr send"| ORC
+  EXE --> REV --> EXE
+  ORC -->|"question + compact context"| tab3
+  tab3 -->|verdict.md| ORC
+</pre></div>
+
+<h2 id="taskmd">task.md</h2>
+<p>Read top to bottom. Never renumber. Inserted work gets a suffix and is therefore picked before anything below it.</p>
+<pre class="tasksample"><code># task.md — lab
+&lt;!-- [ ] pending  [~] in progress  [x] done  [!] blocked  [?] needs human --&gt;
+
+## Phase 1 — Foundation   (3/5 done)
+- <span class="x">[x]</span> T1.1  build  Tracer: login end-to-end (UI→API→DB)          deps:-     size:S
+- <span class="x">[x]</span> T1.2  test   Contract tests for /auth                        deps:T1.1  size:S
+- <span class="x">[x]</span> T1.3  docs   ADR-0001 session strategy                       deps:T1.1  size:XS
+- <span class="t">[~]</span> T1.4  build  Password reset flow                             deps:T1.2  size:M
+- [ ] T1.4a build  Rate-limit reset endpoint (inserted)            deps:T1.4  size:S
+- [ ] T1.5  human  Verify reset email renders in Gmail/Outlook     deps:T1.4  gate:blocking-human
+
+## Phase 2 — Profiles   (0/4 done)
+- [ ] T2.1  spike  Evaluate image-resize lib (bounded 30 min)      deps:-     council:true</code></pre>
+<div class="diagram"><pre class="mermaid">
+stateDiagram-v2
+  [*] --> pending
+  pending --> in_progress: deps done, dispatched
+  in_progress --> done: Manager PASS + delivered
+  in_progress --> blocked: 3 attempts / HUMAN
+  in_progress --> needs_human: human gate / decision
+  blocked --> in_progress: council verdict / human fix
+  needs_human --> in_progress: human answered
+  done --> [*]
+</pre></div>
+
+<h2 id="types">Ticket types</h2>
+<p>Not every ticket is a build. The type decides whether TDD and review run and whether main is ever touched.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>type</th><th>executor does</th><th>TDD</th><th>review</th></tr></thead>
+<tbody>
+<tr><td><code>build</code></td><td>RED → GREEN → REFACTOR in worktree</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>test</code></td><td>add tests only; must fail against a mutated stub first</td><td>yes</td><td>light</td></tr>
+<tr><td><code>spike</code></td><td>time-boxed throwaway worktree; output is a decision report; branch discarded</td><td>no</td><td>no</td></tr>
+<tr><td><code>research</code></td><td>findings tagged <code>[VERIFIED]</code> / <code>[CITED]</code> / <code>[ASSUMED]</code></td><td>no</td><td>no</td></tr>
+<tr><td><code>docs</code></td><td>docs / ADR; verify = file exists, links resolve</td><td>no</td><td>light</td></tr>
+<tr><td><code>review</code></td><td>whole-phase review, one fix dispatch</td><td>no</td><td>is the review</td></tr>
+<tr><td><code>chore</code></td><td>config / deps / CI; package install = human gate</td><td>no</td><td>light</td></tr>
+<tr><td><code>human</code></td><td>stops, notifies with exact steps <span class="pill hum">[?]</span></td><td>—</td><td>—</td></tr>
+<tr><td><code>decision</code></td><td>council or human; result becomes D-NN</td><td>—</td><td>—</td></tr>
+</tbody></table></div>
+<p><code>size</code> picks pipeline depth: XS implement→test · S +review · M +read_first research · L +spike first, council before.</p>
+
+<h2 id="context">Context policy</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Who</th><th>Rule</th></tr></thead>
+<tbody>
+<tr><td>Executor</td><td>One process per ticket. Context cannot rot across tickets because it does not survive them.</td></tr>
+<tr><td>Chain exception</td><td><code>after:&lt;prev&gt;</code> and reported usage &lt; 100k soft → <code>--resume</code>. Hard cap 130k. Off until the Claude CLI reports tokens (today: <code>UNKNOWN</code>).</td></tr>
+<tr><td>Orchestrator</td><td>Reads <code>task.md</code>, <code>STATE.md</code>, one brief and one report. Never app source. Compacts at phase boundaries only. Warn at 35% remaining, hand off at 25%.</td></tr>
+<tr><td>Council seats</td><td>Question + compact context only. No transcripts — that is the anti-anchoring mechanism.</td></tr>
+<tr><td>Reviewer / Judge</td><td>Fresh every round. Diff + ticket + evidence, nothing else.</td></tr>
+</tbody></table></div>
+
+<h2 id="fixes">Corrections to the described design</h2>
+<ol class="fix">
+  <li><strong>Council per task → gated.</strong> Four models on every ticket is 4× tokens and slower than the build. Default gates: architecture, plan, <code>council:true</code>, two consecutive reds, phase-verify failure.</li>
+  <li><strong>Check before review.</strong> Cheap deterministic gates first; fresh-context review only on code that compiles.</li>
+  <li><strong>Reviewer is a different process.</strong> All five repos: the author cannot judge its own diff.</li>
+  <li><strong>"Implement only when green" = deliver.</strong> The worktree green is the implementation; green unlocks the fail-closed merge.</li>
+  <li><strong>Orchestrator "small work" has a boundary:</strong> <code>task.md</code>, <code>.sch-loop/</code>, docs, LESSONS, CLAUDE.md. Never app source, or it becomes a second executor.</li>
+  <li><strong>Drop <code>task.q</code>.</strong> Two queues drift. One human file + one machine index.</li>
+  <li><strong>Insert by suffix, never renumber.</strong> <code>T1.4a</code>, phase <code>1.1</code>. Position is priority because the scan is top-down.</li>
+  <li><strong>Bypass mode needs three fences:</strong> worktree + write-outside detection, <code>allowed_paths</code>/<code>protected_paths</code> hook, destructive-Bash guard. One <code>git clean</code> in a worktree deleted prior work in GSD (#2075).</li>
+  <li><strong>Herder is <code>herdr</code> here;</strong> antigravity/gemini not on PATH. Setup reports live seats instead of assuming four.</li>
+  <li><strong>"Clear after each task" → fresh process per task.</strong> Already what <code>sch-run-task.mjs</code> does. Clearing a session is the weaker version.</li>
+  <li><strong>Ticket types</strong> answer "not every task is a dev task".</li>
+  <li><strong>Two checkouts:</strong> <code>~/.claude/SCH-loop</code> contains D:\SCH-LOOP's HEAD and is 13 commits ahead (5 unpushed). D: is stale, not diverged. Commit + push home, pull in D:.</li>
+</ol>
+
+<h2 id="lab">Lab first</h2>
+<p>Project-local install inside this repo. Nothing touches <code>~/.claude</code> until the loop is proven.</p>
+<pre><code>D:\SCH-LOOP\lab\
+  .claude\settings.json        hooks: write-guard · destructive-bash · executor allowedTools
+  .claude\skills\sch-*\        the 14 skills (Claude Code loads project-local skills)
+  .claude\sch\                 runtime/ + scripts/ — every skill path resolves here
+  .sch-loop\                   config.md · state.json · tickets · briefs · reports · evidence
+  task.md
+  src\  tests\                 sample app under test</code></pre>
+<p>Exit criteria: brainstorm → PRD → architecture → plan → tickets → three tickets built (<code>build</code>, <code>test</code>, <code>human</code>) → one inserted ticket picked before a later one → one forced red reaching <span class="pill blk">[!]</span> and council → phase verify → ship (PR into <code>lab</code>). Then <code>sch-setup --global</code> copies the same tree to <code>~/.claude</code>.</p>
+<div class="note">Implementation ≈ 5 working days. Steps that are the loop: <code>task.md</code> parser (half day), <code>sch-tickets</code> rewrite (half day), Herdr-pane executor + report envelope (1 day), two-verdict review (half day). Everything else is prose skills and cleanup.</div>
+
+<h2 id="decide">Open decisions</h2>
+<ol class="fix">
+  <li>Security packs (<code>packs/*pentest*</code>, <code>red-team</code>): split repo, <code>packs/optional/</code>, or drop from the public repo?</li>
+  <li>Council default <code>gated</code> — agree, or <code>per_task</code> despite cost?</li>
+  <li>Reviewer seat: Claude by default, or codex for model diversity?</li>
+  <li>Ticket IDs <code>T1.4</code> / <code>T1.4a</code> — or a different name?</li>
+  <li>Bypass mode only when all three fences pass — agree?</li>
+</ol>
+
+<footer>Sources read line by line: obra/superpowers · mattpocock/skills · disler/super-simple-software-factory · open-gsd/gsd-core · affaan-m/ecc · SCH-LOOP v3.3 zip · <code>~/.claude/SCH-loop</code>. Extraction tables per repo are in <code>docs/SCH-LOOP-v4-DESIGN.md</code> §2.</footer>
+</div>
