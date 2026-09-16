@@ -54,3 +54,21 @@ test("list and complete carry the priority through", () => {
   assert.equal(s.list()[0].priority, "high");
   assert.equal(s.complete(a.id).priority, "high");
 });
+
+test("remove on an already-removed id throws", () => {
+  const s = createStore();
+  const a = s.add("x");
+  s.remove(a.id);
+  assert.throws(() => s.remove(a.id), new RegExp(`no item ${a.id}`));
+});
+
+test("list returns copies: mutating a listed item does not change the store", () => {
+  const s = createStore();
+  s.add("x");
+  const listed = s.list()[0];
+  listed.title = "tampered";
+  listed.done = true;
+  const [fresh] = s.list();
+  assert.equal(fresh.title, "x");
+  assert.equal(fresh.done, false);
+});
