@@ -6,5 +6,5 @@
 (empty — written by sch-tickets after brainstorm → prd → architecture → plan)
 
 
-## Phase 1 — Todo core   (0/1 done)
-- [ ] T1.1-add-priority-to-todo  build  Add priority to todo items  deps:-  size:S
+## Phase 1 — Todo core   (1/1 done)
+- [x] T1.1-add-priority-to-todo  build  Add priority to todo items  deps:-  size:S
