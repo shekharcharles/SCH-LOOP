@@ -45,3 +45,8 @@ Evidence for each lives in `.sch-loop/evidence/` and `.sch-loop/events.jsonl`.
 ## Not yet implemented (stubs in `.claude/skills/`)
 
 `sch-setup`, `sch-prd`, `sch-architecture`, `sch-insert`, `sch-run`/watchdog, `task.md` parser, role config loading, Herdr transport. Build order in the design doc §7.
+
+## Todo API
+
+`add(title, priority)` creates an item; `priority` accepts `low`, `normal` or `high`.
+Omit it and the priority defaults to `normal`; any other value throws.
