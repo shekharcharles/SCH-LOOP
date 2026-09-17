@@ -145,6 +145,9 @@ require_tdd_for_behavior_changes: true
 require_independent_review: true
 require_fresh_evidence: true
 timeouts_minutes: { XS: 5, S: 15, M: 30, L: 60 }
+# The silence window is this times four, and it is clamped to 60% of the size's timeout
+# so it can always fire before one. Unclamped, the default 480s window sat above the
+# 300s XS timeout and every quiet XS ticket was misreported as having taken too long.
 silence_nudge_seconds: 120
 rate_limit_backoff_minutes: [1, 2, 4, 8]
 protected_paths:
