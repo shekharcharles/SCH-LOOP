@@ -197,17 +197,29 @@ export async function setupProject({ projectRoot, force = false }) {
   const seats = await probeSeats();
   const roles = await seedRoles(seats);
   const written = [], skipped = [];
-  const put = (rel, body, overwrite = false) => {
+  // `force` refreshes the ENGINE. It must never destroy the project's own state, and it used to: a
+  // second `setup --force` overwrote task.md with the empty template and erased a thirteen-ticket
+  // queue. The seed files below belong to the project the moment it has put anything in them — the
+  // queue has tickets, roles.json has been edited in the dashboard, config.md has been tuned.
+  //
+  // So: create when missing, and otherwise leave alone unless the file is still the untouched template.
+  const put = (rel, body, { force: forceThis = false, seeded = null } = {}) => {
     const f = path.join(projectRoot, rel);
-    if (fs.existsSync(f) && !overwrite && !force) { skipped.push(rel); return; }
+    if (fs.existsSync(f) && !forceThis) {
+      const cur = (() => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } })();
+      const untouched = seeded ? seeded(cur) : false;
+      if (!untouched) { skipped.push(rel); return; }
+    }
     w(f, body); written.push(rel);
   };
+  // A queue is "still the template" only while it holds no ticket line at all.
+  const emptyQueue = text => !/^- \[[ ~x!?]\] T\d/m.test(String(text || ""));
 
   for (const d of ["tickets", "briefs", "reports", "reviews", "evidence", "council", "private", "debug"]) fs.mkdirSync(path.join(projectRoot, ".sch-loop", d), { recursive: true });
   put(".sch-loop/roles.json", JSON.stringify(roles, null, 2) + "\n");
   put(".sch-loop/config.md", DEFAULT_CONFIG(seats));
   put(".sch-loop/state.json", JSON.stringify({ schema_version: 1, project_status: "READY", lifecycle_stage: "BRAINSTORM", current_phase: null, current_task: null, current_role: null, attempt: 0, active_jobs: {}, last_event: "PROJECT_SETUP", updated_at: new Date().toISOString() }, null, 2) + "\n");
-  put("task.md", TASK_MD);
+  put("task.md", TASK_MD, { seeded: emptyQueue });
 
   // Install the engine itself. Without this the managed CLAUDE.md block points at an empty directory,
   // `checkFences` finds no hooks and refuses every ticket, and the project cannot run a single thing —

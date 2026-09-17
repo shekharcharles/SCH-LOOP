@@ -68,8 +68,11 @@ test("setupProject writes the tree, merges hooks into an existing settings.json,
   assert.ok(JSON.stringify(s).includes("write-guard.mjs"));
   assert.match(fs.readFileSync(path.join(root, ".gitignore"), "utf8"), /\.worktrees\//);
 
-  const b = await setupProject({ projectRoot: root });
-  assert.ok(b.skipped.includes("task.md"), "a second run does not clobber the queue");
+  // What matters is that a real queue survives, not whether the file was listed as skipped. An
+  // untouched template is re-seeded, which loses nothing; a queue with tickets in it is left alone.
+  fs.writeFileSync(path.join(root, "task.md"), "# task.md\n\n## Phase 1 — Mine   (0/1 done)\n- [ ] T1.1-mine  build  Mine  deps:-  size:S\n");
+  await setupProject({ projectRoot: root });
+  assert.match(fs.readFileSync(path.join(root, "task.md"), "utf8"), /T1\.1-mine/, "a second run does not clobber the queue");
   assert.equal((fs.readFileSync(path.join(root, "CLAUDE.md"), "utf8").match(/SCH-LOOP:PROJECT:START/g) || []).length, 1);
   assert.ok(a.seats.some(x => x.provider === "claude"));
 });
@@ -167,4 +170,34 @@ test("prunable names only what the source no longer has, at the top level", () =
   fs.writeFileSync(path.join(b, "drop.mjs"), "");
   assert.deepEqual(prunable(a, b), ["drop.mjs"]);
   assert.deepEqual(prunable(a, path.join(b, "nope")), [], "a destination that does not exist prunes nothing");
+});
+
+test("setup --force refreshes the engine and NEVER destroys the project's queue", async () => {
+  // A second `setup --force` used to overwrite task.md with the empty template, erasing a
+  // thirteen-ticket queue. `force` means "refresh the engine", never "discard my work".
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-force-"));
+  await setupProject({ projectRoot: root });
+
+  const queue = "# task.md\n\n## Phase 1 — Mine   (0/2 done)\n- [x] T1.1-done  build  Done  deps:-  size:S\n- [ ] T1.2-next  build  Next  deps:T1.1  size:S\n";
+  fs.writeFileSync(path.join(root, "task.md"), queue);
+  const roles = JSON.parse(fs.readFileSync(path.join(root, ".sch-loop/roles.json"), "utf8"));
+  roles.executor.model = "chosen-in-the-dashboard";
+  fs.writeFileSync(path.join(root, ".sch-loop/roles.json"), JSON.stringify(roles, null, 2));
+  fs.writeFileSync(path.join(root, ".claude/sch/runtime/cli.mjs"), "// stale engine\n");
+
+  const r = await setupProject({ projectRoot: root, force: true });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(fs.readFileSync(path.join(root, "task.md"), "utf8"), queue, "the queue is untouched");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".sch-loop/roles.json"), "utf8")).executor.model,
+    "chosen-in-the-dashboard", "and so is the model chosen in the dashboard");
+  assert.doesNotMatch(fs.readFileSync(path.join(root, ".claude/sch/runtime/cli.mjs"), "utf8"), /stale engine/,
+    "while the engine IS refreshed — that is what force is for");
+});
+
+test("an untouched template queue is re-seeded, because nothing is lost by doing so", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-force-"));
+  await setupProject({ projectRoot: root });
+  fs.writeFileSync(path.join(root, "task.md"), "# task.md\n\n(nothing here yet)\n");
+  await setupProject({ projectRoot: root, force: true });
+  assert.match(fs.readFileSync(path.join(root, "task.md"), "utf8"), /SCH-LOOP:TASKS/);
 });

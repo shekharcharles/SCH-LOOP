@@ -28,6 +28,7 @@ const { verifyPhase } = await import("./verify-phase.mjs");
 const { ship } = await import("./ship.mjs");
 const { notify, unread, markAllRead, orchestratorTarget } = await import("./notify.mjs");
 const { STAGES, stageById, stageReport, nextStage, runStage, runTicketsStage, setGoal, goal } = await import("./stages.mjs");
+const { summary: progressSummary, render: renderProgress, events: readEvents, renderLog } = await import("./progress.mjs");
 const { parse: parseTaskMd, next: nextTicket, setStatus, insert: insertTask } = await import("./taskmd.mjs");
 const { writeTicket, loadTicket, validateTicket, TICKET_TYPES } = await import("./tickets.mjs");
 const { loadRoles, resolveSpawn, isBypass, isReadOnly, councilSeats } = await import("./roles.mjs");
@@ -277,6 +278,23 @@ if (cmd === "doctor") {
   out(checkFences({ projectRoot: PROJECT(), cwd: PROJECT(), roles, config: loadConfig(PROJECT()) }));
 } else if (cmd === "heartbeat") {
   out(heartbeatStatus(PROJECT()));
+} else if (cmd === "progress") {
+  // One screen: is it running, what is specified, what is built, what it cost. Read from durable state.
+  const root = PROJECT();
+  const s = progressSummary(root);
+  if (rest.includes("--json")) out(s); else console.log(renderProgress(s));
+} else if (cmd === "log") {
+  // The event stream as sentences, for a person watching it happen. `--follow` tails it.
+  const root = PROJECT();
+  const n = rest.includes("-n") ? Number(rest[rest.indexOf("-n") + 1]) : 30;
+  console.log(renderLog(readEvents(root, { limit: n })));
+  if (rest.includes("--follow") || rest.includes("-f")) {
+    let seen = readEvents(root).length;
+    setInterval(() => {
+      const all = readEvents(root);
+      if (all.length > seen) { console.log(renderLog(all.slice(seen))); seen = all.length; }
+    }, 1000);
+  }
 } else if (cmd === "dashboard") {
   // The Roles page. Loopback only, and it writes exactly one file.
   const { serve } = await import("./dashboard.mjs");
@@ -371,6 +389,8 @@ ctrl-c to stop`);
   setup [--force] | seats  onboard this project | which CLIs are installed
   roles | fences | config | heartbeat
   dashboard [--port N]     roles page: which CLI, which model, which flags per seat
+  progress [--json]        one screen: what is specified, what is built, what it cost
+  log [-n N] [--follow]    the event stream, as sentences
   stages                   which lifecycle stages are done, and what runs next
   stage <id|next> [--goal] brainstorm | prd | architecture | plan
   plan-to-tickets          turn PLAN.md into task.md and the ticket JSONs
