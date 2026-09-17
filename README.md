@@ -244,6 +244,14 @@ Click a project and you get the whole of it: what is building right now, the fou
 
 ![Per-phase and per-ticket timings, verdicts and cost](docs/images/dashboard-phases-dark.png)
 
+A project opens on four tabs, because they are four different jobs. **Files** is the one that changes how the loop feels to use: the specification it wrote is a document you read, not a character count you are told about. Markdown renders as markdown; source renders as source, highlighted, with line numbers.
+
+![Reading the PRD the loop wrote, in the dashboard](docs/images/dashboard-files-doc.png)
+
+![Source, highlighted, with line numbers](docs/images/dashboard-files-code.png)
+
+The file is read by the server, not the browser: nothing outside the project root is served however the path is spelled, and a file whose name looks like a credential — `.env`, `*.pem`, `id_rsa`, `secrets.yaml` — is never listed and never sent. The page builds every node itself, so a document can contain anything at all and stays a document.
+
 Every seat is editable from the same port. A project inherits the machine-wide defaults until you customise it, and then it owns that seat **whole** — never a spawn command from one seat wearing a model from another. The page refuses to save a reviewer or judge that is able to write, which is the rule the dispatcher enforces again at dispatch time. Nothing about a model or a flag is hard-coded anywhere in the engine: `roles.json` is the whole truth and this is an editor for it.
 
 ![Global settings: the seats every project inherits](docs/images/dashboard-settings-light.png)

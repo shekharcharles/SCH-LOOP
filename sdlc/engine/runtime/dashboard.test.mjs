@@ -258,3 +258,52 @@ test("a duration never prints a sixtieth minute", async () => {
   assert.equal(dur(50 * 6e4), "50m");
   assert.equal(dur(null), "—");
 });
+
+test("a project's files are served, and nothing else is", async () => {
+  // The viewer is the reason to open a project at all — and the one place a local server hands a file
+  // over because a query string asked for it. Both halves are tested together: what it serves, and
+  // what it refuses however the path is spelled.
+  const root = proj();
+  fs.writeFileSync(path.join(root, "README.md"), "# demo\n\ntext\n");
+  fs.writeFileSync(path.join(root, ".env"), "TOKEN=hunter2\n");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "sch-ghome-"));
+  const prev = process.env.SCH_GLOBAL_HOME;
+  process.env.SCH_GLOBAL_HOME = home;
+  let server = null;
+  try {
+    const { registerProject, idFor } = await import("./registry.mjs");
+    registerProject(root, { name: "demo" });
+    const id = idFor(root);
+    server = await listen(createServer());
+
+    const tree = await get(server, "/api/files/" + encodeURIComponent(id));
+    assert.equal(tree.status, 200);
+    const paths = tree.body.entries.map(e => e.path);
+    assert.ok(paths.includes("README.md"), "the project's own files are listed");
+    assert.equal(paths.includes(".env"), false, "a credential is never listed");
+
+    const file = await get(server, "/api/file/" + encodeURIComponent(id) + "?path=README.md");
+    assert.equal(file.status, 200);
+    assert.equal(file.body.lang, "markdown");
+    assert.match(file.body.text, /# demo/);
+
+    for (const bad of ["../../../etc/passwd", "..%2F..%2Fsecret.txt", ".env"]) {
+      const r = await get(server, "/api/file/" + encodeURIComponent(id) + "?path=" + encodeURIComponent(bad));
+      assert.equal(r.status, 400, `${bad} must be refused`);
+    }
+    assert.equal((await get(server, "/api/files/not-a-project")).status, 404);
+  } finally {
+    if (server) server.close();
+    if (prev === undefined) delete process.env.SCH_GLOBAL_HOME; else process.env.SCH_GLOBAL_HOME = prev;
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the page builds every node itself — file content never becomes markup", async () => {
+  // The viewer renders files the page did not write. One innerHTML anywhere in it turns a markdown
+  // document into a script the operator's browser runs on localhost.
+  const { PAGE } = await import("./dashboard-page.mjs");
+  for (const sink of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("])
+    assert.equal(PAGE.includes(sink), false, `the page must not use ${sink}`);
+});

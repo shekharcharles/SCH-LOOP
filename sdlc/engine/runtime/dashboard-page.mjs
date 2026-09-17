@@ -177,6 +177,12 @@ h2::after{content:"]";color:var(--ink-faint)}
 .st-row:first-child{border-top:0}
 .st-row .mk{justify-self:center;align-self:center}
 .st-row .mt{color:var(--ink-dim);font-size:var(--t-meta);white-space:nowrap}
+/* a stage row that opens its document is still a row, not a button that looks like one */
+button.st-row{width:100%;font:var(--t-dense)/1.5 var(--f-mono);letter-spacing:0;text-transform:none;
+  color:inherit;background:transparent;border-radius:0;text-align:left;cursor:pointer}
+button.st-row:hover{background:var(--sunk);filter:none}
+button.st-row:disabled{opacity:1;color:var(--ink-faint);cursor:default}
+button.st-row:active{transform:none}
 .tk .mk{justify-self:center;align-self:center}
 .tk .tid{color:var(--brand)}
 .tk .ty{color:var(--ink-faint);font-size:var(--t-meta)}
@@ -260,6 +266,84 @@ button:disabled{opacity:.45;cursor:not-allowed}
   background-size:200% 100%;height:11px}
 @media (prefers-reduced-motion:no-preference){.sk{animation:sweep 1.3s var(--ease) infinite}}
 @keyframes sweep{to{background-position:-200% 0}}
+/* ── tabs: a project has four faces, and only one of them is settings ───── */
+.tabs{display:flex;gap:2px;margin:0 0 22px;border-bottom:1px solid var(--rule)}
+.tabs button{background:transparent;color:var(--ink-dim);border:1px solid transparent;border-bottom:0;
+  padding:9px 14px;margin-bottom:-1px}
+.tabs button:hover{color:var(--ink)}
+.tabs button[aria-selected="true"]{color:var(--ink);background:var(--panel);
+  border-color:var(--rule);border-top:2px solid var(--brand)}
+.tabs .n{margin-left:7px;color:var(--ink-faint);font-weight:400}
+
+/* ── files: a tree you can scan and a viewer that reads like the file ───── */
+.files{display:grid;grid-template-columns:288px minmax(0,1fr);border:1px solid var(--rule);background:var(--panel)}
+.tree{border-right:1px solid var(--rule);background:var(--sunk);min-width:0;
+  max-height:calc(100vh - 230px);overflow:auto;padding-bottom:10px}
+.tree .find{position:sticky;top:0;z-index:2;padding:10px;background:var(--sunk);border-bottom:1px solid var(--rule)}
+.tree .grp{padding:11px 12px 5px;font-size:var(--t-micro);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-faint)}
+.node{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:4px 10px;
+  font:var(--t-meta)/1.5 var(--f-mono);letter-spacing:0;text-transform:none;color:var(--ink-dim);
+  background:transparent;border:0;cursor:pointer;min-width:0}
+.node:hover{color:var(--ink);background:var(--panel)}
+.node[aria-current]{color:var(--ink);background:var(--panel);box-shadow:inset 2px 0 0 var(--brand)}
+.node.dir{color:var(--ink)}
+.node .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .sz{margin-left:auto;color:var(--ink-faint);font-size:var(--t-micro);flex:none}
+.node svg{color:var(--ink-faint)}
+.node.dir svg{color:var(--brand)}
+
+.viewer{min-width:0;display:flex;flex-direction:column}
+.vhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;
+  background:var(--sunk);border-bottom:1px solid var(--rule);position:sticky;top:0;z-index:1}
+.vhead .fp{font-size:var(--t-meta);color:var(--ink-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vhead .fp b{color:var(--ink);font-weight:700}
+.vhead .sp{margin-left:auto;display:flex;gap:8px;align-items:center}
+.vbody{padding:0;overflow:auto;max-height:calc(100vh - 230px)}
+@media (max-width:900px){
+  .files{grid-template-columns:1fr}
+  .tree{border-right:0;border-bottom:1px solid var(--rule);max-height:300px}
+  .vbody{max-height:none}
+}
+
+/* code, with a number on every line and colour that means the same thing everywhere */
+.code{margin:0;padding:12px 0;counter-reset:l;font-size:var(--t-dense);line-height:1.55;overflow-x:auto}
+.cl{counter-increment:l;display:block;white-space:pre;padding:0 14px 0 0;min-height:1.55em}
+.cl::before{content:counter(l);display:inline-block;width:4.5ch;margin-right:14px;padding-right:9px;
+  text-align:right;color:var(--ink-faint);border-right:1px solid var(--rule-soft);user-select:none}
+.cl:hover{background:var(--sunk)}
+.t-com{color:var(--rest);font-style:italic}
+.t-str{color:var(--live)}
+.t-num{color:var(--work)}
+.t-key{color:var(--brand)}
+.t-fn{color:var(--info)}
+.t-atr{color:var(--info)}
+
+/* markdown, read as prose rather than as a file */
+.md{padding:24px 26px;max-width:84ch}
+.md>*:first-child{margin-top:0}
+.md h1,.md h2,.md h3,.md h4{font-family:var(--f-mark);letter-spacing:-.02em;line-height:1.15;
+  margin:28px 0 10px;text-transform:none;border:0;padding:0;display:block;color:var(--ink)}
+.md h1{font-size:var(--t-h2)} .md h2{font-size:var(--t-h3)} .md h3{font-size:var(--t-lead)}
+.md h4{font-size:var(--t-body)}
+.md h1::before,.md h2::before,.md h1::after,.md h2::after{content:none}
+.md h2{padding-top:14px;border-top:1px solid var(--rule-soft)}
+.md p,.md li{font-size:var(--t-body);line-height:1.68}
+.md p{margin:0 0 14px}
+.md ul,.md ol{margin:0 0 14px;padding-left:22px}
+.md li{margin:4px 0}
+.md li::marker{color:var(--brand)}
+.md a{color:var(--info);text-decoration:underline;text-underline-offset:2px}
+.md code{background:var(--sunk);border:1px solid var(--rule-soft);padding:1px 5px;font-size:.92em}
+.md pre{background:var(--sunk);border:1px solid var(--rule);padding:12px 14px;overflow-x:auto;margin:0 0 16px}
+.md pre code{background:none;border:0;padding:0}
+.md blockquote{margin:0 0 16px;padding:2px 0 2px 14px;border-left:2px solid var(--brand);color:var(--ink-dim)}
+.md hr{border:0;border-top:1px solid var(--rule);margin:22px 0}
+.md table{border-collapse:collapse;width:100%;margin:0 0 16px;font-size:var(--t-dense)}
+.md th,.md td{border:1px solid var(--rule);padding:7px 10px;text-align:left;vertical-align:top}
+.md th{background:var(--sunk);font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim)}
+.md strong{color:var(--ink)}
+.plain{padding:14px;white-space:pre-wrap;word-break:break-word;font-size:var(--t-dense);line-height:1.6}
 </style></head><body>
 
 <div class="wrap">
@@ -297,7 +381,8 @@ const el=(t,a={},k=[])=>{const n=document.createElement(t);
     else n.setAttribute(p,v===true?"":v);}
   for(const c of[].concat(k))if(c!=null)n.append(c);return n;};
 /* Icons are authored paths from MARK below — module constants, never data. Built as real SVG nodes
-   rather than assigned as markup, so nothing on this page has an innerHTML sink at all. */
+   rather than assigned as markup: no string on this page ever becomes an element. A test enforces
+   that, so the word for the sink cannot be written here either. */
 const NS="http://www.w3.org/2000/svg";
 const svg=(parts,w=9)=>{const n=document.createElementNS(NS,"svg");
   n.setAttribute("viewBox","0 0 10 10");n.setAttribute("width",w);n.setAttribute("height",w);
@@ -327,7 +412,17 @@ const ago=a=>{if(!a)return"never";const d=Date.now()-new Date(a).getTime();
   return d<6e4?"just now":d<36e5?Math.round(d/6e4)+"m ago":d<864e5?Math.round(d/36e5)+"h ago":Math.round(d/864e5)+"d ago";};
 const money=n=>"$"+(n||0).toFixed(2);
 
-let S=null,MODE="home",PID=null,DIRTY=false;
+let S=null,MODE="home",PID=null,TAB="overview",DIRTY=false;
+
+/* The tab and the open file live in the URL. Reloading the page you are looking at should give you
+   the page you were looking at, and a link to a document should open that document. */
+function setUrl(){
+  const q=new URLSearchParams();
+  if(TAB!=="overview")q.set("tab",TAB);
+  if(TAB==="files"&&FILE&&FILE.path)q.set("file",FILE.path);
+  const next=location.pathname+(q.toString()?"?"+q:"");
+  if(next!==location.pathname+location.search)history.pushState(null,"",next);
+}
 
 /* theme: system by default, explicit choice remembered */
 const setTheme=t=>{if(t)document.documentElement.setAttribute("data-theme",t);
@@ -417,6 +512,292 @@ function councilPanel(roles,editable){
   }));
 }
 
+/* ── reading files ───────────────────────────────────────────────────────
+   A backtick cannot appear in this file: the whole page is one template
+   literal. BT is the character, written as an escape the browser resolves
+   and this module never contains.                                        */
+const BT="\u0060";
+const RX=(...p)=>new RegExp(p.join(""),"g");
+const size=n=>n<1024?n+" B":n<1048576?(n/1024).toFixed(n<10240?1:0)+" KB":(n/1048576).toFixed(1)+" MB";
+
+/* A link out of a document is the one place file content becomes page behaviour. Only http(s) and
+   in-page anchors survive; javascript: and data: do not get to be clickable. */
+const safeHref=u=>/^(https?:\/\/|#|\.?\/)/i.test(u.trim())?u.trim():"#";
+
+const ICON={
+  dir:[["path",{d:"M.9 2.4h3l1 1.2h4.2v5.9H.9Z",fill:"none",stroke:"currentColor","stroke-width":1.1}]],
+  file:[["path",{d:"M2.2.9h3.9l2 2v6.2H2.2Z",fill:"none",stroke:"currentColor","stroke-width":1.1}]],
+};
+
+/* ── markdown ────────────────────────────────────────────────────────────
+   Enough of it to read what the loop writes: headings, lists, fences,
+   tables, quotes, rules and the inline four. Built as nodes, never markup,
+   so a document can say anything it likes without the page obeying it.  */
+function inline(s){
+  const out=[];
+  const re=RX(BT,"([^",BT,"]+)",BT,"|\\*\\*([^*]+)\\*\\*|\\*([^*\\n]+)\\*|\\[([^\\]]*)\\]\\(([^)\\s]+)[^)]*\\)|(https?://[^\\s)<]+)");
+  let last=0,m;
+  while((m=re.exec(s))){
+    if(m.index>last)out.push(s.slice(last,m.index));
+    if(m[1]!=null)out.push(el("code",{},m[1]));
+    /* the inner text is markdown too: a bold bullet that contains code used to print its own
+       backticks, because the bold branch swallowed the span and never looked inside it. */
+    else if(m[2]!=null)out.push(el("strong",{},inline(m[2])));
+    else if(m[3]!=null)out.push(el("em",{},inline(m[3])));
+    else if(m[4]!=null)out.push(el("a",{href:safeHref(m[5]),target:"_blank",rel:"noreferrer noopener"},m[4]?inline(m[4]):m[5]));
+    else out.push(el("a",{href:safeHref(m[6]),target:"_blank",rel:"noreferrer noopener"},m[6]));
+    last=m.index+m[0].length;
+  }
+  if(last<s.length)out.push(s.slice(last));
+  return out;
+}
+
+const cells=row=>row.replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+
+function markdown(text){
+  const root=el("div",{class:"md"});
+  const lines=text.split("\n");
+  const FENCE=BT+BT+BT;
+  let i=0,para=[],list=null;
+  const flushPara=()=>{if(para.length){root.append(el("p",{},inline(para.join(" "))));para=[];}};
+  const flushList=()=>{if(list){root.append(list.node);list=null;}};
+  const flush=()=>{flushPara();flushList();};
+
+  while(i<lines.length){
+    const line=lines[i];
+    if(line.startsWith(FENCE)){
+      flush();
+      const lang=line.slice(3).trim().toLowerCase();
+      const buf=[];i++;
+      while(i<lines.length&&!lines[i].startsWith(FENCE)){buf.push(lines[i]);i++;}
+      i++;
+      const code=el("code",{});
+      highlight(buf.join("\n"),lang).forEach((ln,n)=>{if(n)code.append("\n");for(const node of ln)code.append(node);});
+      root.append(el("pre",{},code));
+      continue;
+    }
+    const h=/^(#{1,6})\s+(.*)$/.exec(line);
+    if(h){flush();root.append(el("h"+Math.min(h[1].length,4),{},inline(h[2])));i++;continue;}
+    if(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)){flush();root.append(el("hr"));i++;continue;}
+    if(/^\s*>\s?/.test(line)){
+      flush();const buf=[];
+      while(i<lines.length&&/^\s*>\s?/.test(lines[i])){buf.push(lines[i].replace(/^\s*>\s?/,""));i++;}
+      root.append(el("blockquote",{},inline(buf.join(" "))));
+      continue;
+    }
+    if(/^\s*\|.*\|\s*$/.test(line)&&i+1<lines.length&&/^\s*\|[\s:|-]+\|\s*$/.test(lines[i+1])){
+      flush();
+      const head=cells(line.trim());i+=2;
+      const rows=[];
+      while(i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i])){rows.push(cells(lines[i].trim()));i++;}
+      root.append(el("table",{},[
+        el("thead",{},el("tr",{},head.map(c=>el("th",{},inline(c))))),
+        el("tbody",{},rows.map(r=>el("tr",{},r.map(c=>el("td",{},inline(c)))))),
+      ]));
+      continue;
+    }
+    const li=/^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if(li){
+      flushPara();
+      const ordered=/\d/.test(li[2]);
+      if(!list||list.ordered!==ordered){flushList();list={ordered,node:el(ordered?"ol":"ul",{})};}
+      list.node.append(el("li",{},inline(li[3])));
+      i++;continue;
+    }
+    if(!line.trim()){flush();i++;continue;}
+    flushList();
+    para.push(line.trim());i++;
+  }
+  flush();
+  return root;
+}
+
+/* ── code ────────────────────────────────────────────────────────────────
+   One tokenizer, a keyword list per family and the right comment mark.
+   Not a parser: a reader wants comments, strings, numbers and keywords to
+   separate, and this separates them in every language the tree can hold. */
+const KW={
+  javascript:"const let var function return if else for while do class new await async import export from as typeof instanceof try catch finally throw switch case break continue default delete void yield extends static get set of in null true false undefined this super",
+  typescript:"const let var function return if else for while do class new await async import export from as typeof instanceof try catch finally throw switch case break continue default delete void yield extends implements interface type enum public private protected readonly static get set of in null true false undefined this super",
+  python:"def class return if elif else for while import from as pass break continue with try except finally raise lambda yield global nonlocal assert del not and or is in None True False self async await match case",
+  shell:"if then else elif fi for while do done case esac function return export local source echo set unset trap exit read shift",
+  powershell:"function param begin process end if else elseif switch foreach while do until return try catch finally throw class",
+  go:"package import func return if else for range var const type struct interface map chan go defer select switch case break continue nil true false",
+  rust:"fn let mut const struct enum impl trait use pub mod match if else for while loop return self Self where as dyn move ref Some None Ok Err true false",
+  java:"public private protected class interface extends implements new return if else for while do switch case break continue final static void int long double float boolean char String null true false try catch finally throw throws import package this super",
+  csharp:"public private protected internal class interface struct new return if else for foreach while do switch case break continue static void var int long double bool string null true false try catch finally throw using namespace this base async await",
+  c:"if else for while do return struct union enum typedef static const void int char long short float double unsigned signed sizeof switch case break continue goto include define",
+  cpp:"if else for while do return class struct namespace template typename public private protected new delete const static void int char bool auto try catch throw using nullptr true false include define",
+  ruby:"def class module end if elsif else unless while until for in do return yield begin rescue ensure raise require attr_accessor self nil true false",
+  php:"function class public private protected return if else elseif foreach while do switch case break continue new echo require include use namespace null true false try catch finally throw",
+  sql:"select from where group by order having join left right inner outer on as insert into values update set delete create table alter drop index primary key foreign references not null distinct limit offset union all case when then else end",
+  css:"import media supports keyframes from to",
+  json:"true false null",
+  yaml:"true false null yes no on off",
+  toml:"true false",
+  ini:"true false",
+  lua:"function local end if then else elseif for while do return nil true false and or not repeat until",
+};
+const COMMENT={python:"#",shell:"#",yaml:"#",toml:"#",ini:"#",ruby:"#",r:"#",perl:"#",powershell:"#",
+  sql:"--",lua:"--"};
+const FAMILY={markdown:null,text:null,binary:null,html:"css",xml:"css",md:"markdown",
+  js:"javascript",mjs:"javascript",ts:"typescript",py:"python",sh:"shell",bash:"shell",rb:"ruby",yml:"yaml"};
+
+function tokenizer(lang){
+  const mark=COMMENT[lang];
+  const com=mark==="#"?"#[^\\n]*":mark==="--"?"--[^\\n]*"
+    :"\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*";
+  const kw=(KW[lang]||"").trim().split(/\s+/).filter(Boolean).join("|");
+  const parts=[
+    "("+com+")",
+    "("+BT+"(?:[^"+BT+"\\\\]|\\\\.)*"+BT+"|\"\"\"[\\s\\S]*?\"\"\"|\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*')",
+    kw?"\\b("+kw+")\\b":"(\\b\\x00\\b)",
+    "\\b(\\d[\\w.]*)\\b",
+    "([A-Za-z_$][\\w$]*)(?=\\s*\\()",
+  ];
+  return RX(parts.join("|"));
+}
+const CLASS=["t-com","t-str","t-key","t-num","t-fn"];
+
+/* Lines, not one blob: a line number belongs to a line, and a token that spans lines still has to land
+   in each of them. Splitting the token text is what makes a Python docstring number correctly. */
+function highlight(text,lang){
+  const fam=lang in FAMILY?FAMILY[lang]:lang;
+  const lines=[[]];
+  const put=(cls,str)=>{
+    const parts=str.split("\n");
+    for(let i=0;i<parts.length;i++){
+      if(i)lines.push([]);
+      if(parts[i])lines[lines.length-1].push(cls?el("span",{class:cls},parts[i]):document.createTextNode(parts[i]));
+    }
+  };
+  if(!fam||!(KW[fam]||COMMENT[fam])){put("",text);return lines;}
+  const re=tokenizer(fam);
+  let last=0,m;
+  while((m=re.exec(text))){
+    if(m.index>last)put("",text.slice(last,m.index));
+    const g=[1,2,3,4,5].find(n=>m[n]!=null&&m[n]!=="");
+    put(g?CLASS[g-1]:"",m[0]);
+    last=m.index+m[0].length;
+  }
+  if(last<text.length)put("",text.slice(last));
+  return lines;
+}
+
+function codeBlock(text,lang){
+  const pre=el("pre",{class:"code"});
+  for(const ln of highlight(text,lang))pre.append(el("span",{class:"cl"},ln.length?ln:"\u200b"));
+  return pre;
+}
+
+/* ── the tree ───────────────────────────────────────────────────────── */
+let TREE=null,FILE=null,OPEN=new Set(),FIND="";
+
+const baseOf=p=>p.slice(p.lastIndexOf("/")+1);
+const dirOf=p=>p.includes("/")?p.slice(0,p.lastIndexOf("/")):"";
+const shown=p=>{let d=dirOf(p);while(d){if(!OPEN.has(d))return false;d=dirOf(d);}return true;};
+
+function openFile(rel){
+  FILE={path:rel,loading:true};
+  let d=dirOf(rel);while(d){OPEN.add(d);d=dirOf(d);}
+  setUrl();render();
+  fetch("/api/file/"+encodeURIComponent(PID)+"?path="+encodeURIComponent(rel))
+    .then(r=>r.json().then(j=>r.ok&&!j.error?j:Promise.reject(new Error(j.error||("HTTP "+r.status)))))
+    .then(f=>{if(FILE&&FILE.path===rel){FILE=f;render();}})
+    .catch(e=>{if(FILE&&FILE.path===rel){FILE={path:rel,error:e.message};render();}});
+}
+
+function fileButton(e,label){
+  const b=el("button",{class:"node",title:e.path,"aria-current":(FILE&&FILE.path===e.path)||null},
+    [svg(ICON.file,11),el("span",{class:"nm"},label),el("span",{class:"sz"},size(e.size||0))]);
+  b.addEventListener("click",()=>openFile(e.path));
+  return b;
+}
+
+function nodeButton(e){
+  if(!e.dir)return fileButton(e,baseOf(e.path));
+  const depth=e.path.split("/").length-1;
+  const b=el("button",{class:"node dir",style:"padding-left:"+(10+depth*13)+"px",title:e.path},
+    [svg(ICON.dir,11),el("span",{class:"nm"},baseOf(e.path)+"/")]);
+  b.addEventListener("click",()=>{OPEN.has(e.path)?OPEN.delete(e.path):OPEN.add(e.path);render();});
+  return b;
+}
+
+function renderTree(){
+  const box=el("div",{class:"tree"});
+  const find=el("input",{type:"text",value:FIND,placeholder:"find a file"});
+  find.addEventListener("input",ev=>{
+    FIND=ev.target.value;
+    const next=renderTree();
+    $(".files").replaceChild(next,$(".tree"));
+    const i=next.querySelector("input");i.focus();i.setSelectionRange(FIND.length,FIND.length);
+  });
+  box.append(el("div",{class:"find"},find));
+
+  if(FIND.trim()){
+    const q=FIND.trim().toLowerCase();
+    const hits=TREE.entries.filter(e=>!e.dir&&e.path.toLowerCase().includes(q)).slice(0,200);
+    box.append(el("div",{class:"grp"},hits.length?hits.length+" matching":"nothing with that in its path"));
+    for(const e of hits)box.append(fileButton(e,e.path));
+    return box;
+  }
+
+  if(TREE.docs&&TREE.docs.length){
+    box.append(el("div",{class:"grp"},"What the loop wrote"));
+    for(const d of TREE.docs)box.append(fileButton(TREE.entries.find(x=>x.path===d)||{path:d,size:0},baseOf(d)));
+    box.append(el("div",{class:"grp"},"The project"));
+  }
+  for(const e of TREE.entries)if(shown(e.path)){
+    const n=nodeButton(e);
+    if(!e.dir)n.style.paddingLeft=(10+(e.path.split("/").length-1)*13)+"px";
+    box.append(n);
+  }
+  if(TREE.truncated)box.append(el("div",{class:"grp"},"the list stops here — too many files"));
+  return box;
+}
+
+function renderViewer(){
+  const v=el("div",{class:"viewer"});
+  if(!FILE){
+    v.append(el("div",{class:"empty"},[el("b",{},"Pick a file"),
+      "What the loop wrote is at the top of the list. Everything below it is your project."]));
+    return v;
+  }
+  const head=[el("span",{class:"fp"},[dirOf(FILE.path)?dirOf(FILE.path)+"/":"",el("b",{},baseOf(FILE.path))])];
+  const tail=[];
+  if(FILE.lang)tail.push(el("span",{class:"state s-rest"},[svg(MARK.rest),FILE.lang]));
+  if(FILE.bytes!=null)tail.push(el("span",{class:"msg"},size(FILE.bytes)));
+  if(tail.length)head.push(el("span",{class:"sp"},tail));
+  v.append(el("div",{class:"vhead"},head));
+
+  if(FILE.loading){
+    v.append(el("div",{class:"pbody"},[1,2,3,4,5,6].map(()=>el("span",{class:"sk",style:"margin:7px 0"}))));
+    return v;
+  }
+  if(FILE.error){v.append(el("div",{class:"empty"},[el("b",{},"Cannot read that"),FILE.error]));return v;}
+  if(FILE.truncated){v.append(el("div",{class:"empty"},[el("b",{},"Not shown"),FILE.why]));return v;}
+  v.append(el("div",{class:"vbody"},
+    FILE.lang==="markdown"?markdown(FILE.text)
+    :FILE.lang==="text"?el("div",{class:"plain"},FILE.text)
+    :codeBlock(FILE.text,FILE.lang)));
+  return v;
+}
+
+function renderFiles(){
+  if(!TREE)return el("div",{class:"empty"},[el("b",{},"Reading the project"),"One moment."]);
+  if(TREE.error)return el("div",{class:"empty"},[el("b",{},"Cannot list the files"),TREE.error]);
+  return el("div",{class:"files"},[renderTree(),renderViewer()]);
+}
+
+function needTree(){
+  if(TREE||TREE===false)return;
+  TREE=false;
+  fetch("/api/files/"+encodeURIComponent(PID))
+    .then(r=>r.json())
+    .then(t=>{TREE=t.error?{error:t.error,entries:[]}:t;if(TAB==="files")render();})
+    .catch(e=>{TREE={error:e.message,entries:[]};if(TAB==="files")render();});
+}
+
 /* ── home ────────────────────────────────────────────────────────────────
    Ordered by what needs a person: blocked, then waiting, then running.   */
 function rankOf(p){return p.blocked?0:p.needsHuman?1:p.running?2:3;}
@@ -466,79 +847,106 @@ function renderHome(){
   })));
 }
 
-/* ── project ─────────────────────────────────────────────────────────── */
-function renderProject(){
-  const P=S.project,pr=S.progress;
-  $("#where").textContent=P.root;
-  const v=$("#view");v.replaceChildren();
-  v.append(el("h1",{},P.name));
-  const goal=pr&&pr.goal?pr.goal.replace(/^#\s*Goal\s*/i,"").trim().split(/\r?\n/).filter(Boolean)[0]:null;
-  v.append(el("p",{class:"lede"},goal||"No goal set for this project yet."));
+/* ── project ─────────────────────────────────────────────────────────
+   Four faces, because they are four different jobs: reading progress,
+   reading the work, changing who does it, and watching what happened.
+   They used to be one scroll, where a blocked ticket, a spawn argv and
+   an event line all looked equally important.                          */
+const TABS=[["overview","Overview"],["files","Files"],["seats","Seats"],["log","Log"]];
 
-  if(pr){
-    const t=pr.totals;
-    v.append(el("div",{class:"band"},[
-      el("div",{class:t.blocked?"attn":""},[el("span",{class:"v"},t.blocked),el("span",{class:"k"},"Blocked")]),
-      el("div",{class:t.needsHuman?"wait":""},[el("span",{class:"v"},t.needsHuman),el("span",{class:"k"},"Waiting on you")]),
-      el("div",{class:"go"},[el("span",{class:"v"},t.done+"/"+t.tickets),el("span",{class:"k"},"Tickets")]),
-      el("div",{},[el("span",{class:"v"},dur(t.specMs)),el("span",{class:"k"},"Spec")]),
-      el("div",{},[el("span",{class:"v"},dur(t.buildMs)),el("span",{class:"k"},"Build")]),
-      el("div",{},[el("span",{class:"v"},money(t.costUsd)),el("span",{class:"k"},"Cost")]),
+function tabsRow(){
+  const row=el("div",{class:"tabs",role:"tablist"});
+  for(const [id,label] of TABS){
+    const b=el("button",{role:"tab","aria-selected":TAB===id?"true":"false"},label);
+    if(id==="log"&&S.log&&S.log.length)b.append(el("span",{class:"n"},S.log.length));
+    if(id==="files"&&TREE&&TREE.entries)b.append(el("span",{class:"n"},TREE.entries.filter(e=>!e.dir).length));
+    b.addEventListener("click",()=>{TAB=id;setUrl();render();if(id==="files")needTree();});
+    row.append(b);
+  }
+  return row;
+}
+
+function overview(v){
+  const pr=S.progress;
+  if(!pr){
+    v.append(el("div",{class:"empty"},[el("b",{},"Nothing recorded yet"),
+      el("p",{},["Set a goal and run the first stage: ",el("code",{},"cli.mjs stage brainstorm"),"."])]));
+    return;
+  }
+  const t=pr.totals;
+  v.append(el("div",{class:"band"},[
+    el("div",{class:t.blocked?"attn":""},[el("span",{class:"v"},t.blocked),el("span",{class:"k"},"Blocked")]),
+    el("div",{class:t.needsHuman?"wait":""},[el("span",{class:"v"},t.needsHuman),el("span",{class:"k"},"Waiting on you")]),
+    el("div",{class:"go"},[el("span",{class:"v"},t.done+"/"+t.tickets),el("span",{class:"k"},"Tickets")]),
+    el("div",{},[el("span",{class:"v"},dur(t.specMs)),el("span",{class:"k"},"Spec")]),
+    el("div",{},[el("span",{class:"v"},dur(t.buildMs)),el("span",{class:"k"},"Build")]),
+    el("div",{},[el("span",{class:"v"},money(t.costUsd)),el("span",{class:"k"},"Cost")]),
+  ]));
+
+  v.append(el("h2",{},["Now",el("span",{class:"n"},pr.live.running?"running":"idle")]));
+  if(pr.current){
+    const c=pr.current;
+    v.append(el("section",{class:"panel"},[
+      el("div",{class:"phead"},[el("b",{},"Building"),state("work",dur(c.ms))]),
+      el("div",{class:"pbody"},el("dl",{class:"now"},[
+        el("dt",{},"Phase"),el("dd",{},c.phase+" — "+c.phaseName),
+        el("dt",{},"Ticket"),el("dd",{},[el("span",{class:"tid"},c.id)," ",c.title]),
+        el("dt",{},"Since"),el("dd",{},clock(c.startedAt)+(c.dispatches>1?"  ·  dispatch "+c.dispatches:"")),
+      ])),
     ]));
-
-    v.append(el("h2",{},["Now",el("span",{class:"n"},pr.live.running?"running":"idle")]));
-    if(pr.current){
-      const c=pr.current;
-      v.append(el("section",{class:"panel"},[
-        el("div",{class:"phead"},[el("b",{},"Building"),state("work",dur(c.ms))]),
-        el("div",{class:"pbody"},el("dl",{class:"now"},[
-          el("dt",{},"Phase"),el("dd",{},c.phase+" — "+c.phaseName),
-          el("dt",{},"Ticket"),el("dd",{},[el("span",{class:"tid"},c.id)," ",c.title]),
-          el("dt",{},"Since"),el("dd",{},clock(c.startedAt)+(c.dispatches>1?"  ·  dispatch "+c.dispatches:"")),
-        ])),
-      ]));
-    } else {
-      v.append(el("div",{class:"empty"},[el("b",{},"Nothing building"),
-        t.needsHuman?"A ticket is waiting on a decision from you.":
-        t.done===t.tickets&&t.tickets?"Every ticket is done.":
-        el("span",{},["Start it with ",el("code",{},"cli.mjs run"),"."])]));
-    }
-
-    v.append(el("h2",{},["Specification",el("span",{class:"n"},dur(t.specMs))]));
-    v.append(el("section",{class:"panel"},el("div",{class:"pbody"},pr.stages.map(x=>
-      el("div",{class:"st-row"},[
-        el("span",{class:"mk",style:"color:var(--"+(x.complete?"live":"rest")+")"},
-          svg(MARK[x.complete?"done":"rest"])),
-        el("span",{},x.id),
-        el("span",{class:"mt"},(x.written!=null?x.written+" tickets":x.complete?(x.chars||0).toLocaleString()+" chars":x.why)+"   "+dur(x.ms)),
-      ])))));
-
-    for(const ph of pr.phases){
-      const wall=ph.wallMs!=null&&ph.wallMs>ph.buildMs*1.5?"  ·  "+dur(ph.wallMs)+" wall":"";
-      v.append(el("h2",{},["Phase "+ph.id+" — "+ph.name,
-        el("span",{class:"n"},ph.done+"/"+ph.total+"  ·  "+dur(ph.buildMs)+wall+(ph.cost?"  ·  "+money(ph.cost):""))]));
-      v.append(el("section",{class:"panel"},el("div",{class:"pbody"},ph.tickets.map(tk=>{
-        const kind=tk.status==="x"?"done":tk.running?"work":(tk.status==="!"?"stop":tk.status==="?"?"wait":"rest");
-        const col=kind==="done"?"live":kind==="work"?"work":kind==="stop"?"stop":kind==="wait"?"work":"rest";
-        const bits=[];
-        if(tk.startedAt)bits.push(clock(tk.startedAt)+"→"+(tk.endedAt?clock(tk.endedAt):"…"));
-        if(tk.ms!=null)bits.push(dur(tk.ms));
-        if(tk.attempts)bits.push(tk.attempts+" att");
-        if(tk.files)bits.push(tk.files+"f");
-        if(tk.review)bits.push(tk.review);
-        if(tk.council)bits.push("council");
-        if(tk.cost)bits.push(money(tk.cost));
-        if(!tk.startedAt&&tk.gate)bits.push("waits for you");
-        return el("div",{class:"tk"+(tk.running?" is-run":"")+(tk.status==="!"?" is-stop":"")},[
-          el("span",{class:"mk",style:"color:var(--"+col+")"},svg(MARK[kind])),
-          el("span",{class:"tid"},tk.id),el("span",{class:"ty"},tk.type),
-          el("span",{class:"ti",title:tk.title},tk.title),
-          el("span",{class:"mt"},bits.join("  ")),
-        ]);
-      }))));
-    }
+  } else {
+    v.append(el("div",{class:"empty"},[el("b",{},"Nothing building"),
+      t.needsHuman?"A ticket is waiting on a decision from you.":
+      t.done===t.tickets&&t.tickets?"Every ticket is done.":
+      el("span",{},["Start it with ",el("code",{},"cli.mjs run"),"."])]));
   }
 
+  /* A stage is a document. Saying it is 15,694 characters long and then not letting anyone read it
+     is the whole reason the Files tab exists — so each row opens the file it is talking about. */
+  v.append(el("h2",{},["Specification",el("span",{class:"n"},dur(t.specMs))]));
+  v.append(el("section",{class:"panel"},el("div",{class:"pbody"},pr.stages.map(x=>{
+    const doc=DOC_OF[x.id];
+    const row=el(doc?"button":"div",{class:"st-row"+(doc?" opens":""),title:doc||null},[
+      el("span",{class:"mk",style:"color:var(--"+(x.complete?"live":"rest")+")"},
+        svg(MARK[x.complete?"done":"rest"])),
+      el("span",{},x.id),
+      el("span",{class:"mt"},(x.written!=null?x.written+" tickets":x.complete?(x.chars||0).toLocaleString()+" chars":x.why)+"   "+dur(x.ms)),
+    ]);
+    if(doc&&x.complete)row.addEventListener("click",()=>{TAB="files";needTree();openFile(doc);});
+    else if(doc)row.disabled=true;
+    return row;
+  }))));
+
+  for(const ph of pr.phases){
+    const wall=ph.wallMs!=null&&ph.wallMs>ph.buildMs*1.5?"  ·  "+dur(ph.wallMs)+" wall":"";
+    v.append(el("h2",{},["Phase "+ph.id+" — "+ph.name,
+      el("span",{class:"n"},ph.done+"/"+ph.total+"  ·  "+dur(ph.buildMs)+wall+(ph.cost?"  ·  "+money(ph.cost):""))]));
+    v.append(el("section",{class:"panel"},el("div",{class:"pbody"},ph.tickets.map(tk=>{
+      const kind=tk.status==="x"?"done":tk.running?"work":(tk.status==="!"?"stop":tk.status==="?"?"wait":"rest");
+      const col=kind==="done"?"live":kind==="work"?"work":kind==="stop"?"stop":kind==="wait"?"work":"rest";
+      const bits=[];
+      if(tk.startedAt)bits.push(clock(tk.startedAt)+"→"+(tk.endedAt?clock(tk.endedAt):"…"));
+      if(tk.ms!=null)bits.push(dur(tk.ms));
+      if(tk.attempts)bits.push(tk.attempts+" att");
+      if(tk.files)bits.push(tk.files+"f");
+      if(tk.review)bits.push(tk.review);
+      if(tk.council)bits.push("council");
+      if(tk.cost)bits.push(money(tk.cost));
+      if(!tk.startedAt&&tk.gate)bits.push("waits for you");
+      return el("div",{class:"tk"+(tk.running?" is-run":"")+(tk.status==="!"?" is-stop":"")},[
+        el("span",{class:"mk",style:"color:var(--"+col+")"},svg(MARK[kind])),
+        el("span",{class:"tid"},tk.id),el("span",{class:"ty"},tk.type),
+        el("span",{class:"ti",title:tk.title},tk.title),
+        el("span",{class:"mt"},bits.join("  ")),
+      ]);
+    }))));
+  }
+}
+
+const DOC_OF={brainstorm:".sch-loop/BRAINSTORM.md",prd:".sch-loop/PRD.md",
+  architecture:".sch-loop/ARCHITECTURE.md",plan:".sch-loop/PLAN.md",tickets:"task.md"};
+
+function seatsTab(v){
   v.append(el("h2",{},["Seats",el("span",{class:"n"},"inherited seats are read-only until you customise them")]));
   const own=S.own||{};
   const customise=k=>()=>{S.own={...own,[k]:JSON.parse(JSON.stringify(S.roles[k]))};S.source[k]="project";DIRTY=true;render();};
@@ -546,19 +954,38 @@ function renderProject(){
   v.append(seatPanel("executor",S.roles.executor,"Executor","writes code",S.source.executor,customise("executor"),inherit("executor")));
   v.append(seatPanel("reviewer",S.roles.reviewer,"Reviewer","read-only",S.source.reviewer,customise("reviewer"),inherit("reviewer")));
   v.append(seatPanel("judge",S.roles.judge,"Judge","read-only",S.source.judge,customise("judge"),inherit("judge")));
-
   v.append(el("h2",{},["Council",el("span",{class:"n"},S.source.council==="global"?"inherited":"this project")]));
   v.append(councilPanel(S.roles,S.source.council==="project"));
-
-  if(S.log&&S.log.length){
-    v.append(el("h2",{},["Log",el("span",{class:"n"},"last "+S.log.length)]));
-    v.append(el("section",{class:"panel"},el("div",{class:"pbody log"},
-      S.log.slice().reverse().map(e=>el("div",{class:"ev"},[
-        el("time",{},clock(e.at)),
-        el("span",{},[el("b",{},e.type),"  ",[e.id,e.stage,e.status,e.decision].filter(Boolean).join("  ")]),
-      ])))));
-  }
 }
+
+function logTab(v){
+  if(!S.log||!S.log.length){
+    v.append(el("div",{class:"empty"},[el("b",{},"No events yet"),"The loop writes one line here for everything it does."]));
+    return;
+  }
+  v.append(el("h2",{},["Log",el("span",{class:"n"},"last "+S.log.length)]));
+  v.append(el("section",{class:"panel"},el("div",{class:"pbody"},
+    S.log.slice().reverse().map(e=>el("div",{class:"ev"},[
+      el("time",{},clock(e.at)),
+      el("span",{},[el("b",{},e.type),"  ",[e.id,e.stage,e.status,e.decision].filter(Boolean).join("  ")]),
+    ])))));
+}
+
+function renderProject(){
+  const P=S.project,pr=S.progress;
+  $("#where").textContent=P.root;
+  const v=$("#view");v.replaceChildren();
+  v.append(el("h1",{},P.name));
+  const goal=pr&&pr.goal?pr.goal.replace(/^#\s*Goal\s*/i,"").trim().split(/\r?\n/).filter(Boolean)[0]:null;
+  v.append(el("p",{class:"lede"},goal||"No goal set for this project yet."));
+  v.append(tabsRow());
+  if(TAB==="files")return renderFilesTab(v);
+  if(TAB==="seats")return seatsTab(v);
+  if(TAB==="log")return logTab(v);
+  overview(v);
+}
+
+function renderFilesTab(v){needTree();v.append(renderFiles());}
 
 /* ── settings ────────────────────────────────────────────────────────── */
 function renderSettings(){
@@ -583,7 +1010,10 @@ function renderSettings(){
   v.append(councilPanel(S.roles,true));
 }
 
-function render(){MODE==="home"?renderHome():MODE==="settings"?renderSettings():renderProject();}
+function render(){
+  $("#bar").hidden=!(MODE==="settings"||(MODE==="project"&&TAB==="seats")||DIRTY);
+  MODE==="home"?renderHome():MODE==="settings"?renderSettings():renderProject();
+}
 
 function skeleton(){
   const v=$("#view");v.replaceChildren();
@@ -594,12 +1024,16 @@ function skeleton(){
 }
 
 async function load({keepDirty=false}={}){
-  const p=location.pathname;
+  const p=location.pathname,q=new URLSearchParams(location.search);
+  const wasPid=PID;
   MODE=p==="/settings"?"settings":p.startsWith("/p/")?"project":"home";
   PID=MODE==="project"?decodeURIComponent(p.slice(3)):null;
+  TAB=MODE==="project"&&TABS.some(t=>t[0]===q.get("tab"))?q.get("tab"):"overview";
+  if(PID!==wasPid){TREE=null;FILE=null;OPEN=new Set();FIND="";}
+  const want=q.get("file");
   $("#nav-home").toggleAttribute("aria-current",MODE!=="settings");
   $("#nav-set").toggleAttribute("aria-current",MODE==="settings");
-  $("#bar").hidden=MODE==="home";
+  $("#bar").hidden=!(MODE==="settings"||(MODE==="project"&&TAB==="seats"));
   if(!keepDirty)DIRTY=false;
   $("#msg").className="msg";$("#msg").textContent="";
   skeleton();
@@ -608,6 +1042,7 @@ async function load({keepDirty=false}={}){
     const r=await fetch(url);const j=await r.json();
     if(!r.ok||j.error)throw new Error(j.error||("HTTP "+r.status));
     S=j;render();
+    if(TAB==="files"&&want&&(!FILE||FILE.path!==want))openFile(want);
   }catch(e){
     $("#view").replaceChildren(el("div",{class:"empty"},[el("b",{},"Could not load"),e.message]));
     $("#msg").className="msg bad";$("#msg").textContent=e.message;

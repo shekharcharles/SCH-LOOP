@@ -12,6 +12,7 @@ import { probeSeats, PRESETS } from "./setup.mjs";
 import { resolveSpawn } from "./spawn-index.mjs";
 import { summary as progressSummary, events as readEvents } from "./progress.mjs";
 import { PAGE } from "./dashboard-page.mjs";
+import { tree as fileTree, readFile as readProjectFile } from "./files.mjs";
 import { listProjects, projectById, registerProject, forgetProject, pruneMissing, globalRoles, saveGlobalRoles, resolveRoles, ensureGlobalRoles, SEATS, home } from "./registry.mjs";
 
 export const ROLE_SEATS = SEATS;
@@ -153,6 +154,20 @@ export function createServer(defaultProjectRoot = null) {
       }
       if (req.method === "GET" && p === "/api/home") return json(res, 200, await homeState({ fresh: url.searchParams.has("fresh") }));
       if (req.method === "GET" && p === "/api/settings") return json(res, 200, await settingsState({ fresh: url.searchParams.has("fresh") }));
+      // The files of one project. The tree arrives once and is filtered in the page; a file arrives
+      // one at a time. Both go through files.mjs, which owns the "inside the project" rule.
+      if (req.method === "GET" && p.startsWith("/api/files/")) {
+        const proj = projectById(decodeURIComponent(p.slice("/api/files/".length)));
+        if (!proj) return json(res, 404, { error: "unknown project" });
+        try { return json(res, 200, fileTree(proj.root)); }
+        catch (e) { return json(res, 400, { error: e.message }); }
+      }
+      if (req.method === "GET" && p.startsWith("/api/file/")) {
+        const proj = projectById(decodeURIComponent(p.slice("/api/file/".length)));
+        if (!proj) return json(res, 404, { error: "unknown project" });
+        try { return json(res, 200, readProjectFile(proj.root, url.searchParams.get("path") || "")); }
+        catch (e) { return json(res, 400, { error: e.message }); }
+      }
       if (req.method === "GET" && p.startsWith("/api/project/")) {
         const st = await projectState(decodeURIComponent(p.slice("/api/project/".length)));
         return st ? json(res, 200, st) : json(res, 404, { error: "unknown project" });
