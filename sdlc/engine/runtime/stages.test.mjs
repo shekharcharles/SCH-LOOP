@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   STAGES, stageById, stageStatus, stageReport, nextStage, runStage, setGoal, goal,
   cleanDocument, stagePrompt, skillBody, skillsRoots, advanceLifecycle, GOAL_FILE,
+  runTicketsStage, parseTickets,
 } from "./stages.mjs";
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,4 +139,68 @@ test("every stage points at a skill that exists and reads a real upstream artifa
     const body = skillBody(skillsRoots({ engineRoot: ENGINE }), s.skill);
     assert.ok(body.includes(s.artifact), `${s.skill} never mentions ${s.artifact}, the file the engine will write from it`);
   }
+});
+
+// The seam between the plan and the queue. A requirement that falls out here is invisible everywhere
+// else, so a rejected ticket must be named rather than dropped.
+const PLANNED = [
+  { phase: "1", phaseName: "Recording", type: "build", title: "Record a habit as done", size: "S",
+    action: "Add done <habit>.", acceptance: ["done marks today"], allowed_paths: ["src/**"],
+    verify: [{ name: "test", command: "npm", args: ["test"] }] },
+  { phase: "1", type: "docs", title: "Document the commands", size: "XS",
+    action: "Write the README usage section.", acceptance: ["README lists every command"] },
+];
+
+test("plan-to-tickets writes every valid ticket and names the ones it refuses", async () => {
+  const root = proj();
+  put(root, ".sch-loop/PLAN.md", GOOD.plan);
+  const bad = { phase: "1", type: "build", title: "No acceptance", size: "S", action: "x" };
+  const seen = [];
+  const r = await runTicketsStage({
+    projectRoot: root, engineRoot: ENGINE, seat: {},
+    ask: async () => ({ text: JSON.stringify([...PLANNED, bad]) }),
+    write: (_root, t) => { if (!t.acceptance?.length) throw new Error("acceptance required"); seen.push(t.title); return { ...t, id: `T1.${seen.length}` }; },
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.written, ["T1.1", "T1.2"]);
+  assert.equal(r.rejected.length, 1);
+  assert.equal(r.rejected[0].title, "No acceptance");
+  assert.match(r.rejected[0].error, /acceptance required/);
+});
+
+test("plan-to-tickets refuses to run before the plan is ready", async () => {
+  const root = proj();
+  await assert.rejects(runTicketsStage({ projectRoot: root, engineRoot: ENGINE, seat: {}, ask: async () => { throw new Error("must not be asked"); } }),
+    /no \.sch-loop\/PLAN\.md/);
+  put(root, ".sch-loop/PLAN.md", "# Plan\n\nno phases\n");
+  await assert.rejects(runTicketsStage({ projectRoot: root, engineRoot: ENGINE, seat: {}, ask: async () => { throw new Error("must not be asked"); } }),
+    /the plan is not ready/);
+});
+
+test("a queue that already has tickets is not silently appended to", async () => {
+  const root = proj();
+  put(root, ".sch-loop/PLAN.md", GOOD.plan);
+  put(root, "task.md", "# task.md\n\n## Phase 1 — Mine   (0/1 done)\n- [ ] T1.1-mine  build  Mine  deps:-  size:S\n");
+  const r = await runTicketsStage({ projectRoot: root, engineRoot: ENGINE, seat: {}, ask: async () => { throw new Error("must not be asked"); } });
+  assert.equal(r.skipped, true);
+  assert.match(r.why, /already holds 1 ticket/);
+});
+
+test("every proposal being invalid is a failure, not an empty queue", async () => {
+  const root = proj();
+  put(root, ".sch-loop/PLAN.md", GOOD.plan);
+  await assert.rejects(runTicketsStage({
+    projectRoot: root, engineRoot: ENGINE, seat: {},
+    ask: async () => ({ text: JSON.stringify(PLANNED) }),
+    write: () => { throw new Error("nope"); },
+  }), /every proposed ticket was invalid/);
+});
+
+test("the ticket list is parsed out of prose, a fence, or a bare array", () => {
+  const arr = [{ title: "a" }];
+  assert.deepEqual(parseTickets(JSON.stringify(arr)), arr);
+  assert.deepEqual(parseTickets("```json\n" + JSON.stringify(arr) + "\n```"), arr);
+  assert.deepEqual(parseTickets("Here you go:\n" + JSON.stringify(arr) + "\nhope that helps"), arr);
+  assert.throws(() => parseTickets("no array here"), /did not return a JSON array/);
+  assert.throws(() => parseTickets("[]"), /empty ticket list/);
 });
