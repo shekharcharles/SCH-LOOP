@@ -83,7 +83,7 @@ test("the server serves the page, the state, and refuses a bad POST with a reaso
   try {
     const page = await get(server, "/");
     assert.equal(page.status, 200);
-    assert.match(page.body, /SCH-LOOP Roles/);
+    assert.match(page.body, /SCH·LOOP \/\/ ROLES/);
 
     const st = await get(server, "/api/state");
     assert.equal(st.status, 200);
@@ -127,4 +127,19 @@ test("a seat set to a CLI that is not installed still names that CLI in the page
   assert.match(src, /function providerOptions\(current\)/);
   assert.match(src, /\[\.\.\.new Set\(\[\.\.\.installed\(\), current\]/, "the current provider is always an option");
   assert.doesNotMatch(src, /installed\(\)\.map\(p => el\("option"/, "no dropdown is built from the installed list alone");
+});
+
+test("the page is in the SCH-LOOP console language, not a default one", () => {
+  // The look is part of the product: near-black ground, red as the structural accent, terminal green
+  // for live-and-good, monospace throughout. It was rebuilt once from scratch in a generic style
+  // because nobody had written the palette down anywhere a test could see it.
+  const src = fs.readFileSync(new URL("./dashboard.mjs", import.meta.url), "utf8");
+  for (const token of ["--bg:#0a0a0a", "--panel:#121212", "--line:#282828", "--fg:#eaeaea", "--red:#ff2a2a", "--green:#4af626"]) {
+    assert.ok(src.includes(token), `the console palette lost ${token}`);
+  }
+  assert.match(src, /ui-monospace/, "the language is monospace");
+  assert.match(src, /Archivo Black/, "and its headings are Archivo Black");
+  assert.match(src, /repeating-linear-gradient\(0deg/, "the scanline overlay is part of it");
+  assert.match(src, /border-bottom:2px solid var\(--red\)/, "red is structure, not decoration");
+  assert.doesNotMatch(src, /prefers-color-scheme/, "there is one theme and it is dark");
 });
