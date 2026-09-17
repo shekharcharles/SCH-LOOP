@@ -16,7 +16,7 @@ import { loadRoles } from "./roles.mjs";
 import { parse, next } from "./taskmd.mjs";
 import { buildTicket } from "./build.mjs";
 import { appendEvent, readReport } from "./report.mjs";
-import { notifyOrchestrator } from "./herdr.mjs";
+import { notify } from "./notify.mjs";
 import { RATE_LIMIT_RE } from "./spawn.mjs";
 import { escalate } from "./escalate.mjs";
 
@@ -72,7 +72,7 @@ export async function step({ projectRoot, roles, config, build = buildTicket, es
     // buildTicket throwing is a configuration fault (bad roles.json, unreadable ticket), not a ticket
     // failure: stopping is correct, because every subsequent ticket would hit the same wall.
     appendEvent(projectRoot, { type: "watchdog.fault", id: t.id, error: e.message });
-    await notifyOrchestrator(`SCH ✖ watchdog stopped on ${t.id}: ${e.message}`);
+    await notify(projectRoot, `SCH ✖ watchdog stopped on ${t.id}: ${e.message}`, { config, level: "error", ticket: t.id });
     return { id: t.id, decision: "FAULT", error: e.message, stop: true };
   }
 
@@ -127,6 +127,6 @@ export async function run({ projectRoot, maxTickets = Infinity, build, escalateF
     writeHeartbeat(projectRoot, { state: "stopped" });
   }
   const blocked = results.filter(r => r.decision === "HUMAN").map(r => r.id);
-  if (blocked.length) await notifyOrchestrator(`SCH — run paused: ${blocked.length} ticket(s) need you: ${blocked.join(", ")}`);
+  if (blocked.length) await notify(projectRoot, `SCH — run paused: ${blocked.length} ticket(s) need you: ${blocked.join(", ")}`, { config, level: "warn" });
   return { results, blocked, done: results.filter(r => r.decision === "PASS").map(r => r.id) };
 }

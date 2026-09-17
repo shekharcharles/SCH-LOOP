@@ -26,6 +26,7 @@ const { buildTicket } = await import("./build.mjs");
 const { run: runWatchdog, heartbeatStatus } = await import("./watchdog.mjs");
 const { verifyPhase } = await import("./verify-phase.mjs");
 const { ship } = await import("./ship.mjs");
+const { notify, unread, markAllRead, orchestratorTarget } = await import("./notify.mjs");
 const { parse: parseTaskMd, next: nextTicket, setStatus, insert: insertTask } = await import("./taskmd.mjs");
 const { writeTicket, loadTicket, validateTicket, TICKET_TYPES } = await import("./tickets.mjs");
 const { loadRoles, resolveSpawn, isBypass, isReadOnly, councilSeats } = await import("./roles.mjs");
@@ -275,6 +276,22 @@ if (cmd === "doctor") {
   out(checkFences({ projectRoot: PROJECT(), cwd: PROJECT(), roles, config: loadConfig(PROJECT()) }));
 } else if (cmd === "heartbeat") {
   out(heartbeatStatus(PROJECT()));
+} else if (cmd === "notifications") {
+  // What the loop told the orchestrator. The durable log is the notification; Herdr is a second sink.
+  const root = PROJECT();
+  if (rest.includes("--read")) { out({ marked_read: markAllRead(root) }); }
+  else {
+    const level = rest.includes("--level") ? rest[rest.indexOf("--level") + 1] : null;
+    const rows = unread(root, { level });
+    out({ unread: rows.length, target: orchestratorTarget(loadConfig(root)), notifications: rows });
+  }
+} else if (cmd === "notify-test") {
+  // Prove the configured transport actually delivers, without running a ticket to find out.
+  const root = PROJECT();
+  const config = loadConfig(root);
+  const r = await notify(root, rest.join(" ") || "SCH — transport test", { config, level: "info" });
+  out({ ...r, hint: r.target ? undefined : "set orchestrator_agent in .sch-loop/config.md or SCH_ORCHESTRATOR_AGENT to enable out-of-band delivery" });
+  process.exit(r.recorded ? 0 : 1);
 } else if (cmd === "config") {
   out(loadConfig(PROJECT()));
 } else if (cmd === "verify-phase") {
@@ -309,6 +326,8 @@ if (cmd === "doctor") {
   ticket-show <id> | ticket-validate <spec.json|->
   setup [--force] | seats  onboard this project | which CLIs are installed
   roles | fences | config | heartbeat
+  notifications [--read]   what the loop told the orchestrator (--level info|warn|error)
+  notify-test [text]       prove the configured transport delivers
   verify-phase <n>         goal-backward check that a finished phase delivers its goal
   ship <n> [--dry-run]     release gates, then open the pull request
   doctor | providers | status

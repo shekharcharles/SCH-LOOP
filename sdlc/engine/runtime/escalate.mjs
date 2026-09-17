@@ -16,7 +16,7 @@ import { loadTicket, saveTicket } from "./tickets.mjs";
 import { appendEvent } from "./report.mjs";
 import { councilSeats } from "./roles.mjs";
 import { startCouncil } from "./council.mjs";
-import { notifyOrchestrator } from "./herdr.mjs";
+import { notify as notifySink } from "./notify.mjs";
 
 export const MAX_COUNCIL_ROUNDS = 1;
 
@@ -66,17 +66,18 @@ export function pickChair(roles) {
   return roles?.chair || roles?.reviewer || null;
 }
 
-export async function escalate({ projectRoot, id, report, roles, config = {}, council = startCouncil, notify = notifyOrchestrator }) {
+export async function escalate({ projectRoot, id, report, roles, config = {}, council = startCouncil, notify = null }) {
+  const say = notify || ((text, level = "info") => notifySink(projectRoot, text, { config, level, ticket: id }));
   // A ticket line with no JSON behind it is a broken queue, not a reason to lose the escalation: the
   // stand-in is enough to close the gate and hand the id to the human, which is the right answer anyway.
   let ticket;
   try { ticket = loadTicket(projectRoot, id); }
   catch { ticket = { id, title: id, type: "build", action: "(ticket file missing)", acceptance: [] }; }
   const gate = councilGate({ config, roles, ticket });
-  if (!gate.ok) return needsHuman({ projectRoot, ticket, why: gate.why, notify });
+  if (!gate.ok) return needsHuman({ projectRoot, ticket, why: gate.why, notify: say });
 
   const chair = pickChair(roles);
-  if (!chair) return needsHuman({ projectRoot, ticket, why: "no chair seat configured", notify });
+  if (!chair) return needsHuman({ projectRoot, ticket, why: "no chair seat configured", notify: say });
 
   appendEvent(projectRoot, { type: "ticket.council.start", id: ticket.id, seats: gate.seats.map(s => s.role), why: gate.why });
   let state;
@@ -88,13 +89,13 @@ export async function escalate({ projectRoot, id, report, roles, config = {}, co
     });
   } catch (e) {
     appendEvent(projectRoot, { type: "ticket.council.failed", id: ticket.id, error: e.message });
-    return needsHuman({ projectRoot, ticket, why: `council failed: ${e.message}`, notify });
+    return needsHuman({ projectRoot, ticket, why: `council failed: ${e.message}`, notify: say });
   }
 
   const verdict = String(state?.verdict || "").trim();
   if (!verdict) {
     appendEvent(projectRoot, { type: "ticket.council.failed", id: ticket.id, error: "empty verdict" });
-    return needsHuman({ projectRoot, ticket, why: "council returned an empty verdict", notify });
+    return needsHuman({ projectRoot, ticket, why: "council returned an empty verdict", notify: say });
   }
 
   // The verdict rides on the ticket, so the re-dispatched executor reads it as part of its brief rather
@@ -107,7 +108,7 @@ export async function escalate({ projectRoot, id, report, roles, config = {}, co
     // The verdict cannot ride on a ticket that will not persist, and re-queueing without it would send
     // the executor back in with nothing new. Stop instead.
     appendEvent(projectRoot, { type: "ticket.council.failed", id: ticket.id, error: `verdict could not be saved: ${e.message}` });
-    return needsHuman({ projectRoot, ticket, why: `council verdict could not be saved to the ticket: ${e.message}`, notify });
+    return needsHuman({ projectRoot, ticket, why: `council verdict could not be saved to the ticket: ${e.message}`, notify: say });
   }
 
   const dir = path.join(projectRoot, ".sch-loop", "council");
@@ -116,14 +117,14 @@ export async function escalate({ projectRoot, id, report, roles, config = {}, co
 
   setTicketStatus(projectRoot, ticket.id, " ");   // back in the queue, once, carrying the verdict
   appendEvent(projectRoot, { type: "ticket.council.verdict", id: ticket.id, councilId: state.id, chars: verdict.length });
-  await notify(`SCH ⚖ ${ticket.id} — council convened, re-dispatching with its verdict`);
+  await say(`SCH ⚖ ${ticket.id} — council convened, re-dispatching with its verdict`, "info");
   return { decision: "COUNCIL_REDISPATCH", councilId: state.id, verdict, ticket: ticket.id };
 }
 
 function needsHuman({ projectRoot, ticket, why, notify }) {
   setTicketStatus(projectRoot, ticket.id, "?");
   appendEvent(projectRoot, { type: "ticket.needs_human", id: ticket.id, why });
-  const r = notify(`SCH ✖ ${ticket.id} needs you — ${why}`);
+  const r = notify(`SCH ✖ ${ticket.id} needs you — ${why}`, "warn");
   if (r && typeof r.catch === "function") r.catch(() => {});
   return { decision: "HUMAN", why, ticket: ticket.id };
 }

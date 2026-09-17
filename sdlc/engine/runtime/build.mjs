@@ -11,7 +11,7 @@ import { runSelfCorrectingTask } from "./self-correct.mjs";
 import { runReview, reviewToMarkdown } from "./review.mjs";
 import { writeReport, appendEvent } from "./report.mjs";
 import { setStatus } from "./taskmd.mjs";
-import { notifyOrchestrator } from "./herdr.mjs";
+import { notify } from "./notify.mjs";
 import { contextTokens, sessionTokens } from "./spawn.mjs";
 
 const TDD_TYPES = new Set(["build", "test"]);
@@ -142,7 +142,7 @@ export async function buildTicket({ projectRoot, id, dryRun = false, onEvent, ro
         appendEvent(projectRoot, { type: "ticket.commit_failed", id: t.id, error: committed.error });
         setTicketStatus(projectRoot, t.id, "!");
         const env = writeReport(projectRoot, { id: t.id, status: "blocked", summary: "built and reviewed clean, but the work could not be committed", artifacts: changed, attempts: state.attempts?.length ?? 0, branch: wt.branch, what_did_not_work: [`git commit failed: ${committed.error}`] });
-        await notifyOrchestrator(`SCH ! ${t.id} could not commit — branch ${wt.branch} kept`);
+        await notify(projectRoot, `SCH ! ${t.id} could not commit — branch ${wt.branch} kept`, { config, level: "warn", ticket: t.id });
         return { decision: "HUMAN", committed, report: env, state, review };
       }
     }
@@ -151,7 +151,7 @@ export async function buildTicket({ projectRoot, id, dryRun = false, onEvent, ro
       appendEvent(projectRoot, { type: "ticket.merge_failed", id: t.id, conflict: merged.conflict, error: merged.error });
       setTicketStatus(projectRoot, t.id, "!");
       const env = writeReport(projectRoot, { id: t.id, status: "blocked", summary: `built and reviewed clean, but the merge into the project failed`, artifacts: changed, attempts: state.attempts?.length ?? 0, review: review?.stats || null, judge: last.judge || null, tests: verification ? { passed: verification.passed } : null, usage, context_tokens: contextTokens(usage), cost_usd: last.costUsd ?? null, branch: wt.branch, what_did_not_work: [`merge conflict: ${merged.error}`] });
-      await notifyOrchestrator(`SCH ! ${t.id} merge conflict — branch ${wt.branch} kept`);
+      await notify(projectRoot, `SCH ! ${t.id} merge conflict — branch ${wt.branch} kept`, { config, level: "warn", ticket: t.id });
       return { decision: "HUMAN", merged, report: env, state, review };
     }
     removeTicketWorktree({ projectRoot, id: t.id });
@@ -185,6 +185,6 @@ export async function buildTicket({ projectRoot, id, dryRun = false, onEvent, ro
   if (!book.ok && !book.empty) appendEvent(projectRoot, { type: "ticket.bookkeeping_failed", id: t.id, error: book.error });
 
   appendEvent(projectRoot, { type: passed ? "ticket.done" : "ticket.blocked", id: t.id, attempts: state.attempts?.length ?? 0, ms: Date.now() - started });
-  await notifyOrchestrator(passed ? `SCH ✓ ${t.id} done — ${t.title}` : `SCH ! ${t.id} blocked after ${state.attempts?.length ?? 0} attempts — see .sch-loop/reports/${t.id}.md`);
+  await notify(projectRoot, passed ? `SCH ✓ ${t.id} done — ${t.title}` : `SCH ! ${t.id} blocked after ${state.attempts?.length ?? 0} attempts — see .sch-loop/reports/${t.id}.md`, { config, level: passed ? "info" : "warn", ticket: t.id });
   return { decision: passed ? "PASS" : "HUMAN", report: env, state, review, merged };
 }
