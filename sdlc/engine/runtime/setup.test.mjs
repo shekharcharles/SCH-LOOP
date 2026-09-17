@@ -206,3 +206,19 @@ test("an untouched template queue is re-seeded, because nothing is lost by doing
   await setupProject({ projectRoot: root, force: true });
   assert.match(fs.readFileSync(path.join(root, "task.md"), "utf8"), /SCH-LOOP:TASKS/);
 });
+
+test("every seat is seeded lean: no MCP, no skills, on every call", async () => {
+  // Measured on a real machine: a seat starts with 40,201 tokens of context it did not ask for, or
+  // 34,030 with these two flags. That 6,171 is paid on every executor attempt, every judge and every
+  // reviewer — and a Builder editing two files can use none of it. "It fits in the window" was the
+  // wrong test; the right one is whether the seat can use what it is given.
+  const r = await seedRoles(seats(["claude", "codex", "opencode"]));
+  for (const [name, seat] of [["executor", r.executor], ["reviewer", r.reviewer], ["judge", r.judge]]) {
+    const argv = seat.spawn.join(" ");
+    assert.match(argv, /--strict-mcp-config/, `${name} still loads MCP servers it cannot use`);
+    assert.match(argv, /--disable-slash-commands/, `${name} still loads skills it cannot use`);
+  }
+  for (const c of r.council.filter(c => c.provider === "claude")) {
+    assert.match(c.spawn.join(" "), /--strict-mcp-config/, `council seat ${c.role} still loads MCP`);
+  }
+});

@@ -17,6 +17,12 @@ export const PRESETS = {
     read_only_tools: ["--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit"],
     stream_events: ["-p", "--output-format", "stream-json", "--verbose"],
     remote_control: ["--remote-control"],
+    // Everything a seat is loaded with that it cannot use is paid for on every call and competes with
+    // the ticket for attention. MEASURED on this machine: 40,201 tokens a seat starts with, 34,030 with
+    // these two flags — 6,171 saved per call, on every executor attempt, every judge and every reviewer.
+    // A Builder editing two files has no use for MCP servers or for the skills that drive the loop it is
+    // running inside. The remaining ~34k is the CLI's own system prompt and tool schemas.
+    lean_context: ["--strict-mcp-config", "--disable-slash-commands"],
   },
   codex: {
     base: ["codex", "exec"], model_arg: ["-m", "{model}"],
@@ -54,9 +60,9 @@ export async function seedRoles(seats) {
   const coder = have("claude") ? "claude" : (have("codex") ? "codex" : seats.find(s => s.available)?.provider);
   if (!coder) throw new Error("no agent CLI found on PATH — install one (claude, codex, opencode, gemini) and rerun");
 
-  const exec = coder === "claude" ? withPresets("claude", "bypass_permissions", "stream_events")
+  const exec = coder === "claude" ? withPresets("claude", "bypass_permissions", "lean_context", "stream_events")
     : coder === "codex" ? withPresets("codex", "workspace_write") : PRESETS[coder].base;
-  const readOnly = coder === "claude" ? withPresets("claude", "bypass_permissions", "read_only_tools", "stream_events")
+  const readOnly = coder === "claude" ? withPresets("claude", "bypass_permissions", "read_only_tools", "lean_context", "stream_events")
     : withPresets("codex", "read_only_sandbox");
 
   const councilRoles = [["architect", "claude"], ["skeptic", "codex"], ["pragmatist", "opencode"], ["critic", "antigravity"]];
@@ -68,7 +74,7 @@ export async function seedRoles(seats) {
     judge: { provider: coder === "claude" ? "claude" : "codex", model: null, model_arg: PRESETS[coder === "claude" ? "claude" : "codex"].model_arg, spawn: readOnly },
     council: councilRoles.map(([role, provider]) => ({
       role, provider, model: null, model_arg: PRESETS[provider].model_arg,
-      spawn: provider === "claude" ? withPresets("claude", "bypass_permissions", "read_only_tools", "stream_events")
+      spawn: provider === "claude" ? withPresets("claude", "bypass_permissions", "read_only_tools", "lean_context", "stream_events")
         : provider === "codex" ? withPresets("codex", "read_only_sandbox")
         : provider === "opencode" ? withPresets("opencode", "json_events")
         : provider === "gemini" ? withPresets("gemini", "plan_only") : PRESETS[provider].base,
