@@ -9,11 +9,15 @@ node_modules/
 .env.*
 *.log
 
-# Engine snapshot: a working copy of ../engine/. Not committed — ../engine/ is the
-# tracked source of truth and a second copy in git would drift. Refresh with
-#   cp -r ../engine/runtime ../engine/scripts .claude/sch/
-# and never the other way: edits made here are invisible to git.
+# Everything under .claude/ here is INSTALLED by `sch-setup` from ../engine/, which is
+# the tracked source of truth. None of it is committed, because a second copy in git
+# drifts from the first. Re-install with:
+#   node ../engine/runtime/cli.mjs setup --force
+# Never edit these copies: they are overwritten, and git cannot see them.
 .claude/sch/
+.claude/hooks/
+.claude/skills/
+.claude/settings.json
 
 # Engine run state and the lessons log: regenerated on every run.
 .sch-loop/runs/

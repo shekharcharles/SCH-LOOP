@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seedRoles, upsertManagedBlock, managedBlock, setupProject, CLAUDE_MD_START, CLAUDE_MD_END } from "./setup.mjs";
+import { seedRoles, upsertManagedBlock, managedBlock, setupProject, verifyInstall, CLAUDE_MD_START, CLAUDE_MD_END } from "./setup.mjs";
 import { isBypass, isReadOnly } from "./roles.mjs";
 
 const seats = avail => ["claude", "codex", "opencode", "gemini", "antigravity"].map(p => ({ provider: p, available: avail.includes(p), models: [] }));
@@ -72,4 +72,72 @@ test("setupProject writes the tree, merges hooks into an existing settings.json,
   assert.ok(b.skipped.includes("task.md"), "a second run does not clobber the queue");
   assert.equal((fs.readFileSync(path.join(root, "CLAUDE.md"), "utf8").match(/SCH-LOOP:PROJECT:START/g) || []).length, 1);
   assert.ok(a.seats.some(x => x.provider === "claude"));
+});
+
+// Setup used to report success for a project it had made no attempt to make runnable: no engine, no
+// hooks (the copy read from a path that has never existed), no skills. Every test below is one of the
+// things a project needs before `cli.mjs run` can do anything at all.
+
+test("setup installs an engine, both fences and the skills, and says so", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-install-"));
+  const r = await setupProject({ projectRoot: root });
+  assert.equal(r.ok, true, r.error);
+  assert.ok(fs.existsSync(path.join(root, ".claude/sch/runtime/cli.mjs")), "the engine is installed, not just referenced");
+  assert.ok(fs.existsSync(path.join(root, ".claude/hooks/write-guard.mjs")));
+  assert.ok(fs.existsSync(path.join(root, ".claude/hooks/destructive-bash.mjs")));
+  assert.ok(fs.readdirSync(path.join(root, ".claude/skills")).length >= 10, "skills come with the engine");
+  assert.ok(r.checks.every(c => c.ok), JSON.stringify(r.checks.filter(c => !c.ok)));
+});
+
+test("a project missing any piece is reported as not runnable, not as a success", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-install-"));
+  await setupProject({ projectRoot: root });
+  for (const gone of [".claude/sch/runtime/cli.mjs", ".claude/hooks/write-guard.mjs", ".claude/hooks/destructive-bash.mjs", "task.md"]) {
+    const keep = fs.readFileSync(path.join(root, gone));
+    fs.rmSync(path.join(root, gone));
+    const checks = verifyInstall(root);
+    assert.ok(checks.some(c => !c.ok), `removing ${gone} must fail a check`);
+    fs.writeFileSync(path.join(root, gone), keep);
+  }
+  assert.ok(verifyInstall(root).every(c => c.ok), "and restoring them all makes it green again");
+});
+
+test("the fences end up wired even when the project already had hooks of its own", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-install-"));
+  fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".claude/settings.json"), JSON.stringify({
+    hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "node ./mine.mjs" }] }] },
+    permissions: { deny: ["Read(./secrets/**)"] },
+    somethingElse: { keep: true },
+  }, null, 2));
+  const r = await setupProject({ projectRoot: root });
+  assert.equal(r.ok, true, r.error);
+  const s = JSON.parse(fs.readFileSync(path.join(root, ".claude/settings.json"), "utf8"));
+  const wired = JSON.stringify(s.hooks.PreToolUse);
+  assert.match(wired, /mine\.mjs/, "the project's own hook survives");
+  assert.match(wired, /write-guard\.mjs/);
+  assert.match(wired, /destructive-bash\.mjs/);
+  assert.ok(s.permissions.deny.includes("Read(./secrets/**)"), "and its own deny rules");
+  assert.deepEqual(s.somethingElse, { keep: true }, "and everything setup has no opinion about");
+});
+
+test("setup refuses a settings.json it cannot parse rather than overwriting it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-install-"));
+  fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+  const broken = "{ this is not json";
+  fs.writeFileSync(path.join(root, ".claude/settings.json"), broken);
+  await assert.rejects(setupProject({ projectRoot: root }), /not valid JSON/);
+  assert.equal(fs.readFileSync(path.join(root, ".claude/settings.json"), "utf8"), broken, "untouched");
+});
+
+test("re-running setup refreshes the engine without touching the project's own work", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-install-"));
+  await setupProject({ projectRoot: root });
+  fs.writeFileSync(path.join(root, "task.md"), "# my queue\n\n## Phase 1 — Mine   (0/1 done)\n- [ ] T1.1-keep-me  build  Keep me  deps:-  size:S\n");
+  fs.writeFileSync(path.join(root, ".claude/hooks/write-guard.mjs"), "// hand-patched\n");
+  const r = await setupProject({ projectRoot: root });
+  assert.equal(r.ok, true, r.error);
+  assert.match(fs.readFileSync(path.join(root, "task.md"), "utf8"), /keep-me/, "the queue is the project's, and survives");
+  assert.doesNotMatch(fs.readFileSync(path.join(root, ".claude/hooks/write-guard.mjs"), "utf8"), /hand-patched/,
+    "a fence is the engine's, and is restored — a silently patched fence is worse than a lost edit");
 });

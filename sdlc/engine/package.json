@@ -1,0 +1,10 @@
+{
+  "name": "sch-loop-engine",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SCH-LOOP v4 Conductor engine: code decides, models advise.",
+  "scripts": {
+    "test": "node --test \"runtime/*.test.mjs\" \"hooks/hooks.test.mjs\""
+  }
+}

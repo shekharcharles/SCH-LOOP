@@ -1,13 +1,31 @@
-// Runnable check for the two fences. `node .claude/hooks/hooks.test.mjs` from the lab root.
+// The two fences, checked against a throwaway project built here rather than whatever project the hooks
+// happen to be installed into. They used to read the live lab's `task.md` and `CLAUDE.md`, which made
+// them fail the moment the hooks moved and meant a passing run depended on the state of a real queue.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, "..", "..");
+
+// A minimal project with the two files the curated rules care about.
+const TASK = `# task.md
+
+## Phase 1 — Core   (1/3 done)
+- [x] T1.1-first   build  First   deps:-     size:S
+- [ ] T1.2-second  build  Second  deps:T1.1  size:S
+- [ ] T1.3-third   test   Third   deps:-     size:S
+`;
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-hooks-"));
+fs.mkdirSync(path.join(root, ".sch-loop"), { recursive: true });
+fs.mkdirSync(path.join(root, "src"), { recursive: true });
+fs.writeFileSync(path.join(root, "task.md"), TASK);
+fs.writeFileSync(path.join(root, "CLAUDE.md"), Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n") + "\n");
+fs.writeFileSync(path.join(root, "src", "todo.mjs"), "export const x = 1;\n");
+
 const run = (script, payload) => spawnSync(process.execPath, [path.join(here, script)], {
   input: JSON.stringify({ cwd: root, ...payload }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: root },
 });
