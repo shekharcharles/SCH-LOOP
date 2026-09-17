@@ -44,10 +44,28 @@ Then, in the orchestrator terminal inside this folder: `go`.
 
 Evidence for each lives in `.sch-loop/evidence/` and `.sch-loop/events.jsonl`.
 
+### The whole chain, on a project the loop specified itself
+
+A second project was built from one sentence of goal, with nobody writing any of the specification:
+
+| Stage | Output |
+|---|---|
+| brainstorm | 7.7k chars — outcome, workflows, locked decisions, flagged assumptions |
+| PRD | 10.4k chars — user-observable requirements with `CAT-NN` IDs |
+| architecture | 15.7k chars — a real mermaid diagram, an end-to-end trace, five ADRs |
+| plan | 14.3k chars — four phases, vertical slices, per-slice verify and stop conditions |
+| tickets | 13 written, 0 rejected — tracer first, two human-gated decisions |
+| T1.1 | RED then GREEN, scope violation caught and corrected on retry, APPROVE, merged |
+
+The plan caught two risks unprompted: that the test glob may not expand on the declared Node floor and
+so report a green run that executed zero tests, and that a test could write to the developer's real data
+file. The executor's first attempt wrote a `LESSONS.md` outside its `allowed_paths`; the scope fence
+failed the attempt and the retry dropped it.
+
 ### Still not proven
 
-- **One language, one runtime.** Two projects now, but both Node with `npm test`: no build step, no
-  dependencies to install, no compiled language. Every timeout and prompt is tuned against that shape.
+- **One language, one runtime.** Two projects, both Node with `npm test`: no build step, no dependencies
+  to install, no compiled language. Every timeout and prompt is tuned against that shape.
 - **A package install has never been needed.** `destructive-bash` makes one a `human` ticket by design,
   which is right, but that path has not been walked end to end.
 - **The council has convened once.** Three seats, one of them absent. Its cost and its failure modes
