@@ -116,3 +116,24 @@ test("report: envelope round-trips", () => {
   assert.equal(r.status, "done"); assert.deepEqual(r.artifacts, ["src/a.txt"]);
   assert.ok(fs.existsSync(path.join(root, ".sch-loop", "reports", "T1.1.md")));
 });
+
+test("contextTokens measures the biggest single turn, not the session's billing total", async () => {
+  const { contextTokens, sessionTokens } = await import("./spawn.mjs");
+  // Shape taken verbatim from a real T2.1a attempt. `cache_read_input_tokens` at the top level is the
+  // CUMULATIVE read across every turn, so summing it reported 547k for a ticket whose window peaked at
+  // 52k. The two numbers must never be confused for one another again.
+  const real = {
+    input_tokens: 22, cache_creation_input_tokens: 35241, cache_read_input_tokens: 512194,
+    iterations: [
+      { input_tokens: 2, cache_read_input_tokens: 51921, cache_creation_input_tokens: 366 },
+      { input_tokens: 5, cache_read_input_tokens: 30110, cache_creation_input_tokens: 120 },
+    ],
+  };
+  assert.equal(contextTokens(real), 52289, "the peak turn, which is what a context ceiling is about");
+  assert.equal(sessionTokens(real), 547457, "the session total, which is what it cost");
+  assert.ok(contextTokens(real) < sessionTokens(real) / 10, "a long session dwarfs its own window");
+
+  // A single-turn call has no iterations array; the top level is then the turn.
+  assert.equal(contextTokens({ input_tokens: 2, cache_read_input_tokens: 17046, cache_creation_input_tokens: 26637 }), 43685);
+  assert.equal(contextTokens(null), null);
+});

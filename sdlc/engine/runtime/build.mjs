@@ -12,7 +12,7 @@ import { runReview, reviewToMarkdown } from "./review.mjs";
 import { writeReport, appendEvent } from "./report.mjs";
 import { setStatus } from "./taskmd.mjs";
 import { notifyOrchestrator } from "./herdr.mjs";
-import { contextTokens } from "./spawn.mjs";
+import { contextTokens, sessionTokens } from "./spawn.mjs";
 
 const TDD_TYPES = new Set(["build", "test"]);
 const REVIEW_TYPES = new Set(["build", "test", "chore"]);
@@ -168,7 +168,7 @@ export async function buildTicket({ projectRoot, id, dryRun = false, onEvent, ro
     tests: verification ? { passed: verification.passed, failed: (verification.checks || []).filter(c => !c.ok).map(c => c.name) } : null,
     review: review ? { verdict: review.verdict, ...review.stats } : null,
     judge: last.judge ? { verdict: last.judge.verdict } : null,
-    usage, context_tokens: contextTokens(usage), cost_usd: last.costUsd ?? null,
+    usage, context_tokens: contextTokens(usage), session_tokens: sessionTokens(usage), cost_usd: last.costUsd ?? null,
     branch: wt.branch, merged_head: merged?.head || null,
     notes_for_next: last.builderMessage ? String(last.builderMessage).split(/SUMMARY:/i)[1]?.trim() || "" : "",
     what_did_not_work: passed ? [] : [
