@@ -215,3 +215,90 @@ export function advanceLifecycle(projectRoot, completedStageId) {
   fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
   return s.lifecycle_stage;
 }
+
+// Turning the plan into the queue. This is the seam where the front half hands over to the loop, and it
+// is the one stage whose output is structured rather than prose — so it is validated as data, ticket by
+// ticket, before a single line reaches task.md.
+//
+// Same rule as the rest: the seat proposes, code disposes. A rejected ticket is named with its reason
+// rather than quietly dropped, because a requirement that falls out here is a planning error nobody
+// would otherwise see.
+export function ticketsPrompt({ instructions, plan, architecture, prd, projectRoot }) {
+  return [
+    `You are turning an approved plan into the executable queue for the project at ${projectRoot}.`,
+    "",
+    "--- SKILL: sch-tickets ---",
+    instructions,
+    "--- END SKILL ---",
+    "",
+    `--- .sch-loop/PLAN.md ---\n${plan}\n--- END PLAN ---`,
+    architecture ? `--- .sch-loop/ARCHITECTURE.md ---\n${architecture}\n--- END ARCHITECTURE ---` : "",
+    prd ? `--- .sch-loop/PRD.md ---\n${prd}\n--- END PRD ---` : "",
+    "",
+    "Read the repository so `allowed_paths` and `read_first` name files that will really exist or really do.",
+    "",
+    "Do NOT run any command. Reply with ONLY a JSON array of ticket objects, in the order they should run,",
+    "using exactly the field names the skill documents. Every ticket needs: phase, phaseName, type, title,",
+    "size, action, acceptance. Code types (build, test, chore) also need allowed_paths and verify.",
+    "`verify` commands are argv arrays and must be able to fail.",
+    "",
+    "No prose, no markdown fence, no commentary. The array is the whole reply.",
+  ].filter(Boolean).join("\n");
+}
+
+export function parseTickets(text) {
+  let t = cleanDocument(text);
+  const fence = t.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+  if (fence) t = fence[1].trim();
+  const i = t.indexOf("["), j = t.lastIndexOf("]");
+  if (i < 0 || j <= i) throw new Error("the seat did not return a JSON array of tickets");
+  const arr = JSON.parse(t.slice(i, j + 1));
+  if (!Array.isArray(arr) || !arr.length) throw new Error("the seat returned an empty ticket list");
+  return arr;
+}
+
+export async function runTicketsStage({
+  projectRoot, engineRoot, seat, config = {}, ask = callSeat, timeoutMs = 20 * 60_000,
+  write = null, force = false,
+}) {
+  const plan = read(projectRoot, ".sch-loop/PLAN.md");
+  if (!plan) throw new Error("no .sch-loop/PLAN.md — run the plan stage first");
+  const planStage = stageById("plan");
+  const ps = stageStatus(projectRoot, planStage);
+  if (!ps.complete) throw new Error(`the plan is not ready: ${ps.why}`);
+
+  const existing = (read(projectRoot, "task.md") || "").match(/^- \[[ ~x!?]\] T\d/gm) || [];
+  if (existing.length && !force) return { skipped: true, why: `task.md already holds ${existing.length} ticket(s) — use --force to add more`, tickets: existing.length };
+
+  const { writeTicket } = write ? { writeTicket: write } : await import("./tickets.mjs");
+  const prompt = ticketsPrompt({
+    instructions: skillBody(skillsRoots({ engineRoot, projectRoot }), "sch-tickets"),
+    plan, architecture: read(projectRoot, ".sch-loop/ARCHITECTURE.md"), prd: read(projectRoot, ".sch-loop/PRD.md"),
+    projectRoot,
+  });
+
+  appendEvent(projectRoot, { type: "stage.start", stage: "tickets", artifact: "task.md" });
+  const started = Date.now();
+  let answer;
+  try { answer = await ask(seat, { prompt, system: "You turn an approved plan into an executable ticket queue. You write nothing to disk and you run no commands.", cwd: projectRoot, mode: "review", timeoutMs }); }
+  catch (e) { appendEvent(projectRoot, { type: "stage.failed", stage: "tickets", error: e.message }); throw new Error(`tickets seat failed: ${e.message}`); }
+
+  const proposed = parseTickets(answer.text);
+
+  // Each ticket is validated as it is written, and a rejection is named. Dropping one silently would
+  // lose a requirement between the plan and the queue, which is the one thing this seam must not do.
+  const written = [], rejected = [];
+  for (const t of proposed) {
+    try { written.push(writeTicket(projectRoot, t)); }
+    catch (e) { rejected.push({ title: t?.title || "(untitled)", error: e.message }); }
+  }
+  if (!written.length) {
+    appendEvent(projectRoot, { type: "stage.rejected", stage: "tickets", failures: rejected.map(r => r.error) });
+    throw new Error(`every proposed ticket was invalid: ${rejected.map(r => `${r.title}: ${r.error}`).join(" | ")}`);
+  }
+
+  advanceLifecycle(projectRoot, "tickets");
+  appendEvent(projectRoot, { type: "stage.done", stage: "tickets", written: written.length, rejected: rejected.length, ms: Date.now() - started });
+  await notify(projectRoot, `SCH ✓ ${written.length} ticket(s) queued from the plan${rejected.length ? `, ${rejected.length} rejected` : ""}`, { config, level: rejected.length ? "warn" : "info" });
+  return { ok: true, written: written.map(t => t.id), rejected, ms: Date.now() - started };
+}

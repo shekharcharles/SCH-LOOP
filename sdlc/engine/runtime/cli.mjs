@@ -27,7 +27,7 @@ const { run: runWatchdog, heartbeatStatus } = await import("./watchdog.mjs");
 const { verifyPhase } = await import("./verify-phase.mjs");
 const { ship } = await import("./ship.mjs");
 const { notify, unread, markAllRead, orchestratorTarget } = await import("./notify.mjs");
-const { STAGES, stageById, stageReport, nextStage, runStage, setGoal, goal } = await import("./stages.mjs");
+const { STAGES, stageById, stageReport, nextStage, runStage, runTicketsStage, setGoal, goal } = await import("./stages.mjs");
 const { parse: parseTaskMd, next: nextTicket, setStatus, insert: insertTask } = await import("./taskmd.mjs");
 const { writeTicket, loadTicket, validateTicket, TICKET_TYPES } = await import("./tickets.mjs");
 const { loadRoles, resolveSpawn, isBypass, isReadOnly, councilSeats } = await import("./roles.mjs");
@@ -306,6 +306,16 @@ ctrl-c to stop`);
     goalText: gi >= 0 ? rest[gi + 1] : null, force: rest.includes("--force"),
   });
   out(r);
+} else if (cmd === "plan-to-tickets") {
+  // The seam between the plan and the queue: the one stage whose output is data, so every ticket is
+  // validated as it is written and a rejection is named rather than dropped.
+  const root = PROJECT();
+  const r = await runTicketsStage({
+    projectRoot: root, engineRoot: ENGINE_HOME,
+    seat: loadRoles(root).reviewer, config: loadConfig(root), force: rest.includes("--force"),
+  });
+  out(r);
+  process.exit(r.ok || r.skipped ? 0 : 1);
 } else if (cmd === "goal") {
   const root = PROJECT();
   if (rest.length) out({ file: setGoal(root, rest.join(" ")), goal: goal(root) });
@@ -363,6 +373,7 @@ ctrl-c to stop`);
   dashboard [--port N]     roles page: which CLI, which model, which flags per seat
   stages                   which lifecycle stages are done, and what runs next
   stage <id|next> [--goal] brainstorm | prd | architecture | plan
+  plan-to-tickets          turn PLAN.md into task.md and the ticket JSONs
   goal [text]              read or set what this project is for
   notifications [--read]   what the loop told the orchestrator (--level info|warn|error)
   notify-test [text]       prove the configured transport delivers
