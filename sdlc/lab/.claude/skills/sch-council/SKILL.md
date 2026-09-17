@@ -9,6 +9,21 @@ Council is for architecture, security, debugging, product, design, or course-cor
 
 It is not the same as ticket verification.
 
+## When the loop convenes one by itself
+
+You do not call this for a red ticket. The recovery ladder does. When a ticket burns every executor
+attempt, `escalate.mjs` convenes a council on the failure, writes the verdict onto the ticket, and puts
+the ticket back in the queue **once**. The next executor reads the verdict as part of its brief.
+
+The gate is in `.sch-loop/config.md`: `council_mode` (`gated` | `always` | `off`) and
+`council_minimum_seats`. Seats come from `roles.json`, so which CLIs sit on a council is configuration,
+never code. A ticket gets one council; a second red goes to the human, because a second council on the
+same red is the loop arguing with itself at full token price.
+
+A seat that cannot answer — installed but logged out, rate limited, gone — costs its own seat and
+nothing else. The debate continues on the seats that answered, and `absentSeats` in the council state
+records who was missing. Below two answering seats the council fails and the ticket goes to the human.
+
 ## Execution
 
 Do not stage the debate yourself. Proposals written in one context by one model are
@@ -29,6 +44,8 @@ Spec:
 }
 ```
 
+- Available roles include the four seeded in `roles.json`: `architect`, `skeptic`, `pragmatist`,
+  `critic`. The rest are listed below.
 - `roles` are seated across *distinct* providers before any provider repeats, and the
   chair prefers a provider that holds no seat. A council on one model is one model
   arguing with itself. Available roles: `architect`, `security`, `implementer`,

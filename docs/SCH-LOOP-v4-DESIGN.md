@@ -563,8 +563,34 @@ Home engine (`~/.claude/SCH-loop`): `skills-v1-retired/` → delete after v4 lan
 
 Total ≈ 5 working days. Steps 3–5 are the loop; everything else is prose.
 
+### 7.1 What the engine actually grew
+
+Built in `sdlc/lab/.claude/sch/runtime/`, each with its own test file:
+
+| Module | Owns |
+|---|---|
+| `taskmd.mjs` | parse, next, setStatus, insert, recount — `task.md` is the queue |
+| `tickets.mjs` | the ticket schema, validation before any write, and the build spec handed to an executor |
+| `roles.mjs` | `roles.json`: seats, flag presets, spawn argv. Nothing about a model or a flag is hard-coded |
+| `spawn.mjs` | one watched role process: stream-json events, silence, loop detection, timeout |
+| `seats.mjs` | the single answer to "what can be asked a question": `call()`, spawn argv, or a registry provider |
+| `fences.mjs` | the three bypass fences, checked before any model runs |
+| `worktrees.mjs` | a worktree per ticket, merge-base evidence, fail-closed delivery |
+| `self-correct.mjs` | tier 1: attempts, the failure note, the Manager decision |
+| `review.mjs` | two-verdict review with adversarial verification of the blocking findings |
+| `watchdog.mjs` | the dispatch loop, heartbeat, tier 2 backoff |
+| `escalate.mjs` | tiers 3 and 4: the council gate, the one re-dispatch, the human hand-off |
+| `council.mjs` | proposal → critique → rebuttal → challenge → synthesis, tolerant of an absent seat |
+| `verify-phase.mjs` | goal-backward phase verification; code gathers evidence, a read-only seat judges it |
+| `ship.mjs` | the release gates and the pull request, first NO-GO stops everything |
+
+The rule that shaped all of it: **code decides, models advise.** Every verdict a model returns is evidence
+for a decision made in JavaScript, and no model is ever asked whether its own work passed.
+
 ---
 
 ## 8. Open decisions
 
-All five resolved — see §3.16. Lab scaffolded at `sdlc/lab/` (app tests 4/4, hook tests 4/4, engine sees claude/codex/opencode). Next: step 3 in §7, the `task.md` parser.
+All five resolved — see §3.16. Lab at `sdlc/lab/` is now live: 99 engine tests, 10 app tests, 7 hook
+tests, and every exit criterion in the lab README either met or under its final live run. The loop has
+built, reviewed, judged, merged and shipped real commits without a hand on the keyboard.

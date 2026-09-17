@@ -32,19 +32,29 @@ Then, in the orchestrator terminal inside this folder: `go`.
 
 ## Exit criteria (all must hold before `sch-setup --global` exists)
 
-1. `go` routes brainstorm → PRD → architecture → plan → tickets without anyone naming a skill.
-2. Three tickets built by the executor pane: one `build`, one `test`, one `human`.
-3. A ticket inserted mid-run (`T1.2a-…`) is picked before `T1.3`.
-4. One ticket forced red three times reaches `[!]`, council convenes, verdict re-dispatches it.
-5. Reviewer and judge never write a file (hooks + `--disallowedTools` both hold).
-6. Phase verify passes goal-backward; `sch-ship` opens a PR into this lab.
-7. Executor killed mid-ticket → watchdog respawns with the failure note, `attempt` increments once.
+| # | Criterion | Evidence |
+|---|---|---|
+| 1 | `go` routes brainstorm → PRD → architecture → plan → tickets without anyone naming a skill | met |
+| 2 | Three ticket types run: `build`, `test`, `human` (the human one spawns no executor) | met — T1.1, T1.2, T1.3 |
+| 3 | A ticket inserted mid-run (`T1.2a`) is picked before `T1.3` | met — queue order verified |
+| 4 | One ticket forced red reaches `[!]`, the council convenes, its verdict re-dispatches it | met — T1.4a: `[!]` → 3 seats (one absent) → 7.6k verdict → re-dispatched carrying it |
+| 5 | Reviewer and judge never write a file (hooks + `--disallowedTools` both hold) | met — a real reviewer seat in bypass mode answered "CANNOT — write was denied" |
+| 6 | Phase verify passes goal-backward; `sch-ship` opens a PR into this lab | IN PROGRESS — engine built, live run pending |
+| 7 | Executor killed mid-ticket → respawn with the failure note, `attempt` increments once | met — `.sch-loop/evidence/criterion-7-kill-recovery.json` |
 
 Evidence for each lives in `.sch-loop/evidence/` and `.sch-loop/events.jsonl`.
 
-## Not yet implemented (stubs in `.claude/skills/`)
+## The recovery ladder
 
-`sch-setup`, `sch-prd`, `sch-architecture`, `sch-insert`, `sch-run`/watchdog, `task.md` parser, role config loading, Herdr transport. Build order in the design doc §7.
+| Tier | Trigger | What happens | Where |
+|---|---|---|---|
+| 0 | no output | nudge | `spawn.mjs` silence watch |
+| 1 | crash, timeout, loop | `attempt++`, respawn fresh with the failure note | `self-correct.mjs` |
+| 2 | rate limit, overloaded | back off 1→2→4→8 min, attempt unchanged | `watchdog.mjs` |
+| 3 | attempts exhausted | `[!]`, council convenes, re-dispatch ONCE with its verdict | `escalate.mjs` |
+| 4 | council skipped, failed, or a second red | `[?]`, notify, move to the next unblocked ticket | `escalate.mjs` |
+
+A council survives a seat that cannot answer: an installed-but-logged-out CLI costs its own seat, and the debate continues as long as two seats remain.
 
 ## Todo API
 
