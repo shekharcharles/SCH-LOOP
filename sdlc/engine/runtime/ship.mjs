@@ -10,8 +10,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parse } from "./taskmd.mjs";
 import { appendEvent } from "./report.mjs";
+import { spawnSafe } from "./verifier.mjs";
 
 const pexec = promisify(execFile);
+const RELEASES = ".sch-loop/releases";
 const git = (cwd, args) => pexec("git", args, { cwd, encoding: "utf8", windowsHide: true });
 
 // Patterns worth stopping a release for. Deliberately short: a long list is a long list of false
@@ -64,7 +66,10 @@ export function gates({ projectRoot, phase, base, checks, branch }) {
     { name: "phase verification", run: async () => readVerify(projectRoot, phase) },
     {
       name: "working tree is clean", run: async () => {
-        const { stdout } = await git(projectRoot, ["status", "--porcelain", "-uall", "--", "."]);
+        // Every release writes a record, and the record lands in the very tree this gate inspects — so
+        // the second run of ship refused the release its own first run had documented. A release record
+        // describes a release; it cannot be a precondition for one.
+        const { stdout } = await git(projectRoot, ["status", "--porcelain", "-uall", "--", ".", `:(exclude)${RELEASES}`]);
         const dirty = stdout.split("\n").filter(Boolean);
         return dirty.length ? { ok: false, why: `${dirty.length} uncommitted change(s): ${dirty.slice(0, 5).map(l => l.slice(3)).join(", ")}` } : { ok: true, why: "clean" };
       },
@@ -86,7 +91,10 @@ export function gates({ projectRoot, phase, base, checks, branch }) {
     ...checks.map(c => ({
       name: c.name || `${c.command} ${(c.args || []).join(" ")}`,
       run: async () => {
-        try { await pexec(c.command, c.args || [], { cwd: projectRoot, encoding: "utf8", windowsHide: true, timeout: c.timeoutMs || 300_000, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(c.command) }); return { ok: true, why: "exit 0" }; }
+        // `spawnSafe` and not a local rule: guarding on the bare name ending in `.cmd` never matched
+        // `npm`, and this gate failed every release with `spawn npm ENOENT`.
+        const { command, shell } = spawnSafe(c.command);
+        try { await pexec(command, c.args || [], { cwd: projectRoot, encoding: "utf8", windowsHide: true, timeout: c.timeoutMs || 300_000, shell }); return { ok: true, why: "exit 0" }; }
         catch (e) { return { ok: false, why: `exit ${e.code ?? "?"}: ${String(e.stderr || e.stdout || e.message).trim().split("\n").slice(-3).join(" ")}` }; }
       },
     })),
