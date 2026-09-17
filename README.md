@@ -171,7 +171,47 @@ The reviewer and judge are **tool-restricted read-only** on top of that. Asked d
 - **git**
 - At least one agent CLI on your `PATH`. The engine auto-detects `claude`, `codex`, `opencode`, `gemini` and `antigravity`, and seeds your roles from whatever it finds.
 
-### Set up a project
+### The one-paste install
+
+Open your agent CLI **inside the project you want to build**, and paste this:
+
+```text
+Install SCH-LOOP into this project and get it ready to run.
+
+1. Clone https://github.com/shekharcharles/SCH-LOOP.git somewhere outside this
+   project (use ~/.sch-loop if you have no preference). If it is already cloned,
+   git pull instead.
+
+2. From THIS project's root, run:
+      SCH_PROJECT_ROOT="$PWD" node <clone>/sdlc/engine/runtime/cli.mjs setup
+   It installs the engine, both safety hooks, the skills and a config, then checks
+   that the result can actually run. It exits non-zero if anything is missing —
+   if that happens, show me the failing checks and stop.
+
+3. Show me `node .claude/sch/runtime/cli.mjs seats` so I can see which agent CLIs
+   you found on this machine.
+
+4. Tell me the exact command to open the roles dashboard, and the exact command to
+   start a build from a one-sentence goal.
+
+Do not write any application code yet. Do not change anything outside .claude/,
+.sch-loop/, task.md and CLAUDE.md. Report what you installed and what it checked.
+```
+
+Then, to build something:
+
+```text
+Use SCH-LOOP to build this: <one sentence describing what you want>
+
+Run the stages in order — brainstorm, then prd, then architecture, then plan —
+using `node .claude/sch/runtime/cli.mjs stage <id>`, passing my sentence as the
+--goal on the brainstorm stage. Show me each artifact as it lands.
+
+Then run `plan-to-tickets`, show me the queue, and stop so I can read it before
+anything is built.
+```
+
+### Set up a project by hand
 
 ```bash
 git clone https://github.com/shekharcharles/SCH-LOOP.git
@@ -208,6 +248,67 @@ node .claude/sch/runtime/cli.mjs run
 ```
 
 ---
+
+## Watching it work
+
+```bash
+node .claude/sch/runtime/cli.mjs progress      # one screen
+node .claude/sch/runtime/cli.mjs log --follow  # the event stream, live
+```
+
+```
+  GOAL   A tiny command-line habit tracker. A person records that they did a habit…
+
+  ● BUILDING NOW
+      phase    2 — Reading back is correct, including at calendar boundaries
+      ticket   T2.2  list shows every habit with its streak
+      since    14:09   running 2m
+
+  SPECIFICATION                                                  8m
+    ✔  brainstorm     7,702 chars                  71s   07:55
+    ✔  prd            10,427 chars                 57s   07:56
+    ✔  architecture   15,694 chars                  2m   07:58
+    ✔  plan           14,347 chars                  2m   08:01
+    ✔  tickets        13 tickets                    2m   08:04
+
+  BUILD   3/13 done  ██████░░░░░░░░░░░░░░░░░░     22m
+
+    Phase 1 — Recording works end to end            2/2     15m   (6h00 wall)   $1.52
+      ✔ T1.1  build  Walking skeleton: done <habit>   08:04→08:13   9m  2 att  10 files  APPROVE  $0.45
+      ✔ T1.2  build  Same-day repeat is a no-op       13:58→14:04   6m  1 att   4 files  APPROVE  $1.07
+
+    Phase 2 — Reading back is correct               1/3      7m   $0.98
+      ✔ T2.1  build  streak <habit> reads back        14:04→14:09   5m  1 att   4 files  APPROVE  $0.98
+      ▶ T2.2  build  list shows every habit           14:09→…       2m
+      · T2.3  test   Streaks survive DST boundaries                  —
+
+    Phase 3 — Every failure path is visible         0/5      0s
+      · T3.1  decision  Confirm ADR-0005                             —  waits for you
+
+  TOTALS
+    specification  8m
+    build          22m of work across 3 ticket(s), 4 executor attempt(s)
+    wall clock     6h15 since the first event
+    changed        11 file(s)
+    reviewed       3 independent review(s)
+    cost           $2.50
+    peak context   63,175 tokens
+```
+
+Where a phase's wall time greatly exceeds its build time, both are shown — *"fifteen minutes of work spread over six hours"* is the sentence that actually describes an interrupted run.
+
+Every figure is read from the event stream or a delivery report. Nothing is estimated.
+
+And the log, as sentences:
+
+```
+  07:55:36  wrote brainstorm — 7,701 chars in 1m
+  08:04:28  queued 13 ticket(s) in 2m
+  08:04:54  picked T1.1 off the queue
+  08:04:54  T1.1 started — build, on branch sch/T1.1-walking-skeleton-done-habit
+  08:13:49  T1.1 review round 1: APPROVE
+  08:13:50  T1.1 DONE after 2 attempt(s), 9m
+```
 
 ## The queue
 
@@ -335,6 +436,8 @@ goal [text]              read or set what this project is for
 stage <id|next>          brainstorm · prd · architecture · plan
 stages                   what is done, and what runs next
 plan-to-tickets          PLAN.md becomes task.md and the ticket JSONs
+progress [--json]        one screen: what is specified, what is built, what it cost
+log [-n N] [--follow]    the event stream, as sentences
 run [--max N]            dispatch every ready ticket in queue order
 ticket <id>              one ticket, all the way through
 next | tasks             what runs next | every ticket parsed
