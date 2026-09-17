@@ -1,1111 +1,357 @@
-# SCH Loop
+<div align="center">
 
-An autonomous, multi-domain **build + security** loop for Claude Code. You give a
-requirement (a PRD, or a pentest CR + target); it plans small tasks, then runs a
-self-directing loop that executes each task in a **fresh-context subagent**,
-validates it, reviews it, commits it (secret-scanned), and repeats — while you
-watch and steer from a live dashboard on your phone.
+# SCH-LOOP
 
-It runs **dev** (web/backend/tool) and **offensive** (web / API / mobile / red-team
-/ network pentest) work through one engine, and grafts the best patterns from
-gsd-core, superpowers, spec-kit, ecc, Karpathy, and Boris Cherny's Claude Code
-playbook — without installing any of them (no context bloat).
+### An autonomous software-development loop that builds, reviews and judges its own work
 
-> **You only ever type two things:** `/sch-spec` to start any work, and
-> `/loop 45m /sch-run` to run it. Everything else — plan, execute, verify, review,
-> secret-scan, commit, learn — happens automatically.
+**You give it one sentence. It gives you back a specification, a plan, a queue of tickets, and working code that passed a review it did not write.**
+
+[![tests](https://img.shields.io/badge/tests-161%20passing-2ea043?style=flat-square)](#proof)
+[![dependencies](https://img.shields.io/badge/dependencies-0-2ea043?style=flat-square)](#why-zero-dependencies)
+[![node](https://img.shields.io/badge/node-%E2%89%A5%2020-5a5a5a?style=flat-square)](#requirements)
+[![engine](https://img.shields.io/badge/engine-33%20modules-5a5a5a?style=flat-square)](#the-engine)
+
+</div>
 
 ---
 
-## ⚡ Install prompt (copy-paste into Claude Code)
+## The one rule
 
-Open Claude Code in any folder and paste this. It clones, wires up the skills,
-starts the dashboard, and verifies — automatically:
+> ### Code decides. Models advise.
 
-```text
-Set up SCH Loop from GitHub. Install it into my HOME directory (next to my
-.claude config), and do this exactly:
+Every verdict a model returns is **evidence** for a decision made in JavaScript. No model is ever asked whether its own work passed.
 
-1. Clone (private repo — use gh): `gh repo clone <OWNER>/SCH-LOOP ~/.claude/SCH-loop`.
-   The engine home is `$HOME/.claude/SCH-loop` — the skills already reference that
-   path, so nothing to edit.
-2. Init the registry: `node ~/.claude/SCH-loop/scripts/state.mjs init`.
-3. Install the skills globally: copy every folder in ~/.claude/SCH-loop/skills/
-   into ~/.claude/skills/ (sch-spec, sch-plan, sch-run, sch-review, sch-ship, sch-learn).
-4. Global context: ensure ~/.claude/SCH-loop/SCH-LOOP.md is imported by my global
-   rules — add the line `@SCH-loop/SCH-LOOP.md` to ~/.claude/CLAUDE.md (create
-   CLAUDE.md if absent). Do NOT run Claude's own /init — SCH Loop is self-sufficient.
-5. Start the dashboard: `node ~/.claude/SCH-loop/scripts/dashboard.mjs` (background).
-   It binds 127.0.0.1 and prints a one-time URL carrying its token
-   (`http://127.0.0.1:4600/?token=…`) — open THAT, not the bare port; every
-   request without the token is 401. On Windows, ~/.claude/SCH-loop/sch-dashboard.bat
-   also gives start/stop + auto-start.
-6. Run /reload-skills, confirm /skills lists the six sch-* skills, then tell me how
-   to start my first project.
+The Builder writes. The Judge grades. The Manager decides. They are three separate processes, and the one that produced the work can never approve it.
 
-Never commit secrets, CLAUDE.md, or engagement data — the repo is tooling only.
-```
-
-(Replace `<OWNER>` with the GitHub owner. The repo is **private** — the installer
-needs `gh` authenticated with read access. To share it publicly, first purge the
-git history of any earlier engagement-data commits.)
-
-## 🛠 Manual install
-
-```bash
-gh repo clone <OWNER>/SCH-LOOP ~/.claude/SCH-loop && cd ~/.claude/SCH-loop
-node scripts/state.mjs init
-cp -r skills/sch-* ~/.claude/skills/          # skills are path-portable ($HOME/.claude/SCH-loop)
-echo '@SCH-loop/SCH-LOOP.md' >> ~/.claude/CLAUDE.md   # global pointer (self-sufficient; no /init needed)
-node scripts/dashboard.mjs                     # → prints http://127.0.0.1:4600/?token=… — open that
-# in Claude Code: /reload-skills  → confirm /skills shows the sch-* skills
-```
-
-**Where it lives:** your **home directory** — `$HOME/.claude/SCH-loop` — alongside
-`.claude/`, not the Desktop. Portable across machines/users; no hardcoded paths.
+That single constraint is why this is a loop and not a chatbot with a `while` around it.
 
 ---
 
-## 🚀 Daily use
+## What it actually does
 
-**Dev app (greenfield or existing):**
+You type one sentence:
+
 ```
-cd <project folder>
-claude
-/model sonnet                 # token-safe
-/sch-spec                     # paste your requirement → it writes PRD + CLAUDE.md, plans small tasks
-/clear                        # clean context
-/loop 45m /sch-run            # runs; --project auto-detected from the folder
+A tiny command-line habit tracker. A person records that they did a habit today,
+sees a streak count, and lists their habits with current streaks.
 ```
 
-**Pentest CR (client on record):**
-```
-/sch-spec                     # "pentest <target>, CR-1234, shared via Teams" → arms + plans
-/loop 45m /sch-run --project <cr>
-```
+Nobody writes anything else. The loop produces:
 
-Then steer from the **dashboard**: answer any question inline, add a feature/lead,
-bump priority, HALT. It binds `127.0.0.1` and authenticates every request, so the
-URL to open is the tokenised one it prints at startup. Reaching it from a phone
-over Tailscale is an explicit second step — `SCH_BIND=0.0.0.0` (or your Tailscale
-IP) — and the token still applies.
+| Stage | What came back |
+|:--|:--|
+| **Brainstorm** | 7,700 characters — outcome, users, workflows, locked decisions, flagged assumptions |
+| **PRD** | 10,400 characters — user-observable requirements with stable IDs |
+| **Architecture** | 15,700 characters — a real diagram, an end-to-end trace, five ADRs |
+| **Plan** | 14,300 characters — four phases, vertical slices, per-slice verification and stop conditions |
+| **Tickets** | 13 tickets, 0 rejected — tracer-first, dependencies correct, two decisions gated to a human |
+| **Build** | RED → GREEN, reviewed, judged, merged |
+
+**The plan caught two risks nobody mentioned to it.** That `node --test "tests/**/*.test.mjs"` may not expand its glob on the declared Node floor — reporting a green run that executed *zero tests*. And that a test could write to the developer's real data file.
+
+That is what a specification stage is for.
 
 ---
 
-## 🧠 How it works (the v3 loop)
+## How it works
 
-```
-spec        interview → PRD/SCOPE + consistency-check + auto CLAUDE.md (constitution)
-plan        small, verifiable tasks (explicit files + a verify step)
-── per task, in a FRESH-CONTEXT subagent (kills context rot + drift) ──
-  ground    read the REAL code/markup; grep every usage before renaming anything
-  test      TDD: test first
-  build     ONE task only, minimal (Karpathy's 4); product decisions → inbox, never coded
-  verify    run tests/lint/type — evidence, not claims
-review      fresh-context, diff-scoped, two-stage + Definition-of-Done checklist
-commit      secret-scan gate (unbypassable hook) → changelog → merge → push
-learn       every correction → a rule in the project CLAUDE.md (never repeats)
-throughput  independent tasks run as a parallel wave (worktrees, merged sequentially)
+### The lifecycle
+
+```mermaid
+flowchart LR
+  G([your one sentence]) --> B[brainstorm]
+  B --> P[PRD]
+  P --> A[architecture]
+  A --> PL[plan]
+  PL --> T[tickets]
+  T --> Q[(task.md<br/>the queue)]
+  Q --> L{{the per-ticket loop}}
+  L --> V[phase verify]
+  V --> S[ship]
+  S --> PR([pull request])
+
+  style G fill:#1f6feb,stroke:#1f6feb,color:#fff
+  style L fill:#8250df,stroke:#8250df,color:#fff
+  style PR fill:#2ea043,stroke:#2ea043,color:#fff
 ```
 
-Grafted patterns: **gsd-core** (fresh-context execution), **superpowers** (TDD,
-subagent review, systematic-debugging, worktrees, brainstorming), **spec-kit**
-(consistency-check, constitution, DoD checklist), **ecc** (secret-scan + hooks),
-**Karpathy** (4 coding principles), **Boris/Cherny** (CLAUDE.md auto-load +
-compounding lessons).
+Each stage reads the one before it and is checked for **substance**, not existence. A PRD without requirement IDs is not a PRD. An architecture without a diagram is not an architecture. A rejected draft is kept so the next attempt starts from something.
+
+Stage seats are **read-only**. They return the document; the engine writes the file. A stage able to write its own artifact could write anything else in your project.
+
+### The per-ticket loop
+
+```mermaid
+flowchart TD
+  N[next ticket from task.md] --> F{three fences}
+  F -->|any fail| REF[refuse, before any model runs]
+  F -->|all hold| W[git worktree for this ticket]
+  W --> BUILD[Builder writes<br/>TDD: red, then green]
+  BUILD --> CHK[deterministic checks<br/>scope · diff-matches-claims · your tests]
+  CHK -->|red| RETRY[attempt++, respawn fresh<br/>with the failure note]
+  RETRY --> BUILD
+  CHK -->|green| J[Judge grades<br/>fresh, read-only]
+  J -->|reject| RETRY
+  J -->|pass| R[Reviewer<br/>independent, read-only]
+  R -->|changes| SCOPED[scoped re-build:<br/>only the blocking findings]
+  SCOPED --> R
+  R -->|approve| M[commit + fail-closed merge]
+  M --> DONE([ticket done])
+  RETRY -.attempts spent.-> LADDER[recovery ladder]
+
+  style REF fill:#cf222e,stroke:#cf222e,color:#fff
+  style DONE fill:#2ea043,stroke:#2ea043,color:#fff
+  style LADDER fill:#bf8700,stroke:#bf8700,color:#fff
+```
+
+Two gates here are worth naming:
+
+- **`diff_matches_claims`** — the Builder's own "FILES CHANGED" list must equal what git says. A builder that does not know what it did is exactly when a judge must not trust its summary.
+- **Scope containment** — writes outside the ticket's `allowed_paths` fail the attempt, and **untracked files count**. Creating a file is the most common way to escape a path boundary.
+
+### When something goes wrong
+
+```mermaid
+flowchart LR
+  T0[tier 0<br/>no output] --> T1[tier 1<br/>crash · timeout · loop]
+  T1 --> T2[tier 2<br/>rate limited]
+  T2 --> T3[tier 3<br/>attempts spent]
+  T3 --> T4[tier 4<br/>human]
+
+  style T0 fill:#0969da,stroke:#0969da,color:#fff
+  style T1 fill:#8250df,stroke:#8250df,color:#fff
+  style T2 fill:#bf8700,stroke:#bf8700,color:#fff
+  style T3 fill:#bc4c00,stroke:#bc4c00,color:#fff
+  style T4 fill:#cf222e,stroke:#cf222e,color:#fff
+```
+
+| Tier | Trigger | What happens |
+|:--|:--|:--|
+| **0** | the process goes quiet | nudge — the window is clamped below the hard timeout so it can always fire |
+| **1** | crash, timeout, or a loop of identical tool calls | `attempt++`, respawn **fresh**, carrying the failure note |
+| **2** | rate limit or overload | back off 1 → 2 → 4 → 8 minutes, attempt unchanged |
+| **3** | attempts exhausted | mark `[!]`, **convene the council**, re-dispatch **once** with its verdict |
+| **4** | council skipped, failed, or a second red | mark `[?]`, notify, move to the next unblocked ticket |
+
+**The council** is several different CLIs arguing: independent proposals, anonymised cross-critique, rebuttals, an adversarial challenge, then a chair that synthesises without majority vote. One seat being logged out costs that seat and nothing else — the debate continues on a quorum.
+
+In a live run the council read the engine's own source and correctly predicted that its ticket would terminate at `[?]` two rounds later. It did.
 
 ---
 
-## 📁 What each file does
+## Safety: three fences
 
-```
-scripts/state.mjs         Engine + CLI: multi-project registry, tasks, findings, scope gate,
-                          standing authorizations, run-lock, pass-gate, audit log, skill gate.
-scripts/skills.mjs        Skill registry: read-only discovery of installed skills (built-in, repo,
-                          commands, plugins, global), content hashing, trust states, per-project
-                          capability profile, execution modes, deterministic task→skill advice.
-scripts/workspace.mjs     The canonical per-project `.sch-loop/` workspace: init, versioned
-                          manifest, path containment, symlink/junction refusal, narrow
-                          runtime ignore rules (the durable record stays trackable).
-scripts/worktree.mjs      The disposable per-task worktree: a worker gets its own checkout on
-                          its own `sch/task-<n>` branch, outside the repository and outside
-                          SCH_HOME, created once and reused (never recreated) across retries.
-scripts/candidate.mjs     The delivery candidate: every changed path as CONTENT identity
-                          (porcelain v2 + blob hashes), canonical hashing, and the git
-                          argv guard that refuses add -A / commit -a / force / reset --hard.
-scripts/delivery.mjs      The fail-closed Git transaction controller — the ONLY component
-                          allowed to stage, commit or push a managed project. Diff binding,
-                          approval, explicit staging, secret gate, commit, divergence, push,
-                          independent remote verification, task completion.
-scripts/sch-deliver-run.mjs  CLI for one delivery: --project <id> --run <RUN-id>. One run,
-                          one commit, then stop.
-scripts/executor.mjs      Provider-neutral AgentExecutor + ClaudeCliExecutor: a fresh
-                          external worker process, allowlisted environment, SCH-owned
-                          timeout/cancel, process-tree kill, bounded output.
-scripts/remoteworker.mjs  The distributed-worker SEAM: the WorkerTransport contract, the
-                          cross-host lease predicate (a pid is evidence only on the machine
-                          that issued it), the credential-free job envelope, and LOOPBACK —
-                          an in-process transport. NO transport crosses a machine boundary.
-scripts/runner.mjs        The supervised single-task orchestrator: preflight, lease,
-                          baseline, prompt compilation, handoff parsing, ACTUAL git-effect
-                          inspection, deterministic verification, outcome, run events.
-scripts/sch-run-task.mjs  CLI for one supervised run: --project <id> --task <n>. One task,
-                          one attempt, then stop. Never stages, commits or pushes.
-scripts/taskgraph.mjs     The project task graph: typed dependency reasons, the false-edge
-                          audit, hidden dependencies (shared paths / control files / schema),
-                          cycle + self + duplicate detection, readiness with its blockers.
-scripts/transitions.mjs   The CLOSED task-state machine: 14 states, one authorised actor per
-                          edge, expected-version (optimistic) concurrency, the documented
-                          legacy↔canonical map, and the audit record of every move.
-scripts/envelopes.mjs     The typed envelope registry (7 types) that crosses every phase
-                          boundary: exactly one block, identity-checked, bounded, enum-checked,
-                          with an adapter for the previous milestone's worker handoff.
-scripts/gates.mjs         The named gate registry. Every gate returns a REPORT — what it
-                          checked, whether each item passed, its evidence, a stable hash.
-                          FACTUAL gates are overridable by nobody; POLICY gates by a person.
-scripts/phases.mjs        The phase engine: HUMAN / AGENT / CODE / GATE, the default-fail
-                          lifecycle (PENDING→RUNNING→EXECUTED→REPORTED→GATED→ACCEPTED),
-                          per-phase persistence + restart recovery, and the agent-role roster.
-scripts/humangates.mjs    Typed human decisions (12 kinds) bound to project/task/run/attempt/
-                          phase/state-version/proposal hash/diff hash, with expiry and
-                          automatic invalidation when the thing being approved moves.
-scripts/scheduler.mjs     The graph scheduler: project lease, graph validation, up to
-                          --max-parallel ready tasks (default 1, and never two whose paths
-                          overlap), the selected workflow's phases, bounded retries with
-                          compact repair context, delivery through the existing controller,
-                          typed stop reasons, deterministic project completion.
-scripts/sch-run-queue.mjs CLI for the queue: --project <id> [--max-tasks --max-duration-ms
-                          --max-parallel --phase --stop-after-task --dry-run]. Then stop.
-scripts/supervisor.mjs    Per-project run control: start, pause, resume, stop. Owns the
-                          PROCESS, never the work. Pause and stop release the scheduler's
-                          lease, so the task in flight finishes and nothing is ever killed
-                          mid-delivery.
-scripts/run-with-inbox.mjs Plan the inbox, then run the queue — the order an operator means
-                          when they press Start. A planning failure never stops work that is
-                          already queued.
-scripts/inbox-planner.mjs Turns an operator's one-line inbox note into queued tasks, or
-                          refuses with a reason. Rejects a task with no verification, a path
-                          outside policy, an unknown dependency, or no acceptance criteria.
-scripts/land.mjs          Merges the delivered tip into the branch the operator works on.
-                          Never on its own, never over a dirty tree, never force, and a
-                          conflict is left conflicted for a person.
-scripts/limits.mjs        Reads the provider's own usage endpoint for the 5-hour and 7-day
-                          windows. Caches, backs off on 429, keeps the last good reading, and
-                          never logs or serialises the token.
-scripts/onboard.mjs       Brownfield EVIDENCE collector: inventory, the repo's own build/test
-                          baseline with real exit codes, dead-code tool output, git churn,
-                          and the files nothing imports. Collects facts; claims nothing.
-scripts/projection.mjs    The SQLite operational PROJECTION (node:sqlite, no dependency) for
-                          the dashboard: migrations, WAL, idempotent event projection,
-                          bounded text, rebuildable. Never the authority.
-scripts/workflows.mjs     The versioned workflow-template registry: 9 templates over a CLOSED
-                          handler registry. Project data names a handler id, never a module;
-                          unknown handler/role/gate/envelope fails closed; a template can
-                          never grant a tool or widen a write scope.
-scripts/semantic.mjs      The CLOSED registry of EXECUTABLE semantic AGENT phases (scout, plan,
-                          implement, repair, review, document). Each declares its role, effect
-                          policy, envelope and gates. A template may declare a semantic phase
-                          only if a handler exists — otherwise the template is REJECTED, never
-                          recorded as "absent".
-scripts/roles.mjs         The versioned agent-role roster (scout, planner, builder, repairer,
-                          reviewer, documenter) and the logical model profiles. Role, executor,
-                          provider, model, tools and write scope are six separate things, and a
-                          selected skill can widen none of them.
-scripts/usage.mjs         Usage, cost and latency — where UNKNOWN IS NOT ZERO. Versioned, dated
-                          pricing tables that ship no unverified rates; characters recorded
-                          separately from tokens and labelled as characters.
-scripts/evidence.mjs      Selective evidence compaction: a passing check contributes ZERO log
-                          characters to any prompt, a failing one contributes bounded excerpts
-                          kept from the END of the log. Every omission is recorded.
-scripts/procedures.mjs    The lazy-loaded, hashed operational procedure registry. A phase gets
-                          the procedure for what it is doing, never the manual — and a
-                          procedure can never grant authority.
-scripts/knowledge.mjs     Automatic ingestion of the project's OWN durable documents (PRD/SCOPE,
-                          docs/adr, LESSONS) into a bounded, hashed index. Deterministic, no
-                          model. A task draws the few entries that bear on it, inside a tenth of
-                          the prompt budget; an irrelevant entry contributes ZERO characters and
-                          every omission is recorded with its reason. Redacted at the door.
-scripts/skillsources.mjs  Governed EXTERNAL skill sources: full-commit pinning, operator-only
-                          sync, file/script/hook inventory, explainable risk classification,
-                          static quality gate, conflict detection against SCH's own machinery,
-                          and hash-bound, ROLE-SCOPED approval whose default is nothing.
-scripts/pack.mjs          The project-local CAPABILITY PACK: a generated plugin directory
-                          holding only the skills one task may use, built OUTSIDE the managed
-                          repository. Carries a skill's documents, refuses anything that can
-                          execute, and states the built-in policy plus the exact worker argv.
-                          A built-in on neither the allow nor the deny list is DENIED.
-                          Denying blocks INVOCATION, not listing — the names still appear.
-scripts/territory.mjs     Fingerprints the ground OUTSIDE a task worktree that SCH owns — the
-                          main repository and every sibling task checkout — so a write there
-                          is DETECTED after the fact. Size and mtime, not content; bounded
-                          walk that reports truncation instead of a false clean bill.
-scripts/subprocess.mjs    The ONE bounded subprocess implementation: argv only (no shell),
-                          explicit environment, bounded output, timeout, cancellation, and
-                          process-TREE termination. Timeout is the MINIMUM of every bound.
-scripts/suitelock.mjs     The full-test-suite lease — one complete suite at a time, with a
-                          visible holder and safe stale recovery.
-scripts/sch-test.mjs      Runs the suite under that lease with a heartbeat and an explicit
-                          outer timeout: `--focused`, `--status`, `--release`.
-scripts/dashboard.mjs     Live (SSE) dashboard — project table + per-project control,
-                          answer box, skill picker, filter; fluid, no flicker. Port 4600,
-                          bound to 127.0.0.1, every request authenticated against the
-                          shared token at $SCH_HOME/dashboard-token.
-scripts/secret-scan.mjs   Blocks a commit if staged changes contain secrets/.env/keys/CLAUDE.md.
-scripts/secret-scan-hook.mjs  PreToolUse hook — makes the secret gate UNBYPASSABLE on git commit/push.
-scripts/report.mjs        Findings → CERT-In report (Markdown + print-to-PDF HTML). Refuses while a coverage cell is untested.
-scripts/poc.mjs           Captures ONE reproducible PoC per finding (curl or a pasted exchange), tokens redacted.
-scripts/verify-skills.mjs Proves (from the session transcript) which skills were actually used.
-scripts/skills-used.mjs   Lists real skill invocations across sessions.
-scripts/notify.mjs        Push a blocked-question / done notice to Slack/Teams/ntfy (SCH_NOTIFY_WEBHOOK).
-scripts/dashboard-ctl.mjs Ref-counted auto start/stop of the dashboard, driven by Claude's
-                          SessionStart/SessionEnd hooks (up on first session, down on the last).
-scripts/sync-skills.mjs   Installs skills/ into ~/.claude/skills (where Claude Code loads them).
-                          `--check` reports drift; validate fails if the installed copy is stale.
-scripts/graph.mjs         Self-contained knowledge graph (node:sqlite, FTS5, no dependencies).
-                          Symbols, endpoints, findings, decisions + the edges between them.
-scripts/graph-mcp.mjs     MCP server over that graph (hand-written JSON-RPC, no SDK) so
-                          Claude Code / Codex / OpenCode all query it the same way.
-scripts/mcp.mjs           MCP server over the loop's OPERATIONAL state — projects, tasks,
-                          the dependency graph, supervised runs, human decision gates.
-                          READ ONLY: it reuses the same projections the dashboard does, so
-                          no prompt, skill body or credential crosses it, and starting,
-                          delivering and approving stay operator-only on the CLI.
-scripts/graph-index.mjs   Keeps the graph current AUTOMATICALLY — a PostToolUse hook indexes
-                          every edited file; --all does a first full pass. No manual init, ever.
-scripts/graph-seed.mjs    Loads what past tasks/commits/decisions already learned into the graph.
-scripts/doctor.mjs        Checks what the repo DECLARES is actually WIRED on this machine:
-                          hooks registered, skills installed, no second engine copy, projects
-                          still exist. `--fix` installs what's missing (`npm run doctor`).
-scripts/validate.mjs      Self-check: skill frontmatter, installed-skill drift, pack refs, README
-                          accuracy, portability, gitignore of engagement data, safety contracts.
-packs/packs.json + *.md   Per-domain methodology (app-dev, tool-dev, web/api/mobile/red-team/network).
-knowledge/*.md            Self-learning knowledge base per pack.
-skills/SCH                The `/SCH` command router — one surface, routes to the skill or engine
-                          command that already does the work. `state.mjs sch-commands` is its table.
-skills/sch-*              The loop skills: spec, brainstorm, plan, run, review, ship, learn.
-docs/adr/*.md             Architecture records: what the design is, and what it is NOT yet.
-docs/CLAUDE.template.md   Per-project rules template (auto-loaded by Claude every reply).
-docs/settings.template.json  Per-project .claude/settings.json: pre-approved commands + hooks.
-docs/new-client-onboarding.md  Add a pentest client + the authorization-email template.
-sch-dashboard.bat / .vbs  Windows: interactive start/stop + enable/disable dashboard auto-start.
+Bypass mode refuses to start unless **all three** hold. This is the part that lets an agent run unattended without you watching it.
+
+```mermaid
+flowchart TD
+  subgraph FENCES["every one of these, or it does not start"]
+    direction LR
+    F1[1 · worktree per ticket<br/>writes outside it are detected]
+    F2[2 · write-guard hook<br/>path boundary, protected files,<br/>no gutting a curated file]
+    F3[3 · destructive-bash hook<br/>no rm -rf, no git clean,<br/>package installs are a human ticket]
+  end
+  FENCES --> OK{all three?}
+  OK -->|yes| RUN[the executor may start]
+  OK -->|no| STOP[refused, and it says which]
+
+  style RUN fill:#2ea043,stroke:#2ea043,color:#fff
+  style STOP fill:#cf222e,stroke:#cf222e,color:#fff
 ```
 
-**Generated locally, never committed:** `projects.json` (registry),
-`projects/<id>/state.json`, `authorizations/`, `logs/`, `reports/`. Engagement +
-client data stays on your machine.
+The reviewer and judge are **tool-restricted read-only** on top of that. Asked directly to create a file, a live reviewer seat replied: *"CANNOT — write was denied by permission gate."*
 
 ---
 
-## 🔒 Safety
+## Install
 
-- **Secret-scan gate** (script + unbypassable PreToolUse hook): never commits
-  API keys, `.env`, private keys, or `CLAUDE.md`.
-- **Scope gate** (offensive): every active task re-checks the target against the
-  client's signed authorization; out-of-scope / unauthorized / expired = refused,
-  logged. Client findings/evidence stay local, never pushed.
-- **Per-project settings** (`docs/settings.template.json`): pre-approve safe
-  commands + auto-format after edits — safer than a blanket YOLO flag.
+### Requirements
 
-## 📋 Full CLI reference
+- **Node ≥ 20**
+- **git**
+- At least one agent CLI on your `PATH`. The engine auto-detects `claude`, `codex`, `opencode`, `gemini` and `antigravity`, and seeds your roles from whatever it finds.
 
-```
-init | stats --project <id> | pass-gate --project <id>
-project-add | project-list | project-here | project-get --project <id>
-auth-add | auth-list | auth-find --target <t> | auth-add-domain | cr-new ...
-scope-get | scope-check | scope-set | scope-arm-from-auth   (offensive)
-skills-set --project <id> --skills a|b | skills-get --project <id>
-skill-discover | skill-list [--trust|--source|--capability] | skill-get <id> | skill-trust <id> --state APPROVED
-profile-get | profile-set --mode <mode> [--task-type <t> --recommended a|b] | profile-validate   (all --project)
-skill-recommend --project <id> [--task <n> | --type <t> --phase <n> --files a|b]
-sch-commands [<name>]                                (the /SCH command table)
-task-add | task-list [--status] | task-set <n> --status ... | task-next | task-answer   (all --project)
-task-add / task-set --allow "src/**|tests/**" --forbid "..." --verify "npm test"   (run policy)
-task-set --verify-json '[{"id":"unit","exe":"npm","args":["test"],"cwd":".","timeout_ms":600000}]'
-task-set --control-category decisions        (the ONE .sch-loop/ category a task may write)
-workspace-init | workspace-status                    (the per-project .sch-loop/ workspace)
-run-list [--limit n] | run-get --run <RUN-id> | run-cancel --run <RUN-id>
-handoff-promote --run <RUN-id>                 (raw run handoff → the durable record)
-delivery-status --run <RUN-id> | delivery-list | delivery-cancel --run <RUN-id>
-delivery-approve --run <RUN-id> --approver <name> [--message "..."] [--reject true]
-delivery-branch-namespace --project <id> [--set "sch/task-*" --approver <you>] [--revoke true]
-sch-run-task.mjs --project <id> --task <n> [--preflight-only]   (one supervised run)
-sch-deliver-run.mjs --project <id> --run <RUN-id> [--dry-run]   (one Git delivery)
-graph-validate | graph-show [--format markdown]      (the task graph + false-edge audit)
-task-set --dep-reason "8:DATA_DEPENDENCY:api_contract"     (why this task waits for that one)
-task-set --retry-policy '{"max_attempts":3,"max_repairs_per_attempt":1}'
-task-set --approval-policy '{...}' | --budgets '{...}' | --dependency-policy '{"allow_cancelled":true}'
-task-set --executor-role builder | --verifier-role reviewer
-task-transition --task <n> --event <release|requeue|block|need_decision|fail|cancel|supersede>
-                [--expect-version <v>]               (the CLOSED state machine; never a destination)
-task-states                                          (canonical state of every task)
-scheduler-status | scheduler-list | scheduler-cancel --scheduler <SCHED-id>
-phase-list --task <n> | gate-report --task <n> [--gate <id>]
-human-gate-list [--all true] | human-gate-show --gate <id>
-human-gate-open --type <TYPE> --question "..." [--task <n>]
-human-gate-decide --gate <id> --decision APPROVED|REJECTED --approver <name>
-projection-status [--rebuild true]                   (the SQLite operational projection)
-sch-run-queue.mjs --project <id> [--max-tasks n --max-duration-ms n --max-parallel n
-                 --phase n --stop-after-task n --dry-run --quiet]         (the queue)
-finding-add | finding-list | finding-set | chains   (offensive)
-retest-new --from <src-project> [--id <new>]        (post-remediation re-verification)
-provenance --ref <auth-ref>                          (who shared which asset, when, how)
-inbox-add | inbox-list [--new] | inbox-mark
-lock-acquire | lock-release | lock-status
-```
-
-## ✅ Development / self-check
+### Set up a project
 
 ```bash
-npm run validate   # skills, packs, README accuracy, portability, safety contracts
-npm test           # engine tests: scope gate, authorizations, queue, chains, secret-scan
-npm run check      # both (what CI runs)
+git clone https://github.com/shekharcharles/SCH-LOOP.git
+cd /path/to/your-project
+
+SCH_PROJECT_ROOT="$PWD" node /path/to/SCH-LOOP/sdlc/engine/runtime/cli.mjs setup
 ```
-Requires **Node >= 20**. No dependencies.
 
-## 🧭 `/SCH` — the command surface
+That installs the engine, both fences, the skills and your config into the project, then **asserts the result can actually run** — engine present, both hooks on disk *and* wired into settings, roles complete, queue present. It exits non-zero if any of that is false, because an installer that reports success for a project that cannot execute anything is worse than one that fails.
 
-One namespace, routed by `skills/SCH`: `/SCH` (status of the active project),
-`status`, `project`, `spec`, `brainstorm`, `plan`, `skills`, `run`, `review`,
-`learn`, `graph`, `pause`, `resume`, `stop`, `approve`, `dashboard`, `doctor`.
-Case-insensitive; canonical spelling is `/SCH <name>`. The table is data —
-`node scripts/state.mjs sch-commands` — so the router, the CLI and the dashboard
-cannot drift apart. The two-command flow (`/sch-spec`, `/loop … /sch-run`) still
-works unchanged.
+Re-run it any time to refresh. It copies over the top and prunes afterwards, so your project is never left without an engine, not even for an instant. Your queue, tickets and reports are yours and are never touched.
 
-**Skills are discovered, not typed.** `skill-discover` walks the built-in,
-repo-local, `.claude/commands`, plugin-cache and user-global roots, reads each
-`SKILL.md` **as text** (nothing is executed, no script named in metadata is
-followed), hashes the body, and infers capabilities from explicit metadata, a
-built-in adapter table (superpowers / GSD), then keywords — inference is flagged
-incomplete rather than passed off as fact. Everything third-party lands
-`UNREVIEWED`; approval is a human act, recorded against the exact content hash,
-and an edited skill goes stale automatically. Per project, a **capability
-profile** holds the execution mode (`SINGLE_TASK`, `SUPERVISED_PHASE`,
-`AUTONOMOUS_PROJECT`, `PAUSED` — there is no unlimited mode) and the skills per
-task type; `skill-recommend` answers "which skills for this task" with a reason
-attached, and never selects an unreviewed, disabled or blocked skill for
-autonomous use. A project without a profile keeps working on safe defaults.
-
-### Implemented today
-
-Unified `/SCH` routing contract · skill discovery + trust records · project
-capability profiles · deterministic task→skill recommendation · execution-mode
-configuration and validation · dashboard-readable capability state
-(`/api/capabilities`) · the in-session loop (`/sch-run`) that has always existed ·
-the **supervised external single-task runner** · the **fail-closed Git delivery
-controller** · the **sequential graph scheduler** below: a first-class task graph
-with typed dependency reasons, a closed task-state machine, an SSSF-style phase
-engine with typed envelopes and named gates, bounded retries, typed human
-decision gates, a SQLite operational projection and deterministic project
-completion · **automatic knowledge ingestion**: the project's own durable
-documents (PRD/SCOPE, `docs/adr`, `LESSONS.md`) are ingested deterministically
-into a bounded, hashed index, and each task's prompt draws only the entries that
-bear on it, inside a tenth of the prompt budget, with every omission recorded.
-
-### Planned, and NOT implemented
-
-OS-level worker sandboxing (**investigated and found unreachable** from Node
-without a container, a second account or a native module — see
-[ADR 0009](docs/adr/0009-os-confinement-what-node-cannot-reach.md)) ·
-a **writing** SCH MCP (the read side ships as
-`scripts/mcp.mjs`; starting, delivering and approving over MCP do not, and will
-not until there is something to authenticate the caller with) · the structured
-learning STORE of [ADR 0002](docs/adr/0002-learning-architecture.md) (typed
-records, provenance, tombstoning, promotion) — ingestion reads the documents,
-it does not yet replace them · distributed workers · Temporal (evaluation only)
-· migrating state authority into SQLite. The queue scheduler runs **one task at a
-time by default**; `--max-parallel N` runs up to N, and stops at a defined
-terminal condition either way. Nothing here is unattended-safe yet: see
-[Worker containment](#worker-containment-what-is-and-is-not-true).
-
-**Distributed workers: the seam, not the network.** `scripts/remoteworker.mjs`
-defines what a remote worker would have to satisfy — a `WorkerTransport`, a lease
-predicate that knows a pid is only evidence on the machine that issued it, and a
-job envelope carrying no environment at all — and ships exactly one transport,
-LOOPBACK, which runs in this process on this filesystem. **No transport crosses a
-machine boundary, and none is planned until evidence can come back from one:**
-git-effect inspection, territory fingerprints and verification all read local
-disk, so a transport that cannot write there is refused at `prepare()` rather than
-producing a run nobody can verify. Nothing about the network is proven; see
-[ADR 0010](docs/adr/0010-the-distributed-worker-seam.md) for the labelled list of
-what is unproven.
-
-## 🧪 Supervised external single-task runner
+### Choose who does what
 
 ```bash
-node scripts/state.mjs workspace-init --project <id>     # once per repository
-node scripts/state.mjs task-set <n> --project <id> \
-     --allow "src/**|tests/**" --forbid "src/generated/**" --verify "npm test"
-node scripts/sch-run-task.mjs --project <id> --task <n>
+node .claude/sch/runtime/cli.mjs dashboard
 ```
 
-One explicitly selected, pre-approved task runs in a **fresh external `claude`
-process**. A new process per attempt IS the fresh-context guarantee — it is
-structural, not a sentence in a prompt, and clearing a terminal is not a context
-reset. The outer runner owns everything the worker must not: task selection,
-eligibility, skill selection, prompt compilation, timeout, cancellation, process
-cleanup, the task lease, effect inspection, verification, and the outcome. **The
-worker cannot mark its own work verified.**
+<div align="center">
 
-**`.sch-loop/` — the canonical per-project workspace** (exactly that spelling,
-lowercase, at the repository root). Tracked when present: `project.yaml` (a
-versioned manifest carrying `repository_root: .`, never a machine path), `SPEC.md`,
-`PLAN.md`, `TASK-QUEUE.md`, `LEARNING.md`, `phases/`, `tasks/`, `decisions/`,
-`handoffs/`. Ignored by default: `runs/`, `artifacts/`, `logs/`, `cache/`,
-`locks/`, `tmp/` — raw prompts, stdout and evidence can contain anything. The
-whole directory is **never** ignored wholesale. `workspace-init` is idempotent,
-preserves existing planning files, and refuses a `.sch-loop` symlink/junction, a
-conflicting manifest, a foreign project id, an unsupported schema, or a repository
-that is not the registered root. A run **requires** an initialized workspace and
-never creates one for you.
+**A local page, loopback only, that writes exactly one file.**
 
-**State authority is unchanged.** `$SCH_HOME/projects/<id>/state.json` remains
-operational truth (registration, task status, dependencies, execution mode, skill
-profile, locks, run references, audit). `.sch-loop/` holds the portable record.
-`SCH_HOME` is deliberately **not** in the worker's environment.
+</div>
 
-**Preflight fails closed** on every one of these — project, task, real repository path,
-repository root, execution mode, task eligibility, dependency completion,
-capability profile, skill approval and hash staleness, workspace + manifest,
-branch and HEAD, a clean tree and index, merge/rebase/cherry-pick/revert/bisect in
-progress, an existing lease or unresolved run, path policy, verification-command
-safety, the Claude executable, and the timeout/prompt/output limits.
+Pick the CLI, the model and the flags for every seat — executor, reviewer, judge, and each council chair. Nothing about a model or a flag is hard-coded anywhere in the engine; `roles.json` is the whole truth and this is an editor for it. It will refuse to save a reviewer or judge that is able to write, which is the same rule the dispatcher enforces at dispatch time.
 
-**Context is selected, not concatenated.** Only skills the recommendation engine
-picked are loaded — never every installed skill, never an `UNREVIEWED`, `DISABLED`,
-`BLOCKED` or stale-approval one — and each is recorded with its content hash and
-the reason it was chosen. `prompt-manifest.json` accounts for every section **in
-characters, not tokens** (there is no tokenizer, so there is no token count). Over
-the limit, optional context is compacted and then dropped, in order, and recorded;
-the safety kernel, task, acceptance criteria, allowed paths, forbidden paths and
-required verification are never touched — if they alone exceed the limit the run
-fails closed.
-
-**Then SCH checks the repository itself.** The worker returns exactly one
-delimited `SCH_HANDOFF_JSON` object — validated for delimiter count, JSON, schema
-version, run/project/task identity, enum values, field and array sizes — and every
-claim in it is treated as untrusted. What counts is `git-effects.json`: modified,
-deleted, renamed and untracked paths, each normalized and containment-checked
-(absolute paths, `..`, symlink/junction escapes and `.git/` refused; forbidden
-rules applied before allowed ones); plus staged files, created commits, HEAD,
-branch, remote, local-config and `.git` metadata changes. Any of those is a
-`FORBIDDEN_GIT_EFFECT` — evidence preserved, **nothing reverted, nothing pushed**,
-and a human decides.
-
-**Verification is SCH's own process.** Commands come from trusted task data as an
-executable plus arguments (never a shell string); shell interpreters, destructive
-tools, shell metacharacters and any non-read-only `git` subcommand are refused
-before a run starts. A worker's "tests passed" is recorded and changes nothing.
-
-Outcomes: `VERIFIED` · `RETRYABLE` · `NEEDS_DECISION` · `FAILED` · `CANCELLED`.
-**`VERIFIED` does not mean committed, pushed, delivered, or task-done** — this
-milestone deliberately implements no target-project git writes at all. Runs are
-readable after a restart (`run-list`, `run-get`, `/api/runs`), events are
-append-only JSONL with a versioned vocabulary, and the human-readable handoff at
-`.sch-loop/handoffs/<task>/<run>.md` keeps *worker reported*, *system observed*,
-*system verified* and *system outcome* strictly apart.
-
-**Platform honesty.** Process-tree cleanup uses `taskkill /T /F` on Windows and a
-process-group signal on POSIX; a grandchild that detaches itself into a new
-session escapes both, and nothing here claims otherwise. Both paths are tested.
-
-**`.sch-loop/` is control state, and workers are default-denied from all of it.**
-A task may name at most **one** durable category it is authorized to write
-(`--control-category decisions`); everything else under `.sch-loop/` is refused
-however broad the allow-list is, and `project.yaml`, `runs/`, `locks/` and the
-other runtime directories are refused under every category. Only the *ignored
-runtime* paths are exempt from the clean-tree gate — an uncommitted `SPEC.md`,
-`PLAN.md`, task, decision or promoted handoff blocks a run like any other file.
-A run's raw handoff stays at `.sch-loop/runs/<run-id>/handoff.md`; promotion into
-the durable `.sch-loop/handoffs/` is a separate act (`handoff-promote`, and
-automatically on delivery). Verification commands are stored structured —
-`{id, exe, args[], cwd, timeout_ms}` — so an argument may contain a space;
-`--verify "npm test"` is shorthand that compiles into that shape.
-
-## 🚚 Fail-closed Git transaction controller
+### Build something
 
 ```bash
-node scripts/sch-deliver-run.mjs   --project <id> --run <RUN-id>   # stops for approval
-node scripts/state.mjs delivery-approve --project <id> --run <RUN-id> --approver <you>
-node scripts/sch-deliver-run.mjs   --project <id> --run <RUN-id>   # commits and pushes
+node .claude/sch/runtime/cli.mjs stage brainstorm --goal "what you want built"
+node .claude/sch/runtime/cli.mjs stage next     # prd → architecture → plan
+node .claude/sch/runtime/cli.mjs plan-to-tickets
+node .claude/sch/runtime/cli.mjs run
 ```
 
-The **only** component in SCH allowed to stage, commit or push a managed project.
-It takes one `VERIFIED` run and stops after one commit. It runs no worker,
-selects no task, retries nothing, and never merges, rebases, cherry-picks,
-amends, resets, reverts or force-pushes — those argv shapes are refused by
-`assertSafeGitArgs` on **every** git call, and every invocation is recorded so a
-test can prove what was not run.
+---
 
-**Verified-diff binding.** `VERIFIED` alone does not make a run deliverable. When
-verification passes, the runner records `delivery-candidate.json`: every changed
-path as *content identity* (blob hash, status, rename source, modes) plus the
-verification evidence, hashed into `verified_diff_hash`, `verified_effects_hash`
-and `verification_evidence_hash`. The controller recomputes all three immediately
-before staging. Any drift — edited content, an added or deleted file, a rename, a
-mode change, a moved HEAD, a changed branch, different verification evidence —
-is `VERIFIED_DIFF_CHANGED`, and nothing is staged.
+## The queue
 
-**Approval is required by default**, before the commit and again before the push.
-An approval is a signature over the *specific* candidate (delivery, run, baseline
-HEAD, branch, diff hash, evidence hash, commit message, remote, upstream) with an
-expiry and a named approver. Change any of those and it becomes `INVALIDATED`:
-yesterday's yes never authorizes today's different diff. The worker cannot
-approve anything.
+`task.md` is a plain markdown file, read top to bottom. It is the contract between you and the loop, and you can edit it in any text editor.
 
-**Explicit staging.** `git add -- <exact verified pathspecs>`, always after `--`,
-so a filename with spaces is one argument and one beginning with `-` is a
-filename. Modifications, additions, deletions and renames are all handled. Then
-the index is proved against the candidate by blob identity — staged paths must
-equal approved paths exactly, staged content must equal verified content, nothing
-approved may remain unstaged, and an index that already held someone else's work
-blocks the delivery outright. On mismatch only the paths *this* transaction
-staged are unstaged; working-tree content is never touched. Then the existing
-secret gate runs against the exact staged content, and a failure unstages and
-stops.
+```markdown
+## Phase 1 — Recording works end to end   (1/2 done)
+- [x] T1.1-walking-skeleton  build  Walking skeleton: done <habit>  deps:-     size:L
+- [ ] T1.2-same-day-repeat   build  Same-day repeat is a no-op      deps:T1.1  size:S
 
-**Commit, divergence, push, remote verification.** One commit, message built from
-trusted task data (AI co-author and session trailers refused), delivered on stdin
-so it can never be read as an option. Post-commit the tree is proved again: one
-parent, the verified baseline, exactly the approved blobs — and a mismatch is
-`NEEDS_DECISION` with the commit left **unamended and unreset**. Then a fetch,
-and hard gates: any incoming commit, any divergence, anything other than exactly
-one outgoing commit, a missing or moved remote branch, a changed remote or
-upstream, or a credential-bearing remote URL all stop the push. The push is an
-explicit refspec. Afterwards SCH **fetches again and asks the remote** — push
-stdout is the pushing process describing its own success and is never accepted as
-proof; the commit's tree and parent are re-checked against what was committed.
-
-**Unpushed commits on your base branch stop a task's first push, and the message
-will surprise you.** A task branch is created from the main repository's current
-branch, and until it exists on the remote there is nothing to compare it against
-except `<remote>/<that branch>` — so "outgoing" is everything the task branch adds
-on top of what the *remote* has. Local commits you have not pushed on `main` are
-inside that range, and the delivery stops with `UNRELATED_OUTGOING_COMMITS`
-listing commits you did not write in that task. That is correct fail-closed
-behaviour, not a bug: push or drop those commits, then deliver again.
-
-**Only then** does the task become `delivered` — a new terminal status distinct
-from `merged` (which means the in-session loop finished it *locally* and was
-never pushed). `delivered` is unreachable from `task-set`; only the controller
-sets it, with the commit, branch, remote, pushed range and verification time
-attached. Every delivery is a transaction under `.sch-loop/runs/<run-id>/delivery/`
-with append-only, fail-closed events and a read-only dashboard projection at
-`/api/deliveries`. **Delivery and approval are operator authority and stay on the
-CLI.** The dashboard now authenticates every request, but authentication is not
-authorization: it still exposes no delivery, approval, human-gate, transition or
-scheduler-cancel write, and `validate.mjs` fails the build if one appears.
-
-## 🧮 Sequential graph scheduler
-
-```bash
-node scripts/state.mjs workspace-init  --project <id>     # once per repository
-node scripts/state.mjs delivery-branch-namespace --project <id> \
-     --set "sch/task-*" --approver <you>                  # once per project, REQUIRED
-node scripts/state.mjs graph-validate  --project <id>     # structure + false-edge audit
-node scripts/state.mjs graph-show      --project <id> [--format markdown]
-node scripts/sch-run-queue.mjs         --project <id>     # run the queue, then stop
-node scripts/sch-run-queue.mjs         --project <id> --max-tasks 3 --dry-run
-node scripts/state.mjs scheduler-status --project <id>
-node scripts/state.mjs human-gate-list  --project <id>
-node scripts/state.mjs human-gate-decide --project <id> --gate <HG-id> \
-     --decision APPROVED --approver <you>
+## Phase 2 — Reading back is correct   (0/3 done)
+- [ ] T2.1-streak-reads-back build  streak <habit> reads back       deps:T1.2  size:M
+- [ ] T3.1-confirm-adr-0005  decision  Confirm ADR-0005             deps:T2.3  size:XS  gate:blocking-human
 ```
 
-**The two one-time setup steps are not optional.** Each queued task delivers on
-its own `sch/task-<n>` branch, which does not exist on the remote yet, and
-creating a remote branch is an operator decision. Without the namespace
-authorization every task stops at `UPSTREAM_CHANGED` after doing all its work.
-`--revoke true` takes it back.
+| Glyph | Meaning |
+|:-:|:--|
+| `[ ]` | pending |
+| `[~]` | in progress |
+| `[x]` | done |
+| `[!]` | blocked — the council may convene |
+| `[?]` | needs a human, and will not be dispatched again |
 
-The architectural invariant, and everything below is a consequence of it:
+**IDs are never renumbered.** New work found mid-run is inserted with a suffix — `T1.4a` slots between `T1.4` and `T2.1` — so a ticket ID printed in a report six weeks ago still means the same thing.
 
-```text
-Code owns the graph.
-Agents own bounded semantic phases.
-Typed envelopes cross phase boundaries.
-Named gates define acceptance.
+### Ticket types
+
+`build` · `test` · `spike` · `research` · `docs` · `review` · `chore` · `human` · `decision`
+
+`build` and `test` run TDD and independent review. `human` and `decision` **never spawn an executor** — they stop and wait for you. Size picks the timeout: XS 5 min, S 15, M 30, L 60.
+
+---
+
+## Verification you can trust
+
+When a phase claims to be finished, the loop works **backwards from the goal**, not forwards from the tickets:
+
+| Level | Question |
+|:--|:--|
+| **exists** | is the file there? |
+| **substantive** | is it real, or a stub with a placeholder return? |
+| **wired** | is it imported *and called*? |
+| **flowing** | does real data reach it, or is a static fallback standing in? |
+
+Code gathers the evidence — which tickets, which files were actually delivered, and what the checks returned. A read-only seat judges it, and it is **handed the exit codes it cannot overrule**. A phase whose tests are red cannot be verified by argument.
+
+> **This caught something a passing review missed.** A reviewer approved a ticket against all four acceptance criteria with file-and-line evidence. Goal-backward verification then found that the filtered code path's copy guarantee rested on reading the code rather than on any test. It named the exact test to write. A follow-up ticket wrote it.
+>
+> Task completion is not goal achievement.
+
+---
+
+## The engine
+
+33 modules, each with its tests beside it.
+
+| Module | Owns |
+|:--|:--|
+| `taskmd` | the queue: parse, next, insert, set status |
+| `tickets` | the ticket schema, validated before anything is written |
+| `roles` | seats, flag presets, spawn argv — no model is hard-coded |
+| `spawn` | one watched process: streamed events, silence, loop detection, timeout |
+| `seats` | the single answer to "what can be asked a question" |
+| `fences` | the three bypass fences, checked before any model runs |
+| `worktrees` | a worktree per ticket, merge-base evidence, fail-closed delivery |
+| `self-correct` | attempts, the failure note, the Manager decision |
+| `review` | two-verdict review with adversarial verification of blocking findings |
+| `watchdog` | the dispatch loop, heartbeat, rate-limit backoff |
+| `escalate` | the council gate, the one re-dispatch, the human hand-off |
+| `council` | proposal → critique → rebuttal → challenge → synthesis |
+| `stages` | the front half, and the seam into the queue |
+| `verify-phase` | goal-backward verification |
+| `ship` | release gates and the pull request |
+| `notify` | the durable notification log |
+| `setup` | onboarding, and proving the result runs |
+| `dashboard` | the Roles page |
+
+### Why zero dependencies
+
+Everything is Node's standard library. Nothing to audit, nothing to update, no supply chain. The tests need no network and no fixtures beyond temporary directories — but the fences, the worktrees and the ship gates all run **real git**.
+
+---
+
+## Proof
+
+Measured on live runs, not estimated:
+
+| | |
+|:--|:--|
+| Cost per ticket | **~$0.40** — build, judge and independent review |
+| Peak context window during a ticket | **44k–52k** of 200k |
+| Baseline for a fresh process | **43.7k** |
+| A gated council, 3 seats | **~7 minutes**, 11 model calls |
+| Engine tests | **161**, green across 8 consecutive runs |
+
+Every claim in this README came from a run that was recorded. Where something is not proven, it says so below.
+
+### What is not proven
+
+- **One runtime.** Two projects, both Node with `npm test`. No build step, no dependencies to install, no compiled language. Every timeout and prompt is tuned against that shape.
+- **A package install has never been needed.** The fence correctly makes one a `human` ticket; that path has not been walked end to end.
+- **The council has convened once.** Its cost and failure modes rest on a single sample.
+
+---
+
+## Layout
+
+```
+sdlc/engine/     the engine — runtime, hooks, skills, tests
+sdlc/lab/        the project the per-ticket loop was proven on
+pentest/         security-engagement packs, deliberately kept apart
+docs/            the design document, ADRs, and the archived v2 README
 ```
 
-The model does not choose what runs next, does not decide whether a phase
-passed, does not count its own retries, cannot authorise its own delivery and
-cannot declare a project finished. It plans and implements inside one approved
-task and hands back one typed envelope, which is then graded against evidence
-SCH gathered itself.
+Pen-testing lives in its own folder on purpose. An engagement checks authorization before it touches anything, its scope gate is not a suggestion, and exploitation is a human gate no autonomous mode may skip. Folding those rules into a loop built to merge code unattended is how one set of gates ends up applied to the other's work.
 
-**The task graph.** `deps` is still a list of task ids, and it now carries a
-REASON: `--dep-reason "8:DATA_DEPENDENCY:api_contract"`, one of `DATA_DEPENDENCY`,
-`SCHEMA_DEPENDENCY`, `FILE_CONFLICT`, `APPROVAL_DEPENDENCY`,
-`ENVIRONMENT_DEPENDENCY`, `INTEGRATION_DEPENDENCY`, `ORDERING_POLICY`.
-`graph-validate` refuses self-dependencies, duplicates, missing tasks, cycles,
-dependencies on cancelled tasks (unless `dependencyPolicy.allow_cancelled` says
-so) and unknown reason types. Separately it **audits** every edge — *does the
-downstream task consume an actual output, resource, schema, approval or protected
-ordering requirement?* — and an edge nobody can defend is reported as
-`FALSE_EDGE_SUSPECTED` and **never deleted**: it is a plan a person wrote.
-**Hidden dependencies** are computed, not stored: two tasks whose path policies
-overlap, or which share a control file (`package.json`, lockfiles, `tsconfig`,
-`Dockerfile`…), a schema/migration prefix or an SCH control category are ordered
-whether or not anyone said so — they block readiness while the other task is in
-flight, and are shown as `hidden_edges` rather than written into the graph.
+---
 
-**Closed task states.** `BACKLOG READY CLAIMED RUNNING VERIFYING RETRYABLE
-AWAITING_DELIVERY DELIVERING NEEDS_DECISION BLOCKED FAILED DELIVERED CANCELLED
-SUPERSEDED`. Each edge names exactly one authorised actor — scheduler, runner,
-verifier, delivery, retry, human-gate, operator — and **a model is not on that
-list at all**. Every move records previous state, new state, actor, reason,
-project, task, run, attempt, state version, timestamp and causation, and an
-`--expect-version` mismatch is refused so a stale process cannot overwrite newer
-state. Historical statuses keep working through a documented map: `queued→READY`,
-`building→RUNNING`, `review→VERIFYING`, `changes→RETRYABLE`,
-**`merged→AWAITING_DELIVERY`** (it meant *finished locally, never pushed* — calling
-it DELIVERED would claim a remote it never reached), `delivered→DELIVERED`,
-`blocked→NEEDS_DECISION`, `stuck→FAILED`, `superseded→SUPERSEDED`. Nothing
-historical is rewritten: a task with no canonical state is *read* through the map
-and gains one the first time something legitimately moves it.
-`task-set --status` still speaks the legacy vocabulary, but it now goes through
-the transition service — it refuses a canonical state name, refuses
-`delivered`, and records what it did (including, when the closed machine would
-have refused the move, that refusal beside it).
+## Commands
 
-**Phases.** How many a task runs is the workflow template's decision (5 to 16 —
-see *Reusable workflows* below); the default `FULL_SDLC` runs all sixteen, each
-`HUMAN`, `AGENT`, `CODE` or `GATE`:
-
-```text
-prepare CODE · task-readiness GATE · compile-context CODE · implement AGENT
-parse-builder-envelope CODE · inspect-effects CODE · effects-gate GATE
-verify CODE · verification-gate GATE · semantic-review AGENT · review-gate GATE
-prepare-delivery CODE · delivery-approval HUMAN · deliver CODE
-remote-verification GATE · complete-task CODE
+```
+setup [--force]          install the engine into a project and prove it runs
+dashboard [--port N]     the Roles page
+goal [text]              read or set what this project is for
+stage <id|next>          brainstorm · prd · architecture · plan
+stages                   what is done, and what runs next
+plan-to-tickets          PLAN.md becomes task.md and the ticket JSONs
+run [--max N]            dispatch every ready ticket in queue order
+ticket <id>              one ticket, all the way through
+next | tasks             what runs next | every ticket parsed
+insert <spec.json>       add a ticket mid-run, in the right place
+verify-phase <n>         goal-backward verification
+ship <n> [--dry-run]     release gates, then the pull request
+notifications [--read]   what the loop told you
+council <spec.json>      convene a debate by hand
+roles | fences | config | heartbeat | doctor | seats
 ```
 
-Every phase begins **unaccepted** and moves `PENDING → RUNNING → EXECUTED →
-REPORTED → GATED → ACCEPTED`. `EXECUTED` means the process returned — that is all
-a zero exit code has ever meant. `REPORTED` needs a valid, typed,
-identity-checked envelope; `GATED` needs every required gate to have actually
-run; `ACCEPTED` needs every one of them to have passed. A phase cannot skip a
-checkpoint or move backwards, and each one is persisted, so a scheduler that
-died between two phases is told exactly where it was instead of guessing.
-Deterministic work is a `CODE` phase — an agent is never used for something a
-function can do.
+---
 
-**Typed envelopes.** `PlannerEnvelopeV1 BuilderEnvelopeV1 ReviewerEnvelopeV1
-DecisionRequestEnvelopeV1 CodeResultEnvelopeV1 GateReportEnvelopeV1
-DeliveryEnvelopeV1`, sharing one base. Exactly one block, a known schema and
-type, the right project/task/run/phase/attempt, bounded strings and arrays,
-checked enums, artifact references that cannot absolutise or escape, and **no
-field nothing validates** — an unvalidated field is where an instruction hides.
-The previous milestone's worker handoff is adapted into `BuilderEnvelopeV1`, so
-a worker built against the old contract still works. The invariant throughout:
+<div align="center">
 
-```text
-Envelope claims are not system evidence.
-```
+**Built by [shekharcharles](https://github.com/shekharcharles)**
 
-**Named gates.** `project-workspace-valid · task-ready · dependency-graph-valid ·
-skills-approved · executor-ready · prompt-budget-valid · handoff-valid ·
-worker-effects-contained · changed-paths-allowed · forbidden-git-effects-absent ·
-required-verification-passed · secret-scan-passed · verified-diff-unchanged ·
-delivery-approval-valid · outgoing-commit-safe · remote-commit-present ·
-task-completion-valid · project-completion-valid`. Each returns a report: every
-item checked, whether it passed, its evidence, and a stable `evidence_hash` — never
-a bare boolean. A gate with no evidence to read **fails**; it never quietly
-skips. `FACTUAL` gates state something about the repository or the remote and are
-overridable by **nobody** — not an agent, not the operator, because the way past
-"a secret is present" is to remove the secret. `POLICY` gates may be overridden
-by a person, on the record, with a reason.
+*Code decides. Models advise.*
 
-**Retries are bounded and classified.** `AGENT_TIMEOUT`, `PROCESS_TRANSIENT`, a
-transient process failure, and a verification/lint/format failure *within the
-task's repair budget* are retryable. `PATH_SCOPE_VIOLATION`, `SECRET_DETECTED`,
-`FORBIDDEN_GIT_EFFECT`, `VERIFIED_DIFF_CHANGED`, `UNRELATED_OUTGOING_COMMITS`,
-`REMOTE_CHANGED`, `POLICY_VIOLATION` and anything requiring a schema, dependency
-or public-API decision are not — those are resolved by changing the world.
-An unclassified code fails closed. A retry is a **new attempt in a fresh
-process**; the previous attempt's directory is never overwritten, and the change
-it left in the working tree is carried forward and named explicitly rather than
-discarded — SCH does not throw away a worker's unapproved work to manufacture a
-clean tree. A repair receives only: the task, its criteria, its path policy, the
-previous attempt's summary, the failed gate reports, the relevant command output
-and the current diff summary — recorded, counted, and capped. Never a transcript,
-never every previous run, never the whole learning file.
-
-**Human gates.** `ARCHITECTURE_DECISION AUTHORIZATION_POLICY DEPENDENCY_CHANGE
-SCHEMA_CHANGE MIGRATION_CHANGE PUBLIC_API_BREAK SCOPE_EXPANSION
-DESTRUCTIVE_ACTION UNRELATED_FAILURE AMBIGUOUS_EVIDENCE BUDGET_INCREASE
-DELIVERY_APPROVAL`. A decision binds to project, task, run, attempt, phase, state
-version, proposal hash and — where the repository is involved — diff hash, with
-an expiry and a named approver. Change the proposal or the diff and it becomes
-`INVALIDATED`. The queue **stops** while one is pending and resumes when it is
-answered, continuing the attempt that was parked rather than running its worker a
-second time. The same answer signs the delivery transaction, so the operator is
-never asked twice in two vocabularies. Deciding is CLI-only; the dashboard shows
-them and prints the command.
-
-**Stop conditions**, all typed: `PROJECT_COMPLETED PHASE_COMPLETED NO_READY_TASK
-NEEDS_DECISION BLOCKED FAILED CANCELLED MAX_TASKS_REACHED MAX_DURATION_REACHED
-PROJECT_BUDGET_EXCEEDED CONSECUTIVE_FAILURE_LIMIT SCHEDULER_LEASE_LOST
-POLICY_VIOLATION STOP_AFTER_TASK DRY_RUN`. "Nothing is ready" is further split
-into `PROJECT_COMPLETE`, `GRAPH_DEADLOCK`, `BLOCKED_DEPENDENCIES`,
-`AWAITING_APPROVAL` and `INVALID_GRAPH` — a finished project and a deadlock must
-never look the same. **Completion is a gate, not an inference:** every required
-task delivered/cancelled/superseded, no unresolved human gate, no blocked
-required task, no active run/delivery/scheduler lease, and graph validation
-passing — each clause reported with its evidence.
-
-**Every task still** uses a fresh worker process, produces its own independent
-verification, binds delivery to the verified candidate, requires the configured
-approvals, pushes only through the delivery controller above, and becomes
-`DELIVERED` only after that controller has proved the commit on the remote with
-its own fetch. At the default `--max-parallel 1` that is strictly one task at a
-time — the next is claimed only once the previous one's commit is actually on the
-remote. Above 1 the scheduler runs up to N ready tasks at once and never two
-whose paths overlap; see [Worker containment](#worker-containment-what-is-and-is-not-true).
-
-**Observability.** Versioned scheduler events (`scheduler.*`) with event id,
-timestamp, project, scheduler run, task, attempt, phase, actor, causation,
-correlation and a **bounded** payload — worker output stays on disk and is
-referenced. A SQLite operational **projection** (`node:sqlite`, no dependency)
-under `SCH_HOME/projects/<id>/ops.db` — migrations, WAL, idempotent event
-projection, bounded text, indexes — feeds read-only dashboard APIs
-(`/api/task-graph`, `/api/scheduler`, `/api/phases`, `/api/gates`,
-`/api/human-gates`, `/api/completion`, `/api/operations`, `/api/workflow`). It is
-a projection, never the authority: delete it and `projection-status --rebuild
-true` re-derives it from SCH state. Per-phase accounting is in **characters and
-bytes** and says so — nothing here has a tokenizer, and a number labelled
-"tokens" that came from dividing characters by four is not a measurement.
-
-**Legacy `/sch-run`.** The in-session prompt-driven loop still exists and still
-works, and it is now explicitly the *legacy* path. It cannot set controller-only
-states, cannot name a canonical state, and — while a scheduler holds the
-project's lease — cannot change task status at all (`task-set` refuses and names
-the scheduler). Its status writes go through the same transition service and are
-recorded. Use `/sch-run` for supervised in-session work; use
-`sch-run-queue.mjs` when the queue should execute itself.
-
-### Worker containment: what is and is not true
-
-Stated plainly, because a false claim here is worse than a missing feature.
-
-**True now**, each backed by a test:
-
-- **A queued task never runs in your working tree.** Every task the *scheduler*
-  claims gets a disposable git worktree on its own `sch/task-<n>` branch, created
-  outside the repository and outside `SCH_HOME`. **The legacy single-task runner
-  is the exception**: `sch-run-task.mjs` passes no work root, so it still runs the
-  worker in your working tree, on your branch, over your uncommitted changes — it
-  gets the credential strip, not the containment. Use `sch-run-queue.mjs` for
-  anything you would not want run in your own checkout.
-- **After a queue run your working tree is byte-identical** — file content and
-  `git status --untracked-files=all` alike. That is measured of a *cooperative*
-  worker: nothing stops one from reading the main repository path out of the
-  worktree's own `.git` file and writing there, which is the "write outside the
-  worktree" gap below.
-- **A worker has no ambient git credentials.** `credential.helper` is emptied for
-  its process via `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0`, and
-  `GH_TOKEN`, `GITHUB_TOKEN`, `GIT_ASKPASS`, `SSH_AUTH_SOCK` and `SSH_AGENT_PID`
-  are not on the environment allowlist, so they never reach it. **This covers the
-  verification children too**, not just the worker — a task's `--verify` is
-  usually `npm test`, and the worker wrote those test files.
-- **Only the delivery controller pushes**, and only to a branch inside a
-  namespace an operator authorized for that project, with the `--approver`
-  recorded.
-- **Run evidence lives in the main repository**, not in the disposable checkout,
-  so it outlives a worktree that is later removed.
-- **Only absolute `PATH` entries reach a worker or a verification command.** A
-  relative entry is resolved against the *child's* working directory, which for
-  a verification command is the worktree the worker just wrote — so
-  `PATH=node_modules/.bin:…` plus a worker that writes `node_modules/.bin/npm`
-  would decide what SCH's own `npm test` means. Relative and empty entries are
-  dropped for the child. If you deliberately keep a relative directory on PATH,
-  it will not resolve inside SCH's children; that is the point.
-- **On Windows, killing SCH kills its workers.** libuv puts every child in a Job
-  Object created kill-on-close, so the worker tree dies with the SCH process
-  even if SCH never gets to run cleanup code. This is the one OS-enforced
-  property here and it is inherited, not built — a worker that spawns *detached*
-  breaks out of the job and survives, and POSIX has no equivalent reachable from
-  Node, so there a worker outlives an SCH crash.
-- **The effect inspection still sees the shared `.git`.** A worker that creates
-  its own worktree trips `worktrees_changed`, and a hook installed into the
-  shared hooks directory is still caught: the metadata fingerprint resolves
-  against the common dir, not the linked worktree's private git dir.
-
-- **The dashboard authenticates every request.** A shared token, stored at
-  `$SCH_HOME/dashboard-token`, must arrive as a bearer header, a `?token=`
-  query (which becomes a cookie and leaves the URL) or that cookie. Anything
-  else gets 401 and learns nothing — not even which projects exist. The server
-  now binds `127.0.0.1` by default; `SCH_BIND=0.0.0.0` is an explicit choice.
-- **A worker cannot see your global skills.** Each task gets a generated plugin
-  directory holding exactly the skills SCH approved for it, and the worker is
-  launched with `--setting-sources project` so nothing from `~/.claude` reaches
-  it. The pack lives beside the worktree, never inside your repository.
-- **A task must be GRANTED the network, and the grant is on the record.** Every
-  task carries `network: deny|allow` — `state.mjs task-set <n> --network allow` —
-  and it defaults to **deny**, so a task nobody thought about is not permitted.
-  The run's `worker.json` names the policy the worker actually ran under, what it
-  did, and which hosts were exempt. Under `deny` the worker *and its verification
-  children* get `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` aimed at a closed
-  loopback port, with `NO_PROXY` covering loopback, `.anthropic.com`,
-  `.claude.ai`, and — only when the operator's own configuration names them —
-  the `ANTHROPIC_BASE_URL` host, `.amazonaws.com` (Bedrock) or `.googleapis.com`
-  (Vertex). **This stops clients that honour proxy environment variables — curl,
-  wget, git-over-http, npm, pip — and stops nothing else.** It is a speed bump
-  and a declaration, not a boundary; read the matching entry below before relying
-  on it. If your model endpoint is not on that exempt list, the run cannot reach
-  its model: set `--network allow` for that task.
-- **A worker cannot invoke a built-in that schedules work or edits your config.**
-  `schedule`, `loop`, `init`, `update-config`, `fewer-permission-prompts` and
-  `run` are denied by argv; a built-in a future CLI ships that nobody has
-  classified is denied too.
-
-- **Independent tasks can run concurrently; tasks sharing files cannot.** With
-  `--max-parallel N` the scheduler runs up to N ready tasks at once. Two tasks
-  whose `allowedPaths` overlap are never in flight together — claiming a task
-  makes it own its paths, which makes everything overlapping un-ready. The
-  default is 1, and at 1 the behaviour is what it always was.
-- **A task starts from its dependencies' work.** A dependent task's worktree is
-  branched from the default branch and then merged with each delivered
-  dependency's branch, in task-id order, before any worker starts. A conflict
-  stops the task at `DEPENDENCY_MERGE_CONFLICT` before a model is ever invoked.
-- **A stop reaches the workers that are already running.** Running out of time,
-  losing the scheduler lease or blowing a budget cancels every live run and
-  leaves no task pretending to be RUNNING.
-
-**Where the checkouts live, and what removes them.** The default root is
-`%LOCALAPPDATA%\sch-loop\worktrees` on Windows and
-`${XDG_STATE_HOME:-$HOME/.local/state}/sch-loop/worktrees` elsewhere.
-`SCH_WORKTREE_ROOT`, if set to an absolute path, moves it — useful for a shorter
-path on Windows or a different disk. It is a **process-wide** environment
-variable, not a per-project setting: every project the process schedules uses
-that one root. A checkout is removed on `DELIVERED` and on `CANCELLED`, and kept
-on `FAILED` because a failed tree is the evidence. **Cancelling a running task
-force-removes its checkout** — `run-cancel --run <RUN-id>` ends the run as
-`CANCELLED`, and the scheduler then runs `git worktree remove --force` on it, so
-whatever that worker had written and not committed is destroyed. Read the tree
-first if you might want it. The `sch/task-<n>` branch survives either way; it is
-the checkout, not the branch, that is disposable.
-
-**Still NOT true.** Each of these is a real gap, and the first is asserted as a
-known gap in `tests/containment.test.mjs` so that the day it closes, a test fails
-and says so:
-
-- **A write outside the worktree is not PREVENTED — but writes into SCH's own
-  territory are now detected.** The main repository and every other task's
-  checkout are fingerprinted before and after each run; a change there fails
-  the run as `OUTSIDE_WORKTREE_WRITE` with the evidence kept. Writes anywhere
-  else — your home directory, another project, `/etc` — remain invisible, and
-  a writer that restores both a file's size and its modification time is not
-  detected either. Only an OS boundary fixes those.
-- **Workers are not OS-sandboxed, and cannot be from here.** They run as your
-  user, with your file access and your network. This was investigated rather
-  than assumed, and the finding is a negative one recorded in
-  [ADR 0009](docs/adr/0009-os-confinement-what-node-cannot-reach.md): with no
-  new dependencies, no native module and no Administrator rights, **Node cannot
-  reach a single OS mechanism that would confine a worker.** Job-object limits
-  have no binding and are a resource governor rather than a boundary anyway;
-  `runas /trustlevel` does produce a restricted token but returns in 138 ms
-  without the child's stdout, exit code or a killable handle; an `icacls` DENY
-  ACE against your own account is removed by that same account in one command;
-  Node exposes no `setrlimit`. **A real boundary needs a container, a second
-  user account, or a native module** — all three priced and deferred in ADR
-  0004. Two things are true and narrower than "your PATH": only **absolute**
-  PATH entries reach a worker or a verification command, so a worker cannot turn
-  a file it wrote into something SCH's next command runs by name; and on Windows
-  a worker that does not deliberately detach **dies when SCH dies**, because
-  libuv puts it in a kill-on-close Job Object.
-- **Parallelism multiplies uncontained workers.** N workers means N processes
-  with N processes' worth of `deny`-policy holes: a proxy variable a client
-  ignores, a raw socket, `ssh`, a DNS query. Every containment caveat here
-  applies N times over, so raise `--max-parallel` deliberately.
-- **SCH merges dependency branches automatically.** This is the one merge it
-  performs, into a disposable per-task checkout, refusing anything that does not
-  apply cleanly. Nothing is ever merged into your branches on your behalf.
-- **Denied built-in skills still appear in the worker's skill listing.** Denial
-  blocks invocation, not listing, so the six denied names (plus any unclassified
-  new built-in, which is also denied) remain as context cost. No flag removes
-  them without removing the pack as well.
-- **A skill that needs its own scripts cannot be packed.** Only `SKILL.md` and
-  its supporting documents are carried; hooks, scripts and nested plugin
-  manifests are refused and recorded in the pack's refusals.
-- **Network access is not PREVENTED, and no connection is detected.** The `deny`
-  policy above is proxy environment variables and nothing more. A raw socket,
-  `ssh`, a DNS query, or any client that ignores those variables — Node's own
-  `fetch` did, through v22 — reaches the internet exactly as it did before, and a
-  worker that can write three lines of JavaScript has one. The model endpoint is
-  exempt by construction, because the worker *is* an HTTP client to it, so at
-  least one route out stays open by design. SCH records which policy the run was
-  given; it never sees a packet, so "did this worker phone home?" remains
-  unanswerable. Restricting this needs an OS boundary — Windows Firewall wants
-  elevation, `unshare -n`/nftables want root, `sandbox-exec` is deprecated and
-  macOS-only — and SCH has none of them. Read `network deny is proxy variables
-  and nothing else` in `tests/containment.test.mjs`: it asserts the mechanism sets
-  proxy variables and *only* proxy variables, so the day this grows into real
-  prevention, that test fails and says so.
-- **A process that detaches into a new session survives the tree-kill.**
-- **The credential strip removes the *ambient* helper only.** A worker that
-  deliberately re-adds one — `git -c credential.helper=manager`, or `git config
-  --local` — is not stopped. SCH inspects the repository afterwards and fails the
-  run on `FORBIDDEN_GIT_EFFECT` for what left a trace there. That is detection
-  after the fact, not prevention.
-- **All projects share one worktree root**, so a worker that walks up two levels
-  can see other projects' worktrees.
-- **Therefore: fully unattended operation is still not supported.** This
-  milestone narrows the blast radius; it is not isolation. Run the queue where
-  you can see it, keep delivery approval on, and treat every task's path policy
-  as a policy rather than a boundary. **An authenticated control plane and a
-  supervisor daemon inherit every caveat above.**
-
-## 🏭 Reusable workflows, roles, observability and governed external skills
-
-```bash
-node scripts/state.mjs workflow-template-list                    # the 9 templates
-node scripts/state.mjs task-set <n> --project <id> --workflow PLAN_BUILD_TEST
-node scripts/state.mjs role-resolve --project <id> --role builder --task <n>
-node scripts/state.mjs workflow-trace --project <id> --task <n>  # every phase + actor lane
-node scripts/state.mjs usage-show --project <id>                 # UNKNOWN stays UNKNOWN
-node scripts/sch-test.mjs                                        # one full suite, under a lease
-```
-
-**Workflow templates.** The scheduler used to run one workflow, hardcoded twice —
-a 16-entry array *and* sixteen hand-written call sites, so editing the array
-changed nothing. There are now nine versioned templates: `SCOUT`, `PLAN_ONLY`,
-`BUILD_ONLY`, `PLAN_BUILD`, `PLAN_BUILD_TEST`, `BUILD_REVIEW`, `FULL_SDLC`,
-`SECURITY_REVIEW`, `DOCUMENTATION_ONLY`. Selection precedence is **task override
-→ task-type project policy → project default → system default**, and the choice
-is recorded on the task with the exact template id, version and hash.
-
-A template is **data validated against closed registries**. It names a handler
-id, never a module path; an unknown handler, role, gate or envelope fails closed.
-A template **cannot** grant a tool, widen a write scope or weaken a task's path
-policy — attempting it is a validation failure, not a silently dropped field.
-Changing a template invalidates template-bound approvals on unfinished tasks.
-
-> **The default is `FULL_SDLC`, not the "safer" non-delivering template.** A
-> non-delivering default would silently stop delivering for every project that
-> already exists. That is a regression wearing safety's clothes. Delivery inside
-> `FULL_SDLC` is still gated by an approval a person gives.
-
-**Roles, models and authority are six separate things.** `scout`, `planner`,
-`builder`, `repairer`, `reviewer`, `documenter` — each a stable id with a
-version, a *logical* model profile (`economical`, `workhorse`, `high-reasoning`,
-`frontier-review`, `local-private`), a prompt template, a context policy, tools
-and a write scope. Read-only roles are enforced in code, not documented. A
-worker role's write scope is the **task's**, intersected — never the union. An
-unavailable executor or model profile **fails preflight**; fallback to a cheaper
-profile requires `modelPolicy.allow_fallback`, and fallback to another
-*provider* requires a second, separate approval. `local-private` is declared and
-deliberately unavailable, so asking for it fails rather than quietly using a
-cloud model.
-
-**A selected skill can never expand tools or write scope.** It is content, not
-authority. `roles.mjs` enforces that by intersection and records what it refused.
-
-**Prompt observability.** Every AGENT phase persists `system-prompt.txt`,
-`user-prompt.txt`, `prompt-manifest.json`, `context-manifest.json`,
-`agent-config.json` and `usage.json`. The manifest carries template/role/skill/
-procedure ids **and hashes**, included, omitted and compacted sections, character
-counts, and separate hashes for the system and user prompts. The context
-manifest carries a hash per input — metadata, never a second copy of the prompt.
-Credential-shaped values are redacted before anything is written. **Raw prompts
-are local-only:** no dashboard API exposes one, and `/api/workflow-trace` says
-`raw_prompts_available: false` in its own payload.
-
-**Usage, cost and latency — where UNKNOWN is not zero.** The Claude CLI reports
-no token counts to SCH, so `usage_status` is honestly `UNKNOWN` and every token
-and cost field is `null` with a reason attached. Character counts are recorded
-*beside* them and labelled as characters; nothing divides them by four and calls
-the result tokens. Pricing tables are versioned and dated and **ship no rates**
-this engine cannot verify — an estimate exists only where an operator configured
-one, and every cost record carries the table version that produced it.
-Aggregation sums what is known and **counts** what is not; a budget gate never
-passes on an UNKNOWN.
-
-**Selective evidence compaction.** A passing check contributes **zero** log
-characters to any prompt — one line, an artifact reference and a hash. A failing
-check contributes bounded excerpts kept from the **end** of the log, where the
-failure is, plus a classification (`TEST_FAILURE`, `LINT_FAILURE`, `TIMEOUT`,
-`UNCLASSIFIED`, …) and a sanitized argument vector. Limits are
-`0 / 4000 / 8000 / 10 checks / 1 previous attempt`, and every omission is
-recorded.
-
-**One bounded subprocess implementation.** Workers and verification commands now
-share `subprocess.mjs`: argv only (never a shell string), explicit environment,
-bounded output, timeout, cancellation, **process-tree** termination
-(`taskkill /T /F` on Windows, a process-group signal on POSIX) with cleanup
-evidence, and a bounded post-kill wait so it can never sit on a pipe forever.
-The effective timeout is the **minimum** of command, phase, task, scheduler and
-operator bounds — a large default can no longer override a smaller ceiling.
-
-**Governed external skill sources.** An external skill is somebody else's
-instructions running in your agent, with your credentials, on your code. So:
-sources are pinned to a **full 40-character commit** (a branch is a promise the
-other end can rewrite after you read it); synchronisation is an **operator**
-action a worker can never trigger; credential-bearing URLs, symlinks, path
-escapes and uninspected submodules are refused; discovery grants **no** trust; a
-static quality **PASS is not an approval**; approval binds to
-`(source commit, content hash)` and lapses when either moves; approval is
-**role-scoped with a default of nothing**; and push, deploy, scheduling and
-worktree skills are **never** eligible for a worker role. Every skill is
-inventoried (scripts, hooks, executables, network and environment references,
-git and global-config capabilities) and given an **explainable** risk level with
-its reasons, plus conflict detection against SCH's own scheduler and delivery
-controller.
-
-> The regex command guards here are **defence in depth, not a sandbox.** They
-> make the obvious dangerous thing visible to a reviewer. A determined author
-> evades them, and the answer to that is the reviewer.
-
-**Test-suite discipline.** One complete suite at a time, per repository, under a
-lease with a visible holder and safe stale recovery. A focused run is refused
-while a full suite is live. `sch-test.mjs` prints a heartbeat every 30s and
-enforces an explicit outer timeout — because a buffered, silent suite and a hung
-one look identical, and that confusion once produced a wrong diagnosis and an
-unnecessary rewrite.
-
-### Every declared semantic phase executes
-
-All six semantic handlers — `scout`, `plan`, `implement`, `repair`, `review`,
-`document` — run a **real fresh external worker** through one shared path in
-`semantic.mjs`. All nine templates execute the phases they declare, and
-`workflow-template-validate` proves it (`every_declared_phase_executable: true`).
-A template that declares an AGENT phase with no registered handler is **rejected
-at validation**, not recorded as absent at run time.
-
-The resolved role is the **execution authority**: it decides the prompt
-template, the context policy, the expected envelope, the write scope and the
-budgets, and the worker cannot widen any of them.
-
-**Read-only means caught, not prevented.** The Claude CLI gives SCH no tool
-sandbox — there is no API that stops a worker writing a file. So a read-only
-role runs with an **empty allow-list** (the prompt authorizes nothing and says
-so), and SCH inspects the repository afterwards: any change at all fails the
-phase as `ROLE_POLICY_VIOLATION`, evidence preserved, nothing reverted. That is
-enforcement after the fact, and it is named as such rather than dressed up as
-isolation.
-
-Completion is typed, so nothing claims a remote it never reached:
-`READ_ONLY_COMPLETED` (scout, security review) · `PLAN_COMPLETED` (plan only) ·
-`AWAITING_DELIVERY` (built and verified, not pushed) · `DELIVERED` (committed,
-pushed and remotely verified) · `NEEDS_DECISION` · `FAILED`.
-
-### What is still NOT wired, stated plainly
-
-- **A retry now runs the `repair` handler**, with the `repairer` role and its
-  own prompt, instead of running the builder a second time. The phase keeps
-  its id so the workflow shape does not change between attempts.
-- Role resolution is the execution authority, but only one executor exists — the
-  Claude CLI. Per-phase model routing is configuration no second executor
-  consumes yet, and the CLI does not accept a reasoning/model argument from SCH.
-- Usage is `UNKNOWN` for every real run, because nothing reports it. That is the
-  honest state, not a placeholder to be filled with zeros.
-- The scheduler still runs phases in a fixed canonical order; a template
-  chooses WHICH phases run, not the order they run in. Making order
-  template-driven means turning the execution path from a fixed sequence into
-  a driven loop, and that is its own milestone rather than a detail.
-
-## Rules that keep it safe
-- If it's not in the PRD/SCOPE or a planned task, it doesn't exist.
-- One task per pass (or a bounded parallel wave); fresh context each task.
-- Re-verify live state before every completion; secret-scan before every commit.
-- Offensive: no active tooling against an out-of-scope/unauthorized/expired target, ever.
+</div>

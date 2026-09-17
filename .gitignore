@@ -71,3 +71,4 @@ dashboard.pid
 
 # per-ticket worktrees the loop creates and removes
 .worktrees/
+SCH-LOOP-v3.3-Autonomous-Herder.zip
