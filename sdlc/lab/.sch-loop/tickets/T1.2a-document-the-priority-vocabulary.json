@@ -1,0 +1,37 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "type": "docs",
+  "title": "Document the priority vocabulary",
+  "size": "XS",
+  "deps": [
+    "T1.1"
+  ],
+  "read_first": [
+    "src/todo.mjs"
+  ],
+  "allowed_paths": [
+    "README.md"
+  ],
+  "action": "Append a short '## Todo API' section to README.md documenting add(title, priority) with the three accepted values and the default. Two or three lines, no more.",
+  "acceptance": [
+    "README.md contains a Todo API section naming low, normal and high",
+    "the default normal is stated"
+  ],
+  "must_not": [
+    "no existing README content removed"
+  ],
+  "verify": [
+    {
+      "name": "grep",
+      "command": "node",
+      "args": [
+        "-e",
+        "const t=require('fs').readFileSync('README.md','utf8');if(!/Todo API/.test(t)||!/normal/.test(t))process.exit(1)"
+      ]
+    }
+  ],
+  "slug": "document-the-priority-vocabulary",
+  "id": "T1.2a",
+  "phase": "1"
+}

@@ -1,0 +1,18 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "phase": "1",
+  "type": "human",
+  "title": "Eyeball the priority API surface",
+  "size": "XS",
+  "deps": [
+    "T1.1"
+  ],
+  "gate": "blocking-human",
+  "action": "Read src/todo.mjs and confirm the priority values low|normal|high are the ones the product wants before anything depends on them.",
+  "acceptance": [
+    "a person has confirmed the priority vocabulary"
+  ],
+  "slug": "eyeball-the-priority-api",
+  "id": "T1.3"
+}
