@@ -5,6 +5,14 @@ description: Use when a phase claims to be finished — checks the codebase actu
 
 # Verify
 
+Run it:
+
+```sh
+node .claude/sch/runtime/cli.mjs verify-phase <n>
+```
+
+Code gathers the evidence — which tickets, which files, and what the deterministic checks actually returned — and a read-only seat judges it. The seat is handed the check results; it never gets to run them and it cannot overrule a red one. The report lands at `.sch-loop/verify/phase-<n>.md`.
+
 Every ticket in the phase is `[x]`. That is task completion, not goal achievement: a ticket can complete by creating a file that renders nothing. Verify what is true in the codebase.
 
 Reports are not evidence. `.sch-loop/reports/*.md` says what the executor claimed; you check what exists.
@@ -49,6 +57,7 @@ A truth that asserts runtime behaviour (a state transition, a cleanup or orderin
 ## Outcomes
 
 - **passed** — no gaps, no human items. Route to `sch-ship`.
+- Anything unreadable, unlabelled or unfinished is **not** passed. The command exits non-zero unless the status is `passed`, so a caller cannot mistake a gap for a green.
 - **gaps_found** — turn each gap into a ticket with `sch-insert`, positioned in this phase, then `go`. One gap-closure round; a second failure is a council gate.
 - **human_needed** — `[?]`, notify, and say exactly what the person must look at and what "good" looks like.
 

@@ -6,8 +6,10 @@
 (empty — written by sch-tickets after brainstorm → prd → architecture → plan)
 
 
-## Phase 1 — Todo core   (3/4 done)
+## Phase 1 — Todo core   (3/6 done)
 - [x] T1.1-add-priority-to-todo  build  Add priority to todo items  deps:-  size:S
 - [x] T1.2-cover-remove-and-list  test  Cover remove and list isolation  deps:T1.1  size:S
 - [x] T1.2a-document-the-priority-vocabulary  docs  Document the priority vocabulary  deps:T1.1  size:XS
 - [?] T1.3-eyeball-the-priority-api  human  Eyeball the priority API surface  deps:T1.1  size:XS  gate:blocking-human
+- [?] T1.4-slow-chore-for-kill  chore  Slow chore for kill test  deps:T1.1  size:S
+- [?] T1.4a-prove-the-council-convenes  build  Prove the council convenes  deps:-  size:S

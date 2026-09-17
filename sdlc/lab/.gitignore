@@ -9,13 +9,17 @@ node_modules/
 .env.*
 *.log
 
-# Engine snapshot: a local copy of the SCH-LOOP runtime, refreshed by sch-setup.
-# Not committed — the repository root is the engine's home, and a second copy in
-# git would drift. The executor's worktree does not need it (it runs verify
-# commands and hooks, never the skills).
+# Engine snapshot: a working copy of ../engine/. Not committed — ../engine/ is the
+# tracked source of truth and a second copy in git would drift. Refresh with
+#   cp -r ../engine/runtime ../engine/scripts .claude/sch/
+# and never the other way: edits made here are invisible to git.
 .claude/sch/
 
 # Engine run state and the lessons log: regenerated on every run.
 .sch-loop/runs/
 .sch-loop/learning/
 .sch-loop/workflow.json
+
+# Other agents' scratch state that lands in a project directory.
+.omo/
+.codegraph/
