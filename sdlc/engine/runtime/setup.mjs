@@ -126,6 +126,13 @@ task_file: task.md
 roles_file: .sch-loop/roles.json
 engine: .claude/sch
 transport: herdr
+# Where an out-of-band nudge goes: a herdr agent or pane id, as "herdr agent list" prints.
+# SCH_ORCHESTRATOR_AGENT overrides it. Unset is fine: every notification is written to
+# .sch-loop/notifications.jsonl regardless, and "cli.mjs notifications" reads them back.
+orchestrator_agent:
+# true when someone is watching a pane rather than the log: an undelivered notification
+# then becomes a recorded error and a line on stderr instead of silence.
+notify_required: false
 executor_permission: bypass
 max_code_executors: 1
 max_executor_attempts: 3
