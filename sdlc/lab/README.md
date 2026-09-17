@@ -39,7 +39,7 @@ Then, in the orchestrator terminal inside this folder: `go`.
 | 3 | A ticket inserted mid-run (`T1.2a`) is picked before `T1.3` | met — queue order verified |
 | 4 | One ticket forced red reaches `[!]`, the council convenes, its verdict re-dispatches it | met — T1.4a: `[!]` → 3 seats (one absent) → 7.6k verdict → re-dispatched carrying it |
 | 5 | Reviewer and judge never write a file (hooks + `--disallowedTools` both hold) | met — a real reviewer seat in bypass mode answered "CANNOT — write was denied" |
-| 6 | Phase verify passes goal-backward; `sch-ship` opens a PR into this lab | IN PROGRESS — engine built, live run pending |
+| 6 | Phase verify passes goal-backward; `sch-ship` opens a PR into this lab | met — phase 2 verified 7/7 truths, `ship 2` opened PR #1 |
 | 7 | Executor killed mid-ticket → respawn with the failure note, `attempt` increments once | met — `.sch-loop/evidence/criterion-7-kill-recovery.json` |
 
 Evidence for each lives in `.sch-loop/evidence/` and `.sch-loop/events.jsonl`.
