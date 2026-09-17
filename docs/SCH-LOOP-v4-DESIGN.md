@@ -601,6 +601,26 @@ the CLI's own system prompt plus the skill descriptions, and the three `CLAUDE.m
 only 8.3KB of it. Nothing here needs trimming; the right move is to leave it alone and spend the headroom
 on the work.
 
+### 7.0.1 The front half, and why it is code at all
+
+The four stages are model work: brainstorm, PRD, architecture and plan are judgement, and the judgement
+lives in the skill files where it can be edited. What is code is everything around it — which stage may
+run next, what it is allowed to read, whether what came back is substantive, and when the project may
+move on. The skill body IS the prompt, so the engine never grows a second, quietly diverging copy of the
+same guidance.
+
+Stage seats are **read-only**. They return the document on stdout and the engine writes the file. A stage
+able to write its own artifact could write anything else in the project, and there is no reason to hand
+out that power in exchange for a markdown file.
+
+A stage is complete when its artifact is *substantive*, not when it exists — the PRD needs requirement
+IDs in the `CAT-NN` form its own skill teaches, the architecture needs a mermaid diagram, the plan needs
+`## Phase N` headings. This is level 2 of goal-backward verification applied to the specification itself.
+
+`plan-to-tickets` is the one stage whose output is data. Every proposed ticket is validated as it is
+written and a rejection is named, because a requirement that falls out at that seam is invisible
+everywhere else.
+
 ### 7.1 What the engine actually grew
 
 Built in `sdlc/lab/.claude/sch/runtime/`, each with its own test file:
@@ -621,6 +641,10 @@ Built in `sdlc/lab/.claude/sch/runtime/`, each with its own test file:
 | `council.mjs` | proposal → critique → rebuttal → challenge → synthesis, tolerant of an absent seat |
 | `verify-phase.mjs` | goal-backward phase verification; code gathers evidence, a read-only seat judges it |
 | `ship.mjs` | the release gates and the pull request, first NO-GO stops everything |
+| `stages.mjs` | the front half: brainstorm → PRD → architecture → plan, then plan → queue |
+| `notify.mjs` | the durable notification log; Herdr is a second sink on top of it |
+| `setup.mjs` | onboarding: install the engine, both fences and the skills, then prove it runs |
+| `dashboard.mjs` | the Roles page — which CLI, which model, which flags, per seat |
 
 The rule that shaped all of it: **code decides, models advise.** Every verdict a model returns is evidence
 for a decision made in JavaScript, and no model is ever asked whether its own work passed.

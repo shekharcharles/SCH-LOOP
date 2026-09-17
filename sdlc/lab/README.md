@@ -34,8 +34,8 @@ Then, in the orchestrator terminal inside this folder: `go`.
 
 | # | Criterion | Evidence |
 |---|---|---|
-| 1 | `go` routes brainstorm → PRD → architecture → plan → tickets without anyone naming a skill | **NOT MET** — never run. `lifecycle_stage` is still `BRAINSTORM`, there is no `BRAINSTORM.md`/`PRD.md`/`ARCHITECTURE.md`, and every ticket here was written by hand as a spec file |
-| 2 | Three ticket types run: `build`, `test`, `human` (the human one spawns no executor) | partly — T1.1, T1.2, T1.3 all ran correctly, but as subprocesses of one terminal. No Herdr pane was ever opened |
+| 1 | `go` routes brainstorm → PRD → architecture → plan → tickets without anyone naming a skill | met — proven on a fresh project, not here: one sentence of goal produced 48k characters of brainstorm, PRD, architecture and plan, then the ticket queue. `cli.mjs stages` / `stage <id>` / `plan-to-tickets` |
+| 2 | Three ticket types run: `build`, `test`, `human` (the human one spawns no executor) | met — T1.1, T1.2, T1.3. Herdr is separately proven: a real pane received a notification |
 | 3 | A ticket inserted mid-run (`T1.2a`) is picked before `T1.3` | met — queue order verified |
 | 4 | One ticket forced red reaches `[!]`, the council convenes, its verdict re-dispatches it | met — T1.4a: `[!]` → 3 seats (one absent) → 7.6k verdict → re-dispatched carrying it |
 | 5 | Reviewer and judge never write a file (hooks + `--disallowedTools` both hold) | met — a real reviewer seat in bypass mode answered "CANNOT — write was denied" |
@@ -44,24 +44,27 @@ Then, in the orchestrator terminal inside this folder: `go`.
 
 Evidence for each lives in `.sch-loop/evidence/` and `.sch-loop/events.jsonl`.
 
-### Not proven, and honest about it
+### Still not proven
 
-The per-ticket loop is real. The things around it are not yet.
+- **One language, one runtime.** Two projects now, but both Node with `npm test`: no build step, no
+  dependencies to install, no compiled language. Every timeout and prompt is tuned against that shape.
+- **A package install has never been needed.** `destructive-bash` makes one a `human` ticket by design,
+  which is right, but that path has not been walked end to end.
+- **The council has convened once.** Three seats, one of them absent. Its cost and its failure modes
+  rest on a single sample.
 
-- **The front half of the lifecycle has never run.** Brainstorm, PRD, architecture and plan exist as
-  skills. No run has produced any of their artifacts. Every ticket in this lab was a hand-written spec.
-- **Herdr has never been used.** `notifyOrchestrator` returns `{skipped: true}` when
-  `SCH_ORCHESTRATOR_AGENT` is unset, and it was unset for every run here — so every notification this
-  lab ever "sent" was a silent no-op. The orchestrator/executor-pane split is designed, not exercised.
-- **`sch-setup` has never onboarded a project.** This lab's `CLAUDE.md` carries no managed block; it
-  was written by hand. Setup has unit tests and no live run.
-- **There is no dashboard.** `roles.json` makes models, flags and seats configurable — which was the
-  point — but choosing them is still editing JSON.
-- **One project, one language, one trivial shape.** A zero-dependency Node package with `npm test`. No
-  build step, no compile errors, no dependencies, no framework. Every timeout and every prompt is tuned
-  against that.
-- **The engine exists twice.** `../engine/` is tracked, `.claude/sch/` is the working copy, and they are
-  kept in step by hand with `cp`. Nothing enforces it.
+### Settled since
+
+- The front half runs. `.sch-loop/{BRAINSTORM,PRD,ARCHITECTURE,PLAN}.md` are produced by
+  `cli.mjs stage <id>`, each validated for substance rather than existence, and `plan-to-tickets` turns
+  the plan into the queue with every ticket validated as it is written.
+- Herdr delivers. A real pane received a notification, and every notification is also written to
+  `.sch-loop/notifications.jsonl` so it survives whether or not a transport exists.
+- `sch-setup` installs a project that runs: engine, both fences, skills, and a self-check that exits
+  non-zero if any of it is missing.
+- The roles dashboard exists: `cli.mjs dashboard`, one loopback page, one file written.
+- The engine lives once, in `../engine/`. Everything under this lab's `.claude/` is installed from it
+  and gitignored.
 
 ## The recovery ladder
 
