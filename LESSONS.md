@@ -75,3 +75,5 @@
 - A span given `height` in CSS silently ignored it because an inline box has no height, so a meter and a skeleton rendered empty without any error → when styling a generic element with a box property, set its `display` in the same rule.
 - A class that sets `display:` overrode the user agent's `[hidden]{display:none}`, so an element the code hid stayed on screen → any class with a `display` rule that is also toggled by the `hidden` attribute needs its own `[hidden]{display:none}`.
 - A duration formatter rounded minutes after extracting hours and printed "5h60" → round to the smallest displayed unit first, then carry, never after splitting.
+- A markdown renderer matched bold before looking inside it, so a bold list item printed the backticks of the code spans it contained → an inline renderer must parse the inner text of every wrapper it matches, not insert it as plain text.
+- A local server grew a "read any file" endpoint, which is the operator's whole disk one `../` away → resolve through realpath, assert the result is inside the root, and refuse credential-shaped names before any of that.
