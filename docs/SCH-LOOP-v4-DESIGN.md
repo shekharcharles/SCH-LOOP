@@ -563,6 +563,22 @@ Home engine (`~/.claude/SCH-loop`): `skills-v1-retired/` → delete after v4 lan
 
 Total ≈ 5 working days. Steps 3–5 are the loop; everything else is prose.
 
+### 7.0 Measured, from the lab's live runs
+
+| | |
+|---|---|
+| Cost per ticket | ~$0.40 (build + judge + independent review) |
+| Context the executor starts with | 137k–143k tokens, every ticket |
+| A gated council, 3 seats | ~7 minutes, 11 model calls, one 7.6k-word verdict |
+| Ticket wall-clock | 2 to 5 minutes for an XS/S ticket, 2 attempts typical |
+
+The context number matters more than the money. §3.7 sets a 100k soft and 130k hard ceiling before an
+executor may be chained to the next ticket — and **the first call of every ticket already exceeds it**.
+The project's `CLAUDE.md`, the skills and the MCP servers are loaded before the ticket is even read. So
+the "fresh process per ticket" rule is not a tuning choice in this environment, it is the only option,
+and any future chaining work has to start by measuring what is in that baseline rather than by raising
+the threshold.
+
 ### 7.1 What the engine actually grew
 
 Built in `sdlc/lab/.claude/sch/runtime/`, each with its own test file:

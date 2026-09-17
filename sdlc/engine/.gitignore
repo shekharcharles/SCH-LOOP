@@ -1,0 +1,4 @@
+# Running the suite from here makes the engine its own project root, so the runtime writes its normal
+# run state next to the code. It is regenerated on every run and belongs to nobody.
+.sch-loop/
+node_modules/

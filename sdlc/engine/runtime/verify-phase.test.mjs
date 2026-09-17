@@ -88,12 +88,33 @@ test("a truth with a made-up status is not silently treated as verified", () => 
 });
 
 test("the goal comes from PLAN.md when it is there, and says so when it is not", () => {
-  const withPlan = proj(TASK, "# Plan\n\n## Phase 1 — Todo core\nA user can set and read a priority on any todo.\n\n## Phase 2 — Later\nnope\n");
-  const g = phaseGoal(withPlan, "1");
-  assert.match(g.goal, /A user can set and read a priority/);
-  assert.doesNotMatch(g.goal, /nope/, "the next phase's goal does not bleed in");
-  assert.equal(g.source, ".sch-loop/PLAN.md");
+  // A real goal runs to more than one line, and the LAST phase in the file has no `## ` after it. Both
+  // were needed to catch an end-of-input anchor that `$` under the `m` flag had turned into end-of-line:
+  // the match failed, the fallback quietly returned the task.md heading, and the old one-line fixture
+  // could not tell the difference.
+  const PLAN = [
+    "# Plan", "",
+    "## Phase 1 — Todo core",
+    "A user can set and read a priority on any todo,",
+    "and it survives complete() and remove().", "",
+    "## Phase 2 — Filtering",
+    "A user who only cares about one priority can ask",
+    "for exactly those items.", "",
+  ].join("\n");
+  const withPlan = proj(TASK, PLAN);
+
+  const first = phaseGoal(withPlan, "1");
+  assert.equal(first.source, ".sch-loop/PLAN.md");
+  assert.match(first.goal, /A user can set and read a priority/);
+  assert.match(first.goal, /survives complete\(\) and remove\(\)/, "the goal is not truncated at the first line");
+  assert.doesNotMatch(first.goal, /Filtering|only cares/, "the next phase's goal does not bleed in");
+
+  const last = phaseGoal(withPlan, "2");
+  assert.equal(last.source, ".sch-loop/PLAN.md", "the last phase in the file is still found");
+  assert.match(last.goal, /for exactly those items/, "and is still read to the end");
+
   assert.match(phaseGoal(proj(), "1").source, /no PLAN\.md/);
+  assert.match(phaseGoal(withPlan, "9").source, /no PLAN\.md/, "a phase the plan does not mention falls back");
 });
 
 test("the prompt hands the verifier the check results rather than letting it run them", () => {

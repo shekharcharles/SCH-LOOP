@@ -5,7 +5,7 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { loadRoles, resolveSpawn, isBypass, isReadOnly } from "./roles.mjs";
 import { checkFences } from "./fences.mjs";
-import { ensureTicketWorktree, mergeTicket, commitFiles, changedInWorktree, removeTicketWorktree } from "./worktrees.mjs";
+import { ensureTicketWorktree, mergeTicket, commitFiles, commitBookkeeping, changedInWorktree, removeTicketWorktree } from "./worktrees.mjs";
 import { loadTicket, ticketToBuildSpec } from "./tickets.mjs";
 import { runSelfCorrectingTask } from "./self-correct.mjs";
 import { runReview, reviewToMarkdown } from "./review.mjs";
@@ -178,6 +178,12 @@ export async function buildTicket({ projectRoot, id, dryRun = false, onEvent, ro
       ...(last.error ? [last.error] : []),
     ],
   });
+  // Record the loop's own trail last, so the report and the final task.md glyph are inside the commit.
+  // A failure here is logged and never changes the ticket's verdict: the code is already merged, and
+  // turning a delivered ticket red because its paperwork would not commit helps nobody.
+  const book = commitBookkeeping({ cwd: projectRoot, message: `chore(${t.id}): queue, report and ticket state` });
+  if (!book.ok && !book.empty) appendEvent(projectRoot, { type: "ticket.bookkeeping_failed", id: t.id, error: book.error });
+
   appendEvent(projectRoot, { type: passed ? "ticket.done" : "ticket.blocked", id: t.id, attempts: state.attempts?.length ?? 0, ms: Date.now() - started });
   await notifyOrchestrator(passed ? `SCH ✓ ${t.id} done — ${t.title}` : `SCH ! ${t.id} blocked after ${state.attempts?.length ?? 0} attempts — see .sch-loop/reports/${t.id}.md`);
   return { decision: passed ? "PASS" : "HUMAN", report: env, state, review, merged };

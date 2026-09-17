@@ -33,7 +33,10 @@ export function phaseGoal(projectRoot, phase) {
   const f = path.join(projectRoot, ".sch-loop", "PLAN.md");
   if (fs.existsSync(f)) {
     const text = fs.readFileSync(f, "utf8");
-    const re = new RegExp(`^##+\\s*Phase\\s+${String(phase).replace(".", "\\.")}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)`, "m");
+    // `$` is end-of-LINE under the `m` flag that `^` needs, so this lookahead fired on the line break
+    // right after the heading and every goal came back empty — the fallback then quietly reported the
+    // heading as the goal. `(?![\s\S])` is end of input whatever the flags say.
+    const re = new RegExp(`^##+\\s*Phase\\s+${String(phase).replace(".", "\\.")}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|(?![\\s\\S]))`, "m");
     const m = text.match(re);
     const body = m?.[1]?.trim();
     if (body) return { goal: body.split("\n").filter(l => l.trim() && !l.startsWith("|")).slice(0, 6).join("\n"), source: ".sch-loop/PLAN.md" };

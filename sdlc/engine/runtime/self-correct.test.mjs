@@ -71,3 +71,13 @@ test("decideManager spends attempts before it spends the human", () => {
   assert.equal(decideManager({ ...red, attempt: 3 }), "HUMAN");
   assert.equal(decideManager({ verificationPassed: true, judgeVerdict: "PASS", attempt: 1, maxAttempts: 3 }), "PASS");
 });
+
+test("the FILES CHANGED contract the builder is given matches the frame the gate checks", async () => {
+  // `workspaceEvidence` passes `--relative`, so git answers in PROJECT-relative paths. The prompt used
+  // to say "repository-relative", and every ticket spent its first attempt discovering the difference.
+  const { builderPrompt } = await import("./self-correct.mjs");
+  const p = builderPrompt({ ticket: "T1.1", requirements: "x", lessons: [], priorRejection: "", passingRequirements: [] });
+  assert.match(p, /RELATIVE TO YOUR WORKING DIRECTORY/);
+  assert.doesNotMatch(p, /repository-relative/, "the old wording contradicted the gate");
+  assert.match(p, /src\/todo\.mjs/, "the prompt shows the shape it wants");
+});

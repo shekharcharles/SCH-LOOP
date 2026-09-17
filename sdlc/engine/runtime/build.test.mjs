@@ -7,6 +7,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { buildTicket, timeoutFor } from "./build.mjs";
 import { writeTicket } from "./tickets.mjs";
+import { commitBookkeeping } from "./worktrees.mjs";
 
 const HOOKS = ["write-guard.mjs", "destructive-bash.mjs"];
 
@@ -162,4 +163,26 @@ test("a reviewer that can write is refused outright", async () => {
   const t = ticket(proj, { title: "Bad reviewer" });
   const spec = { executor: { spawn: BYPASS }, reviewer: { spawn: BYPASS }, judge: { spawn: READ_ONLY }, council: [] };
   await assert.rejects(() => buildTicket({ projectRoot: proj, id: t.id, roles: spec }), /reviewer must be tool-restricted read-only/);
+});
+
+test("commitBookkeeping records the loop's own trail and reports an empty run honestly", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-book-"));
+  const git = (...a) => execFileSync("git", a, { cwd: root, encoding: "utf8", windowsHide: true });
+  git("init", "-q", "-b", "main");
+  git("config", "user.email", "lab@example.invalid");
+  git("config", "user.name", "lab");
+  fs.mkdirSync(path.join(root, ".sch-loop", "reports"), { recursive: true });
+  fs.writeFileSync(path.join(root, "task.md"), "# task.md\n");
+  fs.writeFileSync(path.join(root, ".sch-loop", "reports", "T1.1.json"), "{}\n");
+  fs.writeFileSync(path.join(root, "src.mjs"), "// code, not bookkeeping\n");
+
+  const first = commitBookkeeping({ cwd: root, message: "chore(T1.1): queue and report" });
+  assert.equal(first.ok, true, first.error);
+  assert.deepEqual(first.files.sort(), [".sch-loop/reports/T1.1.json", "task.md"]);
+  assert.equal(execFileSync("git", ["status", "--porcelain", "-uall"], { cwd: root, encoding: "utf8" }).trim(), "?? src.mjs",
+    "application code is left for the ticket's own commit");
+
+  const second = commitBookkeeping({ cwd: root, message: "chore: nothing changed" });
+  assert.equal(second.ok, false);
+  assert.equal(second.empty, true, "a run with no bookkeeping changes is empty, not failed");
 });

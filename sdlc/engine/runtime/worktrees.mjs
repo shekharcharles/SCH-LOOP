@@ -92,6 +92,22 @@ function statusPath(line) {
   return body.split(" -> ").pop();
 }
 
+// The loop's own paper trail: the queue, the ticket JSONs, the reports, the verification and release
+// records. It is tracked, it changes on every ticket, and until it is committed the working tree is never
+// clean — which meant `ship` could refuse a project whose only uncommitted change was the loop's own
+// bookkeeping. Anything gitignored (runs/, evidence/, events.jsonl) simply does not appear.
+// Returns `{ok:false, empty:true}` when there was nothing to record, which is not a failure.
+export function commitBookkeeping({ cwd, message }) {
+  const paths = ["task.md", ".sch-loop"];
+  const staged = [];
+  for (const p of paths) { const r = tryGit(cwd, "add", "--", p); if (r.ok) staged.push(p); }
+  if (!staged.length) return { ok: false, error: "nothing could be staged" };
+  const pending = git(cwd, "diff", "--cached", "--name-only", "--", ...staged).trim();
+  if (!pending) return { ok: false, empty: true, error: "no bookkeeping changes to record" };
+  const r = tryGit(cwd, "commit", "-m", message);
+  return r.ok ? { ok: true, head: git(cwd, "rev-parse", "HEAD"), files: pending.split("\n") } : { ok: false, error: r.out };
+}
+
 // Stage exactly the given files in a worktree and commit. Never `git add -A`.
 export function commitFiles({ cwd, files, message }) {
   if (!files.length) return { ok: false, error: "no files to commit" };
