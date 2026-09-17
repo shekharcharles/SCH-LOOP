@@ -88,7 +88,7 @@ failed the attempt and the retry dropped it.
 
 | Tier | Trigger | What happens | Where |
 |---|---|---|---|
-| 0 | no output | nudge | `spawn.mjs` silence watch |
+| 0 | no output | nudge | `spawn.mjs` silence watch, clamped below the hard timeout so it can fire |
 | 1 | crash, timeout, loop | `attempt++`, respawn fresh with the failure note | `self-correct.mjs` |
 | 2 | rate limit, overloaded | back off 1→2→4→8 min, attempt unchanged | `watchdog.mjs` |
 | 3 | attempts exhausted | `[!]`, council convenes, re-dispatch ONCE with its verdict | `escalate.mjs` |
