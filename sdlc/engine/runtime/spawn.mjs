@@ -90,8 +90,30 @@ export async function runRole({ exe, args = [], cwd, prompt, env = process.env, 
   });
 }
 
-// "context size" the way the executor experiences it: everything the last call had to read.
+// Peak context-window occupancy: the largest single turn, not the session total.
+//
+// The obvious version of this — summing the top-level input + cache_read + cache_creation — is what this
+// used to do, and it is wrong in a way that looks plausible. In an agentic session the API reports
+// `cache_read_input_tokens` CUMULATIVELY: the same cached prefix is counted once per turn. A ticket whose
+// window never exceeded 52k reported 547k, and one that took fewer turns reported 99k for the same amount
+// of real work. Measured across every ticket the lab has run, the two numbers have no relationship:
+//
+//   reported by the old sum   99k – 547k, tracking turn COUNT
+//   actual peak window        44k –  52k, tracking the work
+//
+// The §3.7 context policy compares against this number, so as written the gate was reading a billing
+// total and calling it window pressure. `usage.iterations[]` carries the per-message figures; the top
+// level is only correct when there was a single turn.
 export function contextTokens(usage) {
+  if (!usage) return null;
+  const turn = u => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  const its = Array.isArray(usage.iterations) ? usage.iterations : [];
+  return its.length ? Math.max(...its.map(turn)) : turn(usage);
+}
+
+// What the session cost to run, which is a different question from what it had to hold at once. Kept
+// separate and named for what it is, so neither is ever quietly used for the other.
+export function sessionTokens(usage) {
   if (!usage) return null;
   return (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
 }

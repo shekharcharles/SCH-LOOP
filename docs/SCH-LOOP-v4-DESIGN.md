@@ -568,16 +568,38 @@ Total ≈ 5 working days. Steps 3–5 are the loop; everything else is prose.
 | | |
 |---|---|
 | Cost per ticket | ~$0.40 (build + judge + independent review) |
-| Context the executor starts with | 137k–143k tokens, every ticket |
+| Baseline context, fresh process, before it reads a ticket | 43.7k tokens |
+| Peak context window during a ticket | 44k–52k, every ticket, never above 53k |
+| Headroom against a 200k window | ~75% unused |
 | A gated council, 3 seats | ~7 minutes, 11 model calls, one 7.6k-word verdict |
 | Ticket wall-clock | 2 to 5 minutes for an XS/S ticket, 2 attempts typical |
 
-The context number matters more than the money. §3.7 sets a 100k soft and 130k hard ceiling before an
-executor may be chained to the next ticket — and **the first call of every ticket already exceeds it**.
-The project's `CLAUDE.md`, the skills and the MCP servers are loaded before the ticket is even read. So
-the "fresh process per ticket" rule is not a tuning choice in this environment, it is the only option,
-and any future chaining work has to start by measuring what is in that baseline rather than by raising
-the threshold.
+**There is no context problem, and the metric that said there was one was broken.**
+
+An earlier draft of this section claimed the executor's first call already sat at 137k–143k, above the
+130k ceiling §3.7 sets for chaining. That was read off `contextTokens()`, which summed the top-level
+`input + cache_read + cache_creation` from the session result. In an agentic session the API reports
+`cache_read_input_tokens` CUMULATIVELY — the same cached prefix counted once per turn — so the number
+tracked how many turns a session took, not how much it had to hold at once. Across the lab's tickets it
+ranged 99k to 547k while the real peak window never moved out of the 44k–52k band.
+
+`contextTokens()` now takes the largest single turn from `usage.iterations[]`. The session total is still
+recorded, under `session_tokens`, named for what it is. The §3.7 thresholds are meaningful again, and on
+this evidence they are nowhere near being hit.
+
+What the 43.7k baseline is actually made of, measured by stripping one thing at a time:
+
+| Configuration | Baseline |
+|---|---|
+| as the executor runs today | 43,685 |
+| no MCP servers (`--strict-mcp-config`) | 42,115 |
+| read-only tools (reviewer seat) | 42,965 |
+| read-only and no MCP | 41,007 |
+
+MCP costs 1.6k and the tool restriction saves 0.7k, so neither is worth optimising. The remaining ~41k is
+the CLI's own system prompt plus the skill descriptions, and the three `CLAUDE.md` files together are
+only 8.3KB of it. Nothing here needs trimming; the right move is to leave it alone and spend the headroom
+on the work.
 
 ### 7.1 What the engine actually grew
 
