@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -248,9 +249,12 @@ function cliProfile(provider){ return CLI_PROFILES.find(x=>x.id===provider.id.re
 //: every 5.6 variant of Codex. Operators can add any model through the dashboard, and those are stored
 //: per provider in prefs and merged in below, so this list is a convenience and never a limit.
 const CLI_MODELS = {
-  //: VERIFIED by invoking each one, not copied from anywhere. `gpt-5.6` is deliberately absent: it
-  //: returns 400 invalid_request_error on this account. `luna`/`sol`/`terra` are absent too — those are
-  //: models on the LiteLLM proxy, and I had wrongly carried them across to the Codex CLI.
+  //: VERIFIED by invoking each one, not copied from anywhere.
+  //: Codex is a seed of last resort now: it ships its own `~/.codex/models_cache.json`, which is read
+  //: live below. The hand-written list had dropped `luna`/`sol`/`terra` as "LiteLLM proxy models
+  //: wrongly carried across" — and the user's own codex config was set to `gpt-5.6-terra` at the time,
+  //: so the list was excluding the one model actually in use. A written-down list of someone else's
+  //: models is wrong the day they ship one; read theirs when they keep one.
   claude:   ["opus", "sonnet", "haiku", "fable"],
   codex:    ["gpt-5.5", "gpt-5.4-mini"],
   gemini:   ["gemini-3.5-pro", "gemini-3.1-pro", "gemini-3-flash"],
@@ -264,6 +268,17 @@ async function cliModels(provider){
   const out = [{id:"cli-default", label:`${provider.label} default`}];
   // OpenCode fronts a model proxy, so ask it rather than guessing. Failure is not fatal: the caller
   // still gets cli-default, which is what the previous behaviour returned in every case.
+  // Codex keeps its own catalogue on disk and refreshes it itself. Reading that is always more correct
+  // than anything written here, and it is where a newly shipped model appears first.
+  if(key === "codex"){
+    try{
+      const raw = await readJson(path.join(os.homedir(), ".codex", "models_cache.json"), null);
+      for(const m of (raw?.models || [])){
+        if(!m?.slug) continue;
+        out.push({ id: m.slug, label: m.display_name || m.slug });
+      }
+    }catch{ /* fall through to the seed list */ }
+  }
   if(key === "opencode"){
     try{
       const {stdout} = await execFileP(provider.path||provider.command,["models"],

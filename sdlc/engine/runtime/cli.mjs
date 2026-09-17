@@ -298,10 +298,13 @@ if (cmd === "doctor") {
 } else if (cmd === "dashboard") {
   // The Roles page. Loopback only, and it writes exactly one file.
   const { serve } = await import("./dashboard.mjs");
+  const { home } = await import("./registry.mjs");
   const port = rest.includes("--port") ? Number(rest[rest.indexOf("--port") + 1]) : 4319;
   const { url } = await serve(PROJECT(), { port });
-  console.error(`SCH-LOOP roles dashboard: ${url}
-editing ${path.join(PROJECT(), ".sch-loop", "roles.json")}
+  console.error(`SCH-LOOP: ${url}
+  projects   ${url}/
+  settings   ${url}/settings
+  global     ${home()}
 ctrl-c to stop`);
 } else if (cmd === "stages") {
   const root = PROJECT();
@@ -388,7 +391,7 @@ ctrl-c to stop`);
   ticket-show <id> | ticket-validate <spec.json|->
   setup [--force] | seats  onboard this project | which CLIs are installed
   roles | fences | config | heartbeat
-  dashboard [--port N]     roles page: which CLI, which model, which flags per seat
+  dashboard [--port N]     every project, its progress, and its seats — one port
   progress [--json]        one screen: what is specified, what is built, what it cost
   log [-n N] [--follow]    the event stream, as sentences
   stages                   which lifecycle stages are done, and what runs next

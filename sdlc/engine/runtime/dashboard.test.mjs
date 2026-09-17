@@ -77,30 +77,56 @@ test("a rejected save leaves the file exactly as it was", () => {
   assert.equal(fs.readFileSync(path.join(root, ".sch-loop", "roles.json"), "utf8"), before);
 });
 
-test("the server serves the page, the state, and refuses a bad POST with a reason", async () => {
+test("one server, three views: projects, a project, and the global defaults", async () => {
   const root = proj();
-  const server = await listen(createServer(root));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "sch-ghome-"));
+  const prev = process.env.SCH_GLOBAL_HOME;
+  process.env.SCH_GLOBAL_HOME = home;
+  let server = null;
   try {
+    const { registerProject, saveGlobalRoles, idFor } = await import("./registry.mjs");
+    saveGlobalRoles(good());
+    registerProject(root, { name: "demo" });
+    server = await listen(createServer());
+
     const page = await get(server, "/");
     assert.equal(page.status, 200);
-    assert.match(page.body, /SCH·LOOP \/\/ ROLES/);
+    assert.match(page.body, /SCH·LOOP \/\/ OPS/);
+    assert.equal((await get(server, "/p/anything")).status, 200, "a project URL serves the same page");
+    assert.equal((await get(server, "/settings")).status, 200);
 
-    const st = await get(server, "/api/state");
+    const h = await get(server, "/api/home");
+    assert.equal(h.status, 200);
+    assert.ok(h.body.projects.some(p => p.root === path.resolve(root)), "the registered project is listed");
+    assert.ok(Array.isArray(h.body.seats));
+
+    const st = await get(server, "/api/settings");
     assert.equal(st.status, 200);
-    assert.ok(Array.isArray(st.body.seats), "it reports which CLIs are installed");
-    assert.ok(st.body.presets.claude, "and the flag presets the page toggles");
-    for (const r of ROLE_SEATS) assert.ok(typeof st.body.resolved[r] === "string", `${r} shows the argv it would spawn`);
+    assert.ok(st.body.roles.executor, "the global defaults are served");
+    assert.ok(st.body.presets.claude);
+
+    const id = idFor(root);
+    const pj = await get(server, "/api/project/" + encodeURIComponent(id));
+    assert.equal(pj.status, 200);
+    assert.equal(pj.body.project.name, "demo");
+    for (const r of ROLE_SEATS) assert.ok(typeof pj.body.resolved[r] === "string", r + " shows the argv it would spawn");
+
+    assert.equal((await get(server, "/api/project/nope")).status, 404);
 
     const bad = good(); bad.reviewer.spawn = [...BYPASS];
-    const rejected = await get(server, "/api/roles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(bad) });
+    const rejected = await get(server, "/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(bad) });
     assert.equal(rejected.status, 400);
     assert.match(rejected.body.error, /read-only/);
 
     const ok = good(); ok.executor.model = "sonnet";
-    const saved = await get(server, "/api/roles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ok) });
+    const saved = await get(server, "/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ok) });
     assert.equal(saved.status, 200);
-    assert.equal(readRoles(root).executor.model, "sonnet", "and a good one reaches disk");
-  } finally { server.close(); }
+    assert.equal(saved.body.roles.executor.model, "sonnet", "and a good one reaches disk");
+
+  } finally {
+    server?.close();
+    if (prev === undefined) delete process.env.SCH_GLOBAL_HOME; else process.env.SCH_GLOBAL_HOME = prev;
+  }
 });
 
 test("an unknown path is a 404, not a stack trace", async () => {
@@ -142,4 +168,35 @@ test("the page is in the SCH-LOOP console language, not a default one", () => {
   assert.match(src, /repeating-linear-gradient\(0deg/, "the scanline overlay is part of it");
   assert.match(src, /border-bottom:2px solid var\(--red\)/, "red is structure, not decoration");
   assert.doesNotMatch(src, /prefers-color-scheme/, "there is one theme and it is dark");
+});
+
+test("a scratch directory is never registered, and old ones are pruned", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "sch-ghome-"));
+  const prev = process.env.SCH_GLOBAL_HOME;
+  process.env.SCH_GLOBAL_HOME = home;
+  try {
+    const { registerProject, listProjects, isScratch, rejects, projectsFile } = await import("./registry.mjs");
+    // A temp directory is a test fixture. Registering one is how fourteen throwaway projects ended up
+    // on a real operator's dashboard.
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "sch-scratch-"));
+    fs.mkdirSync(path.join(scratch, ".sch-loop"), { recursive: true });
+    assert.equal(isScratch(scratch), true);
+    // The guard protects the DEFAULT registry, which is the one an operator looks at.
+    const prevHome = process.env.SCH_GLOBAL_HOME;
+    delete process.env.SCH_GLOBAL_HOME;
+    let r;
+    try { r = registerProject(scratch); } finally { process.env.SCH_GLOBAL_HOME = prevHome; }
+    assert.equal(r.skipped, "scratch directory");
+    assert.equal(listProjects().length, 0, "it never reaches the register");
+
+    // One that slipped in before the rule existed is pruned by the same rule, not a second one: the
+    // guard and the pruner used to decide separately, so a project one accepted the other deleted.
+    fs.writeFileSync(projectsFile(), JSON.stringify([{ id: "x", root: scratch, name: "old" }], null, 2));
+    assert.equal(listProjects().length, 1);
+    const before = process.env.SCH_GLOBAL_HOME;
+    let pruned;
+    try { delete process.env.SCH_GLOBAL_HOME; pruned = rejects(scratch); } finally { process.env.SCH_GLOBAL_HOME = before; }
+    assert.equal(pruned, true, "the pruner and the guard share one rule");
+    assert.equal(rejects(scratch), false, "and it is off when the registry is already isolated");
+  } finally { if (prev === undefined) delete process.env.SCH_GLOBAL_HOME; else process.env.SCH_GLOBAL_HOME = prev; }
 });

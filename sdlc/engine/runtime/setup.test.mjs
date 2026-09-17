@@ -6,6 +6,11 @@ import path from "node:path";
 import { seedRoles, upsertManagedBlock, managedBlock, setupProject, verifyInstall, prunable, CLAUDE_MD_START, CLAUDE_MD_END } from "./setup.mjs";
 import { isBypass, isReadOnly } from "./roles.mjs";
 
+// setupProject registers the project into the machine-wide registry. Point that at a temp directory for
+// the whole file: a test writing into the real ~/.sch-loop left fourteen temp projects on the operator's
+// own dashboard, which is exactly the kind of mess a test must not make.
+process.env.SCH_GLOBAL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "sch-testhome-"));
+
 const seats = avail => ["claude", "codex", "opencode", "gemini", "antigravity"].map(p => ({ provider: p, available: avail.includes(p), models: [] }));
 
 test("seedRoles: claude present → executor bypasses, reviewer and judge are read-only, no model pinned", async () => {

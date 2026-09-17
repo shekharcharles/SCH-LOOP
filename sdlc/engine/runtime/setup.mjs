@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverCLIs, fetchModels } from "./providers.mjs";
+import { registerProject, ensureGlobalRoles } from "./registry.mjs";
 
 const ENGINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -278,6 +279,12 @@ export async function setupProject({ projectRoot, force = false }) {
   const missing = lines.filter(l => !giBefore.split(/\r?\n/).includes(l));
   if (missing.length) { w(gi, giBefore.trimEnd() + (giBefore.trim() ? "\n" : "") + missing.join("\n") + "\n"); written.push(".gitignore"); }
 
+  // Put the project on the machine's register so one dashboard can find every project, and seed the
+  // machine-wide seat defaults from the first project set up here.
+  let registered = null;
+  try { registered = registerProject(projectRoot); ensureGlobalRoles(roles); }
+  catch (e) { skipped.push(`registry (${e.message})`); }
+
   // Prove the project can actually run before reporting success. Setup used to return a tidy list of
   // seven written files for a project that could not execute one ticket.
   const checks = verifyInstall(projectRoot);
@@ -286,7 +293,7 @@ export async function setupProject({ projectRoot, force = false }) {
   return {
     seats,
     roles: { executor: roles.executor.provider, reviewer: roles.reviewer.provider, council: roles.council.filter(c => c.enabled).map(c => `${c.role}:${c.provider}`) },
-    written, skipped,
+    written, skipped, registered,
     ok: broken.length === 0,
     checks,
     ...(broken.length ? { error: `setup finished but the project is not runnable: ${broken.map(c => c.name).join(", ")}` } : {}),
