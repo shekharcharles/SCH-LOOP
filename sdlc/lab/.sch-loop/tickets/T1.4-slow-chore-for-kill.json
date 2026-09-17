@@ -1,0 +1,30 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "phase": "1",
+  "type": "chore",
+  "title": "Slow chore for kill test",
+  "size": "S",
+  "deps": [
+    "T1.1"
+  ],
+  "allowed_paths": [
+    "src/**"
+  ],
+  "action": "Read src/todo.mjs. Then wait: run a bash command that sleeps 300 seconds before you do anything else. This ticket exists to be interrupted.",
+  "acceptance": [
+    "src/todo.mjs is unchanged"
+  ],
+  "verify": [
+    {
+      "name": "noop",
+      "command": "node",
+      "args": [
+        "-e",
+        "process.exit(0)"
+      ]
+    }
+  ],
+  "slug": "slow-chore-for-kill",
+  "id": "T1.4"
+}

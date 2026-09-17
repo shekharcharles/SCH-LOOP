@@ -68,3 +68,6 @@ dashboard-token
 dashboard.*.log
 dashboard.pid
 .dashboard-start.lock
+
+# per-ticket worktrees the loop creates and removes
+.worktrees/

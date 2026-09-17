@@ -1,0 +1,29 @@
+.sch-loop/private/
+.sch-loop/evidence/
+.sch-loop/council/*/transcript/
+.sch-loop/heartbeat
+.sch-loop/events.jsonl
+.worktrees/
+node_modules/
+.env
+.env.*
+*.log
+
+# Everything under .claude/ here is INSTALLED by `sch-setup` from ../engine/, which is
+# the tracked source of truth. None of it is committed, because a second copy in git
+# drifts from the first. Re-install with:
+#   node ../engine/runtime/cli.mjs setup --force
+# Never edit these copies: they are overwritten, and git cannot see them.
+.claude/sch/
+.claude/hooks/
+.claude/skills/
+.claude/settings.json
+
+# Engine run state and the lessons log: regenerated on every run.
+.sch-loop/runs/
+.sch-loop/learning/
+.sch-loop/workflow.json
+
+# Other agents' scratch state that lands in a project directory.
+.omo/
+.codegraph/

@@ -1,0 +1,41 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "phase": "1",
+  "type": "test",
+  "title": "Cover remove and list isolation",
+  "size": "S",
+  "deps": [
+    "T1.1"
+  ],
+  "read_first": [
+    "src/todo.mjs",
+    "tests/todo.test.mjs"
+  ],
+  "allowed_paths": [
+    "tests/**"
+  ],
+  "action": "Add tests only. Cover: remove() on an already-removed id throws; list() returns copies so mutating a returned item does not change the store. Do not touch src/.",
+  "acceptance": [
+    "a test asserts remove() twice throws the second time",
+    "a test asserts mutating a listed item does not change the store"
+  ],
+  "must_not": [
+    "no file under src/ is modified",
+    "no existing test deleted or weakened"
+  ],
+  "verify": [
+    {
+      "name": "test",
+      "command": "npm",
+      "args": [
+        "test"
+      ]
+    }
+  ],
+  "requirements": [
+    "TODO-02"
+  ],
+  "slug": "cover-remove-and-list",
+  "id": "T1.2"
+}

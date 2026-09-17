@@ -1,0 +1,84 @@
+{
+  "question": "Ticket T1.4a — Prove the council convenes — has failed every executor attempt and is now blocked.\n\nType: build   Size: S\nAction asked of the executor:\nCreate src/impossible.mjs exporting a function gate() that returns true. The deterministic verification gate on this ticket is rigged to exit 1 and cannot be made to pass; the ticket exists to drive the recovery ladder to its end.\n\nAcceptance criteria:\n- src/impossible.mjs exports gate()\n- the impossible gate check exits 0\n\nManager summary: Prove the council convenes — stopped after 1 attempt(s)\nWhat did not work:\n- (the report recorded no specific failure)\n\nDecide ONE of: (a) the ticket is achievable and the next executor needs specific corrected guidance —\nsay exactly what to do differently; (b) the ticket is mis-specified and a human must rewrite it;\n(c) the ticket is blocked by something outside its allowed_paths and must be split.\nAnswer with the choice, then the concrete instruction the next executor should be given.",
+  "seats": [
+    {
+      "role": "architect",
+      "provider": "claude",
+      "model": null,
+      "model_arg": [
+        "--model",
+        "{model}"
+      ],
+      "spawn": [
+        "claude",
+        "--dangerously-skip-permissions",
+        "--disallowedTools",
+        "Edit",
+        "Write",
+        "MultiEdit",
+        "NotebookEdit",
+        "Bash",
+        "-p"
+      ]
+    },
+    {
+      "role": "skeptic",
+      "provider": "codex",
+      "model": null,
+      "model_arg": [
+        "-m",
+        "{model}"
+      ],
+      "spawn": [
+        "codex",
+        "exec",
+        "--sandbox",
+        "read-only"
+      ]
+    },
+    {
+      "role": "pragmatist",
+      "provider": "opencode",
+      "model": null,
+      "model_arg": [
+        "-m",
+        "{model}"
+      ],
+      "spawn": [
+        "opencode",
+        "run",
+        "--format",
+        "json"
+      ]
+    }
+  ],
+  "chair": {
+    "provider": "claude",
+    "model": null,
+    "model_arg": [
+      "--model",
+      "{model}"
+    ],
+    "spawn": [
+      "claude",
+      "--dangerously-skip-permissions",
+      "--disallowedTools",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ]
+  },
+  "context": {
+    "ticket": "T1.4a",
+    "type": "build",
+    "allowed_paths": [
+      "src/**"
+    ],
+    "attempts": 1
+  }
+}

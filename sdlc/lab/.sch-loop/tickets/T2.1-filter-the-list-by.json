@@ -1,0 +1,38 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "phase": "2",
+  "type": "build",
+  "title": "Filter the list by priority",
+  "action": "Add an optional `filter` argument to `list()` in src/todo.mjs. `list({priority})` returns only items with that priority; `list()` with no argument keeps returning every item. An unknown priority throws the same error `add` throws. Write the failing test first, in tests/todo.test.mjs.",
+  "acceptance": [
+    "list({priority:'high'}) returns only the high-priority items",
+    "list() with no argument still returns every item, as copies",
+    "list({priority:'urgent'}) throws, naming the valid priorities",
+    "npm test is green"
+  ],
+  "must_not": [
+    "change the shape of an item",
+    "change add(), complete() or remove()"
+  ],
+  "allowed_paths": [
+    "src/**",
+    "tests/**"
+  ],
+  "read_first": [
+    "src/todo.mjs",
+    "tests/todo.test.mjs"
+  ],
+  "verify": [
+    {
+      "name": "npm test",
+      "command": "npm",
+      "args": [
+        "test"
+      ]
+    }
+  ],
+  "size": "S",
+  "slug": "filter-the-list-by",
+  "id": "T2.1"
+}

@@ -1,0 +1,44 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "phase": "1",
+  "type": "build",
+  "title": "Add priority to todo items",
+  "size": "S",
+  "deps": [],
+  "read_first": [
+    "src/todo.mjs",
+    "tests/todo.test.mjs"
+  ],
+  "allowed_paths": [
+    "src/**",
+    "tests/**"
+  ],
+  "action": "Add an optional priority to add(): add(title, priority) where priority is one of low|normal|high and defaults to normal. An unknown priority throws an Error mentioning priority. list() and complete() carry it through unchanged.",
+  "interfaces": [
+    "add(title, priority?): {id, title, done, priority}"
+  ],
+  "acceptance": [
+    "add('x') yields priority normal",
+    "add('x','high') yields priority high",
+    "add('x','urgent') throws /priority/",
+    "complete() preserves the priority"
+  ],
+  "must_not": [
+    "no existing test deleted or weakened"
+  ],
+  "verify": [
+    {
+      "name": "test",
+      "command": "npm",
+      "args": [
+        "test"
+      ]
+    }
+  ],
+  "requirements": [
+    "TODO-01"
+  ],
+  "slug": "add-priority-to-todo",
+  "id": "T1.1"
+}
