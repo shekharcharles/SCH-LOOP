@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seedRoles, upsertManagedBlock, managedBlock, setupProject, verifyInstall, CLAUDE_MD_START, CLAUDE_MD_END } from "./setup.mjs";
+import { seedRoles, upsertManagedBlock, managedBlock, setupProject, verifyInstall, prunable, CLAUDE_MD_START, CLAUDE_MD_END } from "./setup.mjs";
 import { isBypass, isReadOnly } from "./roles.mjs";
 
 const seats = avail => ["claude", "codex", "opencode", "gemini", "antigravity"].map(p => ({ provider: p, available: avail.includes(p), models: [] }));
@@ -140,4 +140,31 @@ test("re-running setup refreshes the engine without touching the project's own w
   assert.match(fs.readFileSync(path.join(root, "task.md"), "utf8"), /keep-me/, "the queue is the project's, and survives");
   assert.doesNotMatch(fs.readFileSync(path.join(root, ".claude/hooks/write-guard.mjs"), "utf8"), /hand-patched/,
     "a fence is the engine's, and is restored — a silently patched fence is worse than a lost edit");
+});
+
+test("installing over a live project never leaves it without an engine", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sch-install-"));
+  await setupProject({ projectRoot: root });
+  const cli = path.join(root, ".claude/sch/runtime/cli.mjs");
+  assert.ok(fs.existsSync(cli));
+
+  // A stale module from an older engine is pruned; a file the project owns elsewhere is untouched.
+  fs.writeFileSync(path.join(root, ".claude/sch/runtime/gone-in-v5.mjs"), "// removed upstream\n");
+  fs.writeFileSync(path.join(root, "notes.md"), "mine\n");
+  const r = await setupProject({ projectRoot: root, force: true });
+
+  assert.equal(r.ok, true, r.error);
+  assert.ok(fs.existsSync(cli), "the engine is present at every moment, not deleted and re-copied");
+  assert.equal(fs.existsSync(path.join(root, ".claude/sch/runtime/gone-in-v5.mjs")), false, "stale modules are pruned");
+  assert.equal(fs.readFileSync(path.join(root, "notes.md"), "utf8"), "mine\n");
+});
+
+test("prunable names only what the source no longer has, at the top level", () => {
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), "sch-prune-a-"));
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), "sch-prune-b-"));
+  fs.writeFileSync(path.join(a, "keep.mjs"), "");
+  fs.writeFileSync(path.join(b, "keep.mjs"), "");
+  fs.writeFileSync(path.join(b, "drop.mjs"), "");
+  assert.deepEqual(prunable(a, b), ["drop.mjs"]);
+  assert.deepEqual(prunable(a, path.join(b, "nope")), [], "a destination that does not exist prunes nothing");
 });

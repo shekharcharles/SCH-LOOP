@@ -179,6 +179,15 @@ const SETTINGS = {
   permissions: { deny: ["Read(./.sch-loop/private/**)", "Read(./.env)", "Read(./.env.*)"] },
 };
 
+// Top-level entries the engine no longer ships, so an upgrade that drops a module does not leave the
+// old one behind to be imported by mistake. Only the top level: anything deeper is the engine's own
+// layout and is fully overwritten by the copy.
+export function prunable(srcDir, destDir) {
+  if (!fs.existsSync(destDir)) return [];
+  const keep = new Set(fs.readdirSync(srcDir));
+  return fs.readdirSync(destDir).filter(n => !keep.has(n));
+}
+
 const w = (f, body) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); return f; };
 
 export async function setupProject({ projectRoot, force = false }) {
@@ -205,11 +214,16 @@ export async function setupProject({ projectRoot, force = false }) {
   // These are overwritten on every setup, `force` or not. They are not the project's files to edit; they
   // belong to this engine and are installed here. A project quietly running a hand-patched fence is a
   // worse outcome than one losing a local change it should never have made.
+  // Copy over the top, then prune what the engine no longer ships. NOT delete-then-copy: that leaves a
+  // window where the project has no engine at all, and `setup --force` run while the loop was mid-stage
+  // deleted the engine out from under the running process. An install must never be able to make a
+  // working project worse than it found it.
   const install = (srcDir, destRel) => {
     if (!fs.existsSync(srcDir)) throw new Error(`engine is incomplete: ${srcDir} is missing`);
     const dest = path.join(projectRoot, destRel);
-    fs.rmSync(dest, { recursive: true, force: true });
-    fs.cpSync(srcDir, dest, { recursive: true });
+    fs.mkdirSync(dest, { recursive: true });
+    fs.cpSync(srcDir, dest, { recursive: true, force: true });
+    for (const stale of prunable(srcDir, dest)) fs.rmSync(path.join(dest, stale), { recursive: true, force: true });
     written.push(`${destRel}/ (${fs.readdirSync(dest).length} entries)`);
   };
   install(path.join(ENGINE, "runtime"), ".claude/sch/runtime");
