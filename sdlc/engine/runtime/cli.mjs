@@ -27,6 +27,7 @@ const { run: runWatchdog, heartbeatStatus } = await import("./watchdog.mjs");
 const { verifyPhase } = await import("./verify-phase.mjs");
 const { ship } = await import("./ship.mjs");
 const { notify, unread, markAllRead, orchestratorTarget } = await import("./notify.mjs");
+const { STAGES, stageById, stageReport, nextStage, runStage, setGoal, goal } = await import("./stages.mjs");
 const { parse: parseTaskMd, next: nextTicket, setStatus, insert: insertTask } = await import("./taskmd.mjs");
 const { writeTicket, loadTicket, validateTicket, TICKET_TYPES } = await import("./tickets.mjs");
 const { loadRoles, resolveSpawn, isBypass, isReadOnly, councilSeats } = await import("./roles.mjs");
@@ -276,6 +277,39 @@ if (cmd === "doctor") {
   out(checkFences({ projectRoot: PROJECT(), cwd: PROJECT(), roles, config: loadConfig(PROJECT()) }));
 } else if (cmd === "heartbeat") {
   out(heartbeatStatus(PROJECT()));
+} else if (cmd === "dashboard") {
+  // The Roles page. Loopback only, and it writes exactly one file.
+  const { serve } = await import("./dashboard.mjs");
+  const port = rest.includes("--port") ? Number(rest[rest.indexOf("--port") + 1]) : 4319;
+  const { url } = await serve(PROJECT(), { port });
+  console.error(`SCH-LOOP roles dashboard: ${url}
+editing ${path.join(PROJECT(), ".sch-loop", "roles.json")}
+ctrl-c to stop`);
+} else if (cmd === "stages") {
+  const root = PROJECT();
+  const n = nextStage(root);
+  out({ goal: goal(root), stages: stageReport(root), next: n ? n.id : "tickets" });
+} else if (cmd === "stage") {
+  // Drive one lifecycle stage: brainstorm | prd | architecture | plan, or `next`.
+  const root = PROJECT();
+  const want = rest[0];
+  if (!want) throw new Error(`usage: stage <${STAGES.map(s => s.id).join("|")}|next> [--goal "..."] [--force]`);
+  const stage = want === "next" ? nextStage(root) : stageById(want);
+  if (!stage) {
+    if (want === "next") { out({ done: true, next: "tickets", hint: "the front half is complete — run sch-tickets" }); process.exit(0); }
+    throw new Error(`unknown stage ${want}; one of ${STAGES.map(s => s.id).join(", ")}`);
+  }
+  const gi = rest.indexOf("--goal");
+  const r = await runStage({
+    projectRoot: root, engineRoot: ENGINE_HOME, stage,
+    seat: loadRoles(root).reviewer, config: loadConfig(root),
+    goalText: gi >= 0 ? rest[gi + 1] : null, force: rest.includes("--force"),
+  });
+  out(r);
+} else if (cmd === "goal") {
+  const root = PROJECT();
+  if (rest.length) out({ file: setGoal(root, rest.join(" ")), goal: goal(root) });
+  else out({ goal: goal(root) });
 } else if (cmd === "notifications") {
   // What the loop told the orchestrator. The durable log is the notification; Herdr is a second sink.
   const root = PROJECT();
@@ -326,6 +360,10 @@ if (cmd === "doctor") {
   ticket-show <id> | ticket-validate <spec.json|->
   setup [--force] | seats  onboard this project | which CLIs are installed
   roles | fences | config | heartbeat
+  dashboard [--port N]     roles page: which CLI, which model, which flags per seat
+  stages                   which lifecycle stages are done, and what runs next
+  stage <id|next> [--goal] brainstorm | prd | architecture | plan
+  goal [text]              read or set what this project is for
   notifications [--read]   what the loop told the orchestrator (--level info|warn|error)
   notify-test [text]       prove the configured transport delivers
   verify-phase <n>         goal-backward check that a finished phase delivers its goal
