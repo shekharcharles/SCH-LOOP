@@ -110,3 +110,21 @@ test("an unknown path is a 404, not a stack trace", async () => {
     assert.equal(r.status, 404);
   } finally { server.close(); }
 });
+
+test("the page template holds no backtick — it is a template literal, and one breaks the module", () => {
+  // Twice now a comment written into this literal contained a backtick and turned the rest of the file
+  // into a syntax error that surfaced as an unrelated test failing to load.
+  const src = fs.readFileSync(new URL("./dashboard.mjs", import.meta.url), "utf8");
+  const page = src.slice(src.indexOf("const PAGE = "));
+  const inner = page.slice(page.indexOf("`") + 1, page.lastIndexOf("`"));
+  assert.equal(inner.includes("`"), false, "a backtick inside PAGE ends the literal early");
+});
+
+test("a seat set to a CLI that is not installed still names that CLI in the page", () => {
+  // The dropdown used to list only installed CLIs, so a seat configured for an absent one fell back to
+  // displaying the first option: the critic seat read "claude" while its argv said antigravity.
+  const src = fs.readFileSync(new URL("./dashboard.mjs", import.meta.url), "utf8");
+  assert.match(src, /function providerOptions\(current\)/);
+  assert.match(src, /\[\.\.\.new Set\(\[\.\.\.installed\(\), current\]/, "the current provider is always an option");
+  assert.doesNotMatch(src, /installed\(\)\.map\(p => el\("option"/, "no dropdown is built from the installed list alone");
+});

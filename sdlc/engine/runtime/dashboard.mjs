@@ -108,7 +108,7 @@ const PAGE = `<!doctype html>
 <style>
   :root { --bg:#0f1115; --panel:#171a21; --line:#272b34; --fg:#e6e8ec; --dim:#98a0ad; --accent:#7aa2f7; --bad:#f7768e; --good:#9ece6a; }
   @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --panel:#fff; --line:#e2e5ea; --fg:#1a1d23; --dim:#5c6570; } }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif; padding:24px 16px; }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif; padding:24px 16px 96px; }
   .wrap { max-width:960px; margin:0 auto } h1 { font-size:20px; margin:0 0 4px } .sub { color:var(--dim); margin:0 0 20px }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px }
   .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end }
@@ -121,14 +121,14 @@ const PAGE = `<!doctype html>
   .flags { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px } .flags label { display:flex; gap:6px; align-items:center; font-size:13px; color:var(--fg); margin:0 }
   button { background:var(--accent); color:#0b0d11; border:0; border-radius:8px; padding:9px 16px; font:inherit; font-weight:600; cursor:pointer }
   button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line) }
-  .bar { display:flex; gap:10px; align-items:center; position:sticky; bottom:0; background:var(--bg); padding:14px 0 }
+  .bar { display:flex; gap:10px; align-items:center; position:sticky; bottom:0; background:var(--bg); padding:14px 0; border-top:1px solid var(--line); margin-top:4px }
   .msg { font-size:13px } .bad { color:var(--bad) } .good { color:var(--good) }
   .seatlist { display:flex; gap:8px; flex-wrap:wrap } .seat { border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:13px }
   .seat.off { opacity:.45 } .cn { display:flex; gap:10px; align-items:center; padding:9px 0; border-top:1px solid var(--line); flex-wrap:wrap }
 </style></head><body><div class="wrap">
 <h1>SCH-LOOP Roles</h1>
 <p class="sub">Which CLI fills each seat, which model it uses, and what it spawns with. Saved to <code>.sch-loop/roles.json</code>.</p>
-<div class="card"><h2>Installed</h2><div id="seats" class="seatlist"></div></div>
+<div class="card"><h2>Installed</h2><div id="seats" class="seatlist">probing which CLIs are on PATH…</div></div>
 <div id="roles"></div>
 <div class="card"><h2>Council <span class="pill">gated: convened on a red ticket</span></h2><div id="council"></div></div>
 <div class="bar"><button id="save">Save</button><button class="ghost" id="reload">Reload</button><span id="msg" class="msg"></span></div>
@@ -137,6 +137,17 @@ let S = null;
 const $ = s => document.querySelector(s);
 const el = (t, a = {}, kids = []) => { const n = document.createElement(t); for (const [k, v] of Object.entries(a)) { if (k === "class") n.className = v; else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v); } for (const c of [].concat(kids)) n.append(c); return n; };
 const installed = () => S.seats.filter(s => s.available).map(s => s.provider);
+
+// A seat configured for a CLI that is not installed must still SHOW that CLI. Listing only installed
+// ones made the dropdown fall back to its first option, so the critic seat read "claude" while its argv
+// said antigravity -- the page misreporting the very configuration it exists to show.
+function providerOptions(current) {
+  const names = [...new Set([...installed(), current].filter(Boolean))];
+  return names.map(p => {
+    const missing = !installed().includes(p);
+    return el("option", p === current ? { value: p, selected: "selected" } : { value: p }, p + (missing ? " — not installed" : ""));
+  });
+}
 
 function presetsFor(provider) { return Object.keys(S.presets[provider] || {}).filter(k => k !== "base" && k !== "model_arg"); }
 function hasPreset(spawn, frag) { const j = spawn.join(" "); return frag.every(f => j.includes(f)); }
@@ -150,7 +161,7 @@ function togglePreset(seat, name, on) {
 function seatCard(key, seat, title, note) {
   const models = S.seats.find(s => s.provider === seat.provider)?.models || [];
   const provider = el("select", { onchange: e => { seat.provider = e.target.value; seat.spawn = [...(S.presets[seat.provider]?.base || [seat.provider])]; seat.model = null; render(); } },
-    installed().map(p => el("option", p === seat.provider ? { value: p, selected: "selected" } : { value: p }, p)));
+    providerOptions(seat.provider));
   const model = el("select", { onchange: e => { seat.model = e.target.value || null; render(); } },
     [el("option", seat.model ? { value: "" } : { value: "", selected: "selected" }, "(provider default)"),
      ...models.map(m => el("option", m === seat.model ? { value: m, selected: "selected" } : { value: m }, m))]);
@@ -183,7 +194,7 @@ function render() {
     const on = el("input", c.enabled !== false ? { type: "checkbox", checked: "checked" } : { type: "checkbox" });
     on.addEventListener("change", e => { c.enabled = e.target.checked; render(); });
     const prov = el("select", { onchange: e => { c.provider = e.target.value; c.spawn = [...(S.presets[c.provider]?.base || [c.provider])]; c.model = null; render(); } },
-      installed().map(p => el("option", p === c.provider ? { value: p, selected: "selected" } : { value: p }, p)));
+      providerOptions(c.provider));
     const models = S.seats.find(s => s.provider === c.provider)?.models || [];
     const model = el("select", { onchange: e => { c.model = e.target.value || null; render(); } },
       [el("option", { value: "" }, "(default)"), ...models.map(m => el("option", m === c.model ? { value: m, selected: "selected" } : { value: m }, m))]);
@@ -191,7 +202,11 @@ function render() {
   }));
 }
 
-async function load() { S = await (await fetch("/api/state")).json(); render(); $("#msg").textContent = ""; }
+async function load() {
+  $("#msg").className = "msg"; $("#msg").textContent = "loading…";
+  try { S = await (await fetch("/api/state")).json(); render(); $("#msg").textContent = ""; }
+  catch (e) { $("#msg").className = "msg bad"; $("#msg").textContent = "could not load: " + e.message; }
+}
 $("#reload").addEventListener("click", load);
 $("#save").addEventListener("click", async () => {
   const r = await fetch("/api/roles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(S.roles) });
