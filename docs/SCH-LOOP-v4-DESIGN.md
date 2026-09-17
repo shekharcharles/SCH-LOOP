@@ -601,6 +601,18 @@ the CLI's own system prompt plus the skill descriptions, and the three `CLAUDE.m
 only 8.3KB of it. Nothing here needs trimming; the right move is to leave it alone and spend the headroom
 on the work.
 
+### 7.0.0 One constraint the defaults violated
+
+Tier 0 of the ladder (silence) and the hard timeout are different signals: "went quiet" and "took too
+long" are different failures and belong in different tiers. That only holds if the silence window is
+reachable, and the shipped defaults made it unreachable for a whole ticket size — `silence_nudge_seconds`
+120 times four is 480s, against an XS timeout of 300s. Every quiet XS ticket was reported as a timeout.
+
+The window is clamped to 60% of the hard timeout, so silence always precedes it whatever either is
+configured to. **Any two timers that race to classify the same outcome need separating by an order of
+magnitude, not by a margin** — the test covering this raced them within one and failed one run in six
+under a loaded machine.
+
 ### 7.0.1 The front half, and why it is code at all
 
 The four stages are model work: brainstorm, PRD, architecture and plan are judgement, and the judgement
