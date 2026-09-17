@@ -152,3 +152,25 @@ test("the queue and verify readers report why, not just false", () => {
   fs.writeFileSync(path.join(root, ".sch-loop", "verify", "phase-1.md"), "# no status line here\n");
   assert.match(readVerify(root, "1").why, /no Status line/);
 });
+
+test("a release check that is a Windows .cmd shim actually runs", async () => {
+  // `npm` is a `.cmd` shim on Windows and Node refuses to spawn one without a shell. Guarding on the
+  // BARE command name ending in `.cmd` never matched it, so this gate died with `spawn npm ENOENT` on
+  // every release — the third time the same platform quirk was rediscovered in this engine.
+  const root = repo();
+  const r = await shipIt(root, { checks: [{ name: "npm version", command: "npm", args: ["--version"] }] });
+  assert.equal(gate(r, "npm version").ok, true, gate(r, "npm version")?.why);
+  assert.equal(r.decision, "GO");
+});
+
+test("a release record left by an earlier run does not block the next release", async () => {
+  const root = repo();
+  fs.mkdirSync(path.join(root, ".sch-loop", "releases"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".sch-loop", "releases", "phase-1-earlier.md"), "# Release — phase 1\n\n**Decision:** NO-GO\n");
+  const r = await shipIt(root);
+  assert.equal(gate(r, "working tree is clean").ok, true, gate(r, "working tree is clean")?.why);
+  assert.equal(r.decision, "GO");
+  // Anything else uncommitted still stops it — the exclusion is one path, not a blanket.
+  fs.writeFileSync(path.join(root, "forgotten.mjs"), "// never committed\n");
+  assert.equal((await shipIt(root)).decision, "NO-GO");
+});

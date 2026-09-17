@@ -6,8 +6,11 @@ import { ROOT, SCH, ensureLayout, writeJson, writeText } from "./util.mjs";
 // Resolve a bare command to a real path so the shell is needed only for a `.cmd`/`.bat` shim.
 // Windows lists the extensionless npm shim first — that file is a bash script `spawn()` cannot run —
 // so an executable extension is preferred, exactly as providers.mjs does for the same reason.
+// Exported because every spawn site in this engine needs it and each one that re-derived the rule got
+// it subtly wrong. `ship.mjs` guarded on the BARE command name ending in `.cmd`, which `npm` never does,
+// and died with `spawn npm ENOENT` — the third time this exact quirk was rediscovered here.
 const _exeCache = new Map();
-function resolveExecutable(command) {
+export function resolveExecutable(command) {
   if (process.platform !== "win32" || /[\\/]/.test(command)) return command;
   if (_exeCache.has(command)) return _exeCache.get(command);
   let hit = command;
@@ -29,8 +32,7 @@ function runProcess(command, args=[], cwd=ROOT, timeoutMs=120000) {
     // `shell:true` Node concatenates arguments unescaped (it warns DEP0190 about exactly this), so a
     // check like `node -e "…quotes…"` is mangled into a syntax error — measured, on the first docs
     // ticket, as a verify command that could not fail honestly because it never ran.
-    const resolved = resolveExecutable(command);
-    const needsShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved);
+    const { command: resolved, shell: needsShell } = spawnSafe(command);
     const child = spawn(resolved, args, {
       cwd, windowsHide:true, stdio:["ignore","pipe","pipe"], env:process.env, shell:needsShell
     });
@@ -60,6 +62,14 @@ function runProcess(command, args=[], cwd=ROOT, timeoutMs=120000) {
       });
     });
   });
+}
+
+// The one answer to "how do I spawn this command on this platform": a resolved executable, and a shell
+// only when the resolved path is a `.cmd`/`.bat` shim. With `shell:true` Node concatenates arguments
+// unescaped, so it is never turned on for a real executable.
+export function spawnSafe(command) {
+  const resolved = resolveExecutable(command);
+  return { command: resolved, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved) };
 }
 
 export async function runVerification({runId, ticketId, checks=[], cwd=ROOT}) {
