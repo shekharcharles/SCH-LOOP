@@ -18,7 +18,8 @@ export function decideManager({verificationPassed, judgeVerdict, attempt, maxAtt
   return attempt < maxAttempts ? "RETRY" : "HUMAN";
 }
 
-function builderPrompt({ticket, requirements, lessons, priorRejection, passingRequirements=[]}) {
+// Exported so a test can assert the contract it states matches the gate that checks it.
+export function builderPrompt({ticket, requirements, lessons, priorRejection, passingRequirements=[]}) {
   return `You are the BUILDER. Your job is to implement this bounded ticket in the current repository.
 
 TICKET
@@ -44,7 +45,10 @@ Rules:
 - Do not rewrite already-passing areas unless strictly necessary.
 - If fixing a failed item risks invalidating a passing item, stop and return NEEDS_DECISION with the conflict.
 - If requirements conflict or are impossible, stop and return NEEDS_DECISION.
-- Finish with a line "FILES CHANGED:" followed by one repository-relative path per line, then a line "SUMMARY:" with one factual sentence. The list is checked against git; a mismatch fails the attempt.`;
+- Finish with a line "FILES CHANGED:" followed by one path per line, then a line "SUMMARY:" with one
+  factual sentence. Write each path RELATIVE TO YOUR WORKING DIRECTORY — the same form \`git status\`
+  prints when run from where you are, e.g. \`src/todo.mjs\`, never \`sdlc/lab/src/todo.mjs\`. The list is
+  compared to git's own answer and a mismatch fails the attempt.`;
 }
 
 async function git(cwd,args){
