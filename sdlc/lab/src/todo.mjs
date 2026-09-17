@@ -14,8 +14,13 @@ export function createStore() {
       items.set(item.id, item);
       return { ...item };
     },
-    list() {
-      return [...items.values()].map(i => ({ ...i }));
+    list({ priority } = {}) {
+      if (priority !== undefined && !PRIORITIES.includes(priority)) {
+        throw new Error(`priority must be one of ${PRIORITIES.join("|")}`);
+      }
+      return [...items.values()]
+        .filter(i => priority === undefined || i.priority === priority)
+        .map(i => ({ ...i }));
     },
     complete(id) {
       const item = items.get(id);

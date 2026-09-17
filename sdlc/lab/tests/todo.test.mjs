@@ -72,3 +72,27 @@ test("list returns copies: mutating a listed item does not change the store", ()
   assert.equal(fresh.title, "x");
   assert.equal(fresh.done, false);
 });
+
+test("list filters by priority", () => {
+  const s = createStore();
+  const hi = s.add("a", "high");
+  s.add("b", "low");
+  const hi2 = s.add("c", "high");
+  assert.deepEqual(s.list({ priority: "high" }), [hi, hi2]);
+  assert.deepEqual(s.list({ priority: "low" }).map(i => i.title), ["b"]);
+  assert.deepEqual(s.list({ priority: "normal" }), []);
+});
+
+test("list with no argument still returns every item, as copies", () => {
+  const s = createStore();
+  s.add("a", "high");
+  s.add("b", "low");
+  assert.equal(s.list().length, 2);
+  s.list()[0].title = "tampered";
+  assert.equal(s.list()[0].title, "a");
+});
+
+test("list rejects an unknown priority the same way add does", () => {
+  const s = createStore();
+  assert.throws(() => s.list({ priority: "urgent" }), /priority must be one of low\|normal\|high/);
+});
