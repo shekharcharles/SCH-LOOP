@@ -96,3 +96,14 @@ test("list rejects an unknown priority the same way add does", () => {
   const s = createStore();
   assert.throws(() => s.list({ priority: "urgent" }), /priority must be one of low\|normal\|high/);
 });
+
+test("filtered list returns copies: mutating a filtered item does not change the store", () => {
+  const s = createStore();
+  s.add("keep me", "high");
+  const filtered = s.list({ priority: "high" })[0];
+  filtered.title = "tampered";
+  filtered.done = true;
+  const [fresh] = s.list({ priority: "high" });
+  assert.equal(fresh.title, "keep me");
+  assert.equal(fresh.done, false);
+});
