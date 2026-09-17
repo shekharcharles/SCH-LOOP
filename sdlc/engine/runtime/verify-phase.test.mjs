@@ -140,3 +140,17 @@ test("the file list is what the phase delivered, not what it was allowed to touc
   assert.deepEqual(files, ["src/todo.mjs"]);
   assert.ok(!files.includes("src/**"), "a permission glob is never presented as a delivered file");
 });
+
+test("the verifier is told its truths must be falsifiable and that passing is allowed", () => {
+  // Without this the seat can always invent one more unfalsifiable worry, and no phase ever passes
+  // however many gaps are closed. Measured on phase 2 of the lab: the gap-closing ticket landed, the
+  // truth it was written for went green, and the same run produced a brand-new "cannot be tested at
+  // all" claim in its place.
+  const root = proj();
+  const p = verifyPrompt({ goal: "g", goalSource: "s", phase: "1", tickets: phaseTickets(root, "1"), checks: [], files: [] });
+  assert.match(p, /must be FALSIFIABLE/);
+  assert.match(p, /name a change to this codebase that would make it false/);
+  assert.match(p, /you must not list it at all/);
+  assert.match(p, /allowed to pass/);
+  assert.match(p, /does not mean "this cannot be/, "behaviour_unverified is scoped to testable claims");
+});
