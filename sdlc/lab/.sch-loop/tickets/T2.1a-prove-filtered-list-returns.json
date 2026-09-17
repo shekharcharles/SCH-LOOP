@@ -1,0 +1,37 @@
+{
+  "status": "pending",
+  "attempts": 0,
+  "type": "test",
+  "title": "Prove filtered list returns copies",
+  "action": "Phase 2 verification found that the copy guarantee of the FILTERED list path rests on code reading alone. Add one test to tests/todo.test.mjs that takes s.list({priority:'high'})[0], writes to .title and .done, then re-reads s.list({priority:'high'}) and asserts the store value is unchanged. Write it so it would fail if list() returned live references from the filtered branch.",
+  "acceptance": [
+    "a test mutates an item from a filtered list and asserts the store is unchanged",
+    "the test would fail if the filtered branch returned live references",
+    "npm test is green"
+  ],
+  "must_not": [
+    "change src/todo.mjs",
+    "change any existing test"
+  ],
+  "allowed_paths": [
+    "tests/**"
+  ],
+  "read_first": [
+    "src/todo.mjs",
+    "tests/todo.test.mjs",
+    ".sch-loop/verify/phase-2.md"
+  ],
+  "verify": [
+    {
+      "name": "npm test",
+      "command": "npm",
+      "args": [
+        "test"
+      ]
+    }
+  ],
+  "size": "XS",
+  "slug": "prove-filtered-list-returns",
+  "id": "T2.1a",
+  "phase": "2"
+}

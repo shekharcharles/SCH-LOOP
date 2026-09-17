@@ -13,3 +13,7 @@
 - [?] T1.3-eyeball-the-priority-api  human  Eyeball the priority API surface  deps:T1.1  size:XS  gate:blocking-human
 - [?] T1.4-slow-chore-for-kill  chore  Slow chore for kill test  deps:T1.1  size:S
 - [?] T1.4a-prove-the-council-convenes  build  Prove the council convenes  deps:-  size:S
+
+## Phase 2 — Filtering   (2/2 done)
+- [x] T2.1-filter-the-list-by  build  Filter the list by priority  deps:-  size:S
+- [x] T2.1a-prove-filtered-list-returns  test  Prove filtered list returns copies  deps:-  size:XS
