@@ -156,8 +156,13 @@ export async function ship({ projectRoot, phase, base = "main", checks = [], dry
 
 async function ghPr({ projectRoot, branch, base, remote, title, body }) {
   await pexec("git", ["push", "-u", remote, branch], { cwd: projectRoot, encoding: "utf8", windowsHide: true });
-  const { stdout } = await pexec("gh", ["pr", "create", "--base", base, "--head", branch, "--title", title, "--body", body], {
-    cwd: projectRoot, encoding: "utf8", windowsHide: true, shell: process.platform === "win32",
+  // `shell: true` for the whole call concatenates arguments unescaped (Node warns DEP0190 about exactly
+  // this), so a body with spaces arrived at gh as a dozen stray positional arguments and it refused the
+  // command — after the push had already happened. `spawnSafe` turns the shell on only for a resolved
+  // `.cmd`/`.bat`, which is the only case that needs it.
+  const gh = spawnSafe("gh");
+  const { stdout } = await pexec(gh.command, ["pr", "create", "--base", base, "--head", branch, "--title", title, "--body", body], {
+    cwd: projectRoot, encoding: "utf8", windowsHide: true, shell: gh.shell,
   });
   const url = stdout.trim().split("\n").filter(l => l.startsWith("http")).pop();
   if (!url) throw new Error(`gh pr create printed no URL: ${stdout.trim().slice(-200)}`);

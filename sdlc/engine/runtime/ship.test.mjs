@@ -174,3 +174,17 @@ test("a release record left by an earlier run does not block the next release", 
   fs.writeFileSync(path.join(root, "forgotten.mjs"), "// never committed\n");
   assert.equal((await shipIt(root)).decision, "NO-GO");
 });
+
+test("a title or body containing spaces survives the trip to gh", async () => {
+  // With `shell: true` for the whole call Node concatenates arguments unescaped, so a multi-word body
+  // reached gh as stray positional arguments and it refused the command — after the push had happened.
+  const root = repo();
+  let got = null;
+  await shipIt(root, {
+    title: "Phase 2 — filtering",
+    body: "Every gate green.\n\nGates: branch, queue, npm test",
+    runGh: async (a) => { got = a; return "https://github.invalid/x/y/pull/9"; },
+  });
+  assert.equal(got.title, "Phase 2 — filtering", "the title arrives whole");
+  assert.match(got.body, /Gates: branch, queue, npm test/, "the body arrives whole");
+});
