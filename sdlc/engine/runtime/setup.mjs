@@ -190,21 +190,45 @@ export async function setupProject({ projectRoot, force = false }) {
   put(".sch-loop/state.json", JSON.stringify({ schema_version: 1, project_status: "READY", lifecycle_stage: "BRAINSTORM", current_phase: null, current_task: null, current_role: null, attempt: 0, active_jobs: {}, last_event: "PROJECT_SETUP", updated_at: new Date().toISOString() }, null, 2) + "\n");
   put("task.md", TASK_MD);
 
-  // The two fences are copied from the engine so a project always has the version it was set up with.
-  for (const h of ["write-guard.mjs", "destructive-bash.mjs"]) {
-    const src = path.join(ENGINE, "..", "hooks", h);
-    if (fs.existsSync(src)) put(`.claude/hooks/${h}`, fs.readFileSync(src, "utf8"), true);
-  }
+  // Install the engine itself. Without this the managed CLAUDE.md block points at an empty directory,
+  // `checkFences` finds no hooks and refuses every ticket, and the project cannot run a single thing —
+  // which is exactly what setup produced before: seven files, none of them executable. The old hook copy
+  // read from `<engine>/../hooks`, a path that has never existed, so it silently copied nothing.
+  //
+  // These are overwritten on every setup, `force` or not. They are not the project's files to edit; they
+  // belong to this engine and are installed here. A project quietly running a hand-patched fence is a
+  // worse outcome than one losing a local change it should never have made.
+  const install = (srcDir, destRel) => {
+    if (!fs.existsSync(srcDir)) throw new Error(`engine is incomplete: ${srcDir} is missing`);
+    const dest = path.join(projectRoot, destRel);
+    fs.rmSync(dest, { recursive: true, force: true });
+    fs.cpSync(srcDir, dest, { recursive: true });
+    written.push(`${destRel}/ (${fs.readdirSync(dest).length} entries)`);
+  };
+  install(path.join(ENGINE, "runtime"), ".claude/sch/runtime");
+  install(path.join(ENGINE, "scripts"), ".claude/sch/scripts");
+  install(path.join(ENGINE, "hooks"), ".claude/hooks");
+  install(path.join(ENGINE, "skills"), ".claude/skills");
+  // Merge rather than replace: a project may have hooks and permissions of its own and setup has no
+  // right to drop them. But both fences must end up wired whatever was there before, and an unreadable
+  // settings file is refused rather than silently clobbered.
   const sf = path.join(projectRoot, ".claude", "settings.json");
+  let cur = {};
   if (fs.existsSync(sf)) {
-    const cur = JSON.parse(fs.readFileSync(sf, "utf8"));
-    const have = JSON.stringify(cur.hooks?.PreToolUse || []);
-    if (!/write-guard\.mjs/.test(have) || !/destructive-bash\.mjs/.test(have)) {
-      cur.hooks = cur.hooks || {};
-      cur.hooks.PreToolUse = [...(cur.hooks.PreToolUse || []), ...SETTINGS.hooks.PreToolUse];
-      w(sf, JSON.stringify(cur, null, 2) + "\n"); written.push(".claude/settings.json (hooks merged)");
-    } else skipped.push(".claude/settings.json");
-  } else put(".claude/settings.json", JSON.stringify(SETTINGS, null, 2) + "\n");
+    try { cur = JSON.parse(fs.readFileSync(sf, "utf8")); }
+    catch (e) { throw new Error(`.claude/settings.json is not valid JSON (${e.message}) — fix or delete it; setup will not overwrite a file it cannot read`); }
+  }
+  const settingsBefore = JSON.stringify(cur);
+  cur.hooks = cur.hooks || {};
+  const pre = (cur.hooks.PreToolUse = cur.hooks.PreToolUse || []);
+  for (const entry of SETTINGS.hooks.PreToolUse) {
+    const name = entry.hooks[0].command.match(/([\w-]+)\.mjs/)[1];
+    if (!pre.some(e => JSON.stringify(e).includes(name))) pre.push(entry);
+  }
+  cur.permissions = cur.permissions || {};
+  cur.permissions.deny = [...new Set([...(cur.permissions.deny || []), ...SETTINGS.permissions.deny])];
+  if (JSON.stringify(cur) !== settingsBefore) { w(sf, JSON.stringify(cur, null, 2) + "\n"); written.push(".claude/settings.json"); }
+  else skipped.push(".claude/settings.json");
 
   const cmd = path.join(projectRoot, "CLAUDE.md");
   const block = managedBlock({ engineRel: ".claude/sch" });
@@ -214,9 +238,44 @@ export async function setupProject({ projectRoot, force = false }) {
 
   const gi = path.join(projectRoot, ".gitignore");
   const lines = [".sch-loop/private/", ".sch-loop/evidence/", ".sch-loop/heartbeat", ".sch-loop/events.jsonl", ".worktrees/"];
-  const cur = fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "";
-  const missing = lines.filter(l => !cur.split(/\r?\n/).includes(l));
-  if (missing.length) { w(gi, cur.trimEnd() + (cur.trim() ? "\n" : "") + missing.join("\n") + "\n"); written.push(".gitignore"); }
+  const giBefore = fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "";
+  const missing = lines.filter(l => !giBefore.split(/\r?\n/).includes(l));
+  if (missing.length) { w(gi, giBefore.trimEnd() + (giBefore.trim() ? "\n" : "") + missing.join("\n") + "\n"); written.push(".gitignore"); }
 
-  return { seats, roles: { executor: roles.executor.provider, reviewer: roles.reviewer.provider, council: roles.council.filter(c => c.enabled).map(c => `${c.role}:${c.provider}`) }, written, skipped };
+  // Prove the project can actually run before reporting success. Setup used to return a tidy list of
+  // seven written files for a project that could not execute one ticket.
+  const checks = verifyInstall(projectRoot);
+  const broken = checks.filter(c => !c.ok);
+
+  return {
+    seats,
+    roles: { executor: roles.executor.provider, reviewer: roles.reviewer.provider, council: roles.council.filter(c => c.enabled).map(c => `${c.role}:${c.provider}`) },
+    written, skipped,
+    ok: broken.length === 0,
+    checks,
+    ...(broken.length ? { error: `setup finished but the project is not runnable: ${broken.map(c => c.name).join(", ")}` } : {}),
+  };
+}
+
+// What has to be true for `cli.mjs run` to work in this project. Every line here is something that was
+// silently absent from a setup that reported success.
+export function verifyInstall(projectRoot) {
+  const has = rel => fs.existsSync(path.join(projectRoot, rel));
+  const read = rel => { try { return fs.readFileSync(path.join(projectRoot, rel), "utf8"); } catch { return ""; } };
+  const readJson = rel => { try { return JSON.parse(read(rel)); } catch { return null; } };
+  const wired = JSON.stringify(readJson(".claude/settings.json")?.hooks?.PreToolUse || []);
+  const roles = readJson(".sch-loop/roles.json");
+  const skills = has(".claude/skills") ? fs.readdirSync(path.join(projectRoot, ".claude", "skills")) : [];
+  return [
+    { name: "engine cli installed", ok: has(".claude/sch/runtime/cli.mjs") },
+    { name: "write-guard hook on disk", ok: has(".claude/hooks/write-guard.mjs") },
+    { name: "destructive-bash hook on disk", ok: has(".claude/hooks/destructive-bash.mjs") },
+    { name: "both fences wired in settings", ok: /write-guard\.mjs/.test(wired) && /destructive-bash\.mjs/.test(wired) },
+    { name: "skills installed", ok: skills.length > 0, detail: `${skills.length} skill(s)` },
+    { name: "roles.json has executor, reviewer and judge", ok: !!(roles?.executor?.spawn && roles?.reviewer?.spawn && roles?.judge?.spawn) },
+    { name: "task.md exists", ok: has("task.md") },
+    // The marker comes from the constant that writes it. Spelling it out here as a literal is how this
+    // check came to look for a string no version of the writer has ever produced.
+    { name: "CLAUDE.md carries the managed block", ok: read("CLAUDE.md").includes(CLAUDE_MD_START) },
+  ];
 }

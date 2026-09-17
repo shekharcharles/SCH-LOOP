@@ -223,7 +223,11 @@ if (cmd === "doctor") {
   out(state);
 } else if (cmd === "setup") {
   const { setupProject } = await import("./setup.mjs");
-  out(await setupProject({ projectRoot: PROJECT(), force: rest.includes("--force") }));
+  const r = await setupProject({ projectRoot: PROJECT(), force: rest.includes("--force") });
+  out(r);
+  // A setup that produced an unrunnable project must not exit 0. It used to report a tidy list of
+  // written files for a project with no engine, no hooks and no skills in it.
+  process.exit(r.ok ? 0 : 1);
 } else if (cmd === "seats") {
   const { probeSeats } = await import("./setup.mjs");
   out(await probeSeats());
