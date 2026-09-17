@@ -6,7 +6,7 @@
 
 **You give it one sentence. It gives you back a specification, a plan, a queue of tickets, and working code that passed a review it did not write.**
 
-[![tests](https://img.shields.io/badge/tests-161%20passing-2ea043?style=flat-square)](#proof)
+[![tests](https://img.shields.io/badge/tests-178%20passing-2ea043?style=flat-square)](#proof)
 [![dependencies](https://img.shields.io/badge/dependencies-0-2ea043?style=flat-square)](#why-zero-dependencies)
 [![node](https://img.shields.io/badge/node-%E2%89%A5%2020-5a5a5a?style=flat-square)](#requirements)
 [![engine](https://img.shields.io/badge/engine-33%20modules-5a5a5a?style=flat-square)](#the-engine)
@@ -224,7 +224,7 @@ That installs the engine, both fences, the skills and your config into the proje
 
 Re-run it any time to refresh. It copies over the top and prunes afterwards, so your project is never left without an engine, not even for an instant. Your queue, tickets and reports are yours and are never touched.
 
-### Choose who does what
+### Watch it, from one port
 
 ```bash
 node .claude/sch/runtime/cli.mjs dashboard
@@ -232,11 +232,27 @@ node .claude/sch/runtime/cli.mjs dashboard
 
 <div align="center">
 
-**A local page, loopback only, that writes exactly one file.**
+**One local page, loopback only. Every project on the machine, and the settings they inherit.**
 
 </div>
 
-Pick the CLI, the model and the flags for every seat — executor, reviewer, judge, and each council chair. Nothing about a model or a flag is hard-coded anywhere in the engine; `roles.json` is the whole truth and this is an editor for it. It will refuse to save a reviewer or judge that is able to write, which is the same rule the dispatcher enforces at dispatch time.
+The home page answers the question you actually arrive with — *is anything wrong?* — before the one you ask second. Blocked and waiting-on-you sort to the top, then running, then idle; each row carries the project, its goal, how far it has got, where it lives and when it last did anything.
+
+![The console: every project on the machine](docs/images/dashboard-home-dark.png)
+
+Click a project and you get the whole of it: what is building right now, the four specification stages with the time each took, then every phase and every ticket — start and end clock time, duration, attempts, files changed, the review verdict and what it cost.
+
+![Per-phase and per-ticket timings, verdicts and cost](docs/images/dashboard-phases-dark.png)
+
+Every seat is editable from the same port. A project inherits the machine-wide defaults until you customise it, and then it owns that seat **whole** — never a spawn command from one seat wearing a model from another. The page refuses to save a reviewer or judge that is able to write, which is the rule the dispatcher enforces again at dispatch time. Nothing about a model or a flag is hard-coded anywhere in the engine: `roles.json` is the whole truth and this is an editor for it.
+
+![Global settings: the seats every project inherits](docs/images/dashboard-settings-light.png)
+
+It has a light mode, follows your system until you tell it otherwise, and reflows down to a phone without losing a column of meaning.
+
+<div align="center">
+<img src="docs/images/dashboard-home-narrow.png" alt="The same page at phone width" width="300">
+</div>
 
 ### Build something
 
@@ -384,7 +400,7 @@ Code gathers the evidence — which tickets, which files were actually delivered
 | `ship` | release gates and the pull request |
 | `notify` | the durable notification log |
 | `setup` | onboarding, and proving the result runs |
-| `dashboard` | the Roles page |
+| `dashboard` | the console: every project, one port |
 
 ### Why zero dependencies
 
@@ -431,7 +447,7 @@ Pen-testing lives in its own folder on purpose. An engagement checks authorizati
 
 ```
 setup [--force]          install the engine into a project and prove it runs
-dashboard [--port N]     the Roles page
+dashboard [--port N]     every project, its progress, and its seats — one port
 goal [text]              read or set what this project is for
 stage <id|next>          brainstorm · prd · architecture · plan
 stages                   what is done, and what runs next

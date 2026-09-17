@@ -43,6 +43,8 @@ skills.json
 node_modules/
 .playwright-mcp/
 *.png
+# ...except the README's own screenshots, which are of the demo project and nothing else.
+!docs/images/*.png
 .DS_Store
 Thumbs.db
 .sessions.json

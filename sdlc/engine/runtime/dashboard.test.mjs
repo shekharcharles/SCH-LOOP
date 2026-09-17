@@ -91,7 +91,7 @@ test("one server, three views: projects, a project, and the global defaults", as
 
     const page = await get(server, "/");
     assert.equal(page.status, 200);
-    assert.match(page.body, /SCH·LOOP \/\/ OPS/);
+    assert.match(page.body, /<title>SCH·LOOP<\/title>/);
     assert.equal((await get(server, "/p/anything")).status, 200, "a project URL serves the same page");
     assert.equal((await get(server, "/settings")).status, 200);
 
@@ -140,7 +140,7 @@ test("an unknown path is a 404, not a stack trace", async () => {
 test("the page template holds no backtick — it is a template literal, and one breaks the module", () => {
   // Twice now a comment written into this literal contained a backtick and turned the rest of the file
   // into a syntax error that surfaced as an unrelated test failing to load.
-  const src = fs.readFileSync(new URL("./dashboard.mjs", import.meta.url), "utf8");
+  const src = fs.readFileSync(new URL("./dashboard-page.mjs", import.meta.url), "utf8");
   const page = src.slice(src.indexOf("const PAGE = "));
   const inner = page.slice(page.indexOf("`") + 1, page.lastIndexOf("`"));
   assert.equal(inner.includes("`"), false, "a backtick inside PAGE ends the literal early");
@@ -149,25 +149,37 @@ test("the page template holds no backtick — it is a template literal, and one 
 test("a seat set to a CLI that is not installed still names that CLI in the page", () => {
   // The dropdown used to list only installed CLIs, so a seat configured for an absent one fell back to
   // displaying the first option: the critic seat read "claude" while its argv said antigravity.
-  const src = fs.readFileSync(new URL("./dashboard.mjs", import.meta.url), "utf8");
-  assert.match(src, /function providerOptions\(current\)/);
-  assert.match(src, /\[\.\.\.new Set\(\[\.\.\.installed\(\), current\]/, "the current provider is always an option");
-  assert.doesNotMatch(src, /installed\(\)\.map\(p => el\("option"/, "no dropdown is built from the installed list alone");
+  const src = fs.readFileSync(new URL("./dashboard-page.mjs", import.meta.url), "utf8");
+  assert.match(src, /function providerOptions\(cur\)/);
+  assert.match(src, /\[\.\.\.new Set\(\[\.\.\.installed\(\),cur\]/, "the current provider is always an option");
+  assert.match(src, /not installed/, "and an absent one says so rather than being hidden");
 });
 
 test("the page is in the SCH-LOOP console language, not a default one", () => {
   // The look is part of the product: near-black ground, red as the structural accent, terminal green
   // for live-and-good, monospace throughout. It was rebuilt once from scratch in a generic style
   // because nobody had written the palette down anywhere a test could see it.
-  const src = fs.readFileSync(new URL("./dashboard.mjs", import.meta.url), "utf8");
-  for (const token of ["--bg:#0a0a0a", "--panel:#121212", "--line:#282828", "--fg:#eaeaea", "--red:#ff2a2a", "--green:#4af626"]) {
+  const src = fs.readFileSync(new URL("./dashboard-page.mjs", import.meta.url), "utf8");
+  for (const token of ["--ground:#0a0a0a", "--panel:#121212", "--rule:#282828", "--ink:#eaeaea", "--brand:#ff2a2a", "--live:#4af626"]) {
     assert.ok(src.includes(token), `the console palette lost ${token}`);
   }
   assert.match(src, /ui-monospace/, "the language is monospace");
-  assert.match(src, /Archivo Black/, "and its headings are Archivo Black");
+  assert.match(src, /Archivo Black/, "and its wordmark is Archivo Black");
   assert.match(src, /repeating-linear-gradient\(0deg/, "the scanline overlay is part of it");
-  assert.match(src, /border-bottom:2px solid var\(--red\)/, "red is structure, not decoration");
-  assert.doesNotMatch(src, /prefers-color-scheme/, "there is one theme and it is dark");
+  assert.match(src, /border-bottom:2px solid var\(--brand\)/, "red is structure, not decoration");
+
+  // Light mode is a first-class ground, not an inversion: it follows the system and an explicit
+  // choice wins over it.
+  assert.match(src, /prefers-color-scheme:light/, "a paper ground exists");
+  assert.match(src, /:root\[data-theme="light"\]/, "and an explicit choice overrides the system");
+  assert.match(src, /localStorage/, "and is remembered");
+
+  // Product UI is read at a consistent DPI. A heading that shrinks in a narrow column is worse at
+  // both ends, so the type scale is fixed rem, never clamp().
+  assert.doesNotMatch(src, /font-size:\s*clamp\(/, "type is a fixed scale, not fluid");
+  // Colour alone cannot carry state: every state ships a drawn mark beside the word.
+  assert.match(src, /const MARK=\{/, "states are drawn marks");
+  assert.doesNotMatch(src, /innerHTML\s*=/, "no markup sink on the page");
 });
 
 test("a scratch directory is never registered, and old ones are pruned", async () => {
@@ -199,4 +211,50 @@ test("a scratch directory is never registered, and old ones are pruned", async (
     assert.equal(pruned, true, "the pruner and the guard share one rule");
     assert.equal(rejects(scratch), false, "and it is off when the registry is already isolated");
   } finally { if (prev === undefined) delete process.env.SCH_GLOBAL_HOME; else process.env.SCH_GLOBAL_HOME = prev; }
+});
+
+test("the page's own script parses — the module compiling proves nothing about it", async () => {
+  // The page is a string inside a module. `node --check` on the module is happy with any syntax error
+  // living in that string, so a missing paren shipped a blank dashboard that only a browser console
+  // reported. Compile the script the way the browser will.
+  const { PAGE } = await import("./dashboard-page.mjs");
+  const i = PAGE.indexOf("<script>"), j = PAGE.lastIndexOf("</script>");
+  assert.ok(i > 0 && j > i, "the page has a script block");
+  assert.doesNotThrow(() => new Function(PAGE.slice(i + 8, j)), "the page script must compile");
+});
+
+test("the page is one self-contained document with no runtime dependency but fonts", async () => {
+  const { PAGE } = await import("./dashboard-page.mjs");
+  const remote = [...PAGE.matchAll(/(?:src|href)="(https?:[^"]+)"/g)].map(m => m[1]);
+  for (const u of remote) assert.match(u, /^https:\/\/fonts\.(googleapis|gstatic)\.com(\/|$)/, `unexpected remote asset: ${u}`);
+  assert.doesNotMatch(PAGE, /<script[^>]+src=/, "no external script");
+});
+
+test("a span given a height also declares display — an inline box ignores both", async () => {
+  // The progress meter and the skeleton bars are spans with a height and nothing else. An inline box
+  // drops height and width silently, so the page rendered a blank track at every percentage and a
+  // skeleton of invisible rows. Nothing threw; it just looked finished and was not.
+  const { PAGE } = await import("./dashboard-page.mjs");
+  const css = PAGE.slice(PAGE.indexOf("<style>"), PAGE.indexOf("</style>"));
+  for (const sel of [".meter .fill", ".sk"]) {
+    const rule = css.slice(css.indexOf(sel + "{"));
+    assert.match(rule.slice(0, rule.indexOf("}")), /display:block/, `${sel} must be a block to have a height`);
+  }
+});
+
+test("a fixed bar that a class shows must have a rule that the hidden attribute wins", async () => {
+  // `display:flex` on the class beats the user agent's `[hidden]{display:none}`, so the settings
+  // action bar sat at the bottom of the home page offering to save something home cannot save.
+  const { PAGE } = await import("./dashboard-page.mjs");
+  assert.match(PAGE, /\.bar\[hidden\]\{display:none\}/, "the bar must honour its own hidden attribute");
+});
+
+test("a duration never prints a sixtieth minute", async () => {
+  const { PAGE } = await import("./dashboard-page.mjs");
+  const src = PAGE.slice(PAGE.indexOf("const dur="));
+  const dur = new Function("return " + src.slice(src.indexOf("=") + 1, src.indexOf("};") + 1))();
+  assert.equal(dur(5 * 36e5 + 59.6 * 6e4), "6h00", "5h59m36s carries into the hour, it is not 5h60");
+  assert.equal(dur(36e5 + 6e4), "1h01");
+  assert.equal(dur(50 * 6e4), "50m");
+  assert.equal(dur(null), "—");
 });
