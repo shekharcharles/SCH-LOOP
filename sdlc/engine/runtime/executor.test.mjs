@@ -54,11 +54,24 @@ test("spawn: loop detection kills a spinning process", async () => {
   assert.ok(r.events.some(e => e.type === "loop"));
 });
 
-test("spawn: silence and non-zero exit are distinct outcomes", async () => {
-  const s = await runRole({ exe: process.execPath, args: [FAKE], cwd: here, prompt: "x", env: { ...process.env, FAKE_MODE: "silent" }, timeoutMs: 20000, silenceMs: 1500 });
+test("spawn: a process that goes quiet is SILENT, not TIMEOUT", async () => {
+  // The hard timeout has to be far above the silence threshold, not merely above it. This used to assert
+  // a 1.5s silence against a 20s timeout, and the suite around it saturates the machine with process
+  // spawns and real git — under that load the 1s silence interval was starved past 20s and TIMEOUT won.
+  // One run in six. The gap is now wide enough that starvation cannot flip the outcome, and the fake
+  // never exits on its own, so SILENT is the only way this can finish.
+  const s = await runRole({
+    exe: process.execPath, args: [FAKE], cwd: here, prompt: "x",
+    env: { ...process.env, FAKE_MODE: "silent" }, timeoutMs: 120_000, silenceMs: 1500,
+  });
   assert.equal(s.outcome, "SILENT");
+});
+
+test("spawn: a non-zero exit is FAILED, and carries the code and stderr", async () => {
   const f = await runRole({ exe: process.execPath, args: [FAKE], cwd: here, prompt: "x", env: { ...process.env, FAKE_MODE: "fail" }, timeoutMs: 20000 });
-  assert.equal(f.outcome, "FAILED"); assert.equal(f.exitCode, 3); assert.match(f.stderr, /boom/);
+  assert.equal(f.outcome, "FAILED");
+  assert.equal(f.exitCode, 3);
+  assert.match(f.stderr, /boom/);
 });
 
 function tmpRepo() {
@@ -136,4 +149,23 @@ test("contextTokens measures the biggest single turn, not the session's billing 
   // A single-turn call has no iterations array; the top level is then the turn.
   assert.equal(contextTokens({ input_tokens: 2, cache_read_input_tokens: 17046, cache_creation_input_tokens: 26637 }), 43685);
   assert.equal(contextTokens(null), null);
+});
+
+test("the silence window is always below the hard timeout, whatever it is configured to", async () => {
+  const { effectiveSilenceMs, SILENCE_CEILING } = await import("./spawn.mjs");
+  // Shipped defaults: silence_nudge_seconds 120, times four, against timeouts_minutes per size.
+  const silence = 120 * 1000 * 4;
+  const timeouts = { XS: 5, S: 15, M: 30, L: 60 };
+  for (const [size, minutes] of Object.entries(timeouts)) {
+    const t = minutes * 60_000;
+    const eff = effectiveSilenceMs(silence, t);
+    assert.ok(eff < t, `${size}: silence ${eff} must fire before the ${t}ms timeout`);
+  }
+  // XS is the one the shipped defaults broke: 480s silence against a 300s timeout meant tier 0 of the
+  // recovery ladder could never be reached, and every quiet XS ticket was misreported as a timeout.
+  assert.equal(effectiveSilenceMs(silence, 300_000), 180_000);
+  // A silence window already below the ceiling is left alone.
+  assert.equal(effectiveSilenceMs(60_000, 900_000), 60_000);
+  assert.equal(effectiveSilenceMs(0, 900_000), 0, "unset stays unset — no silence watch at all");
+  assert.equal(SILENCE_CEILING < 1, true);
 });

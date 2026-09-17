@@ -25,6 +25,15 @@ export function parseStreamLine(line) {
   try { return JSON.parse(t); } catch { return null; }
 }
 
+// A silence threshold at or above the hard timeout can never fire, so the run is classified TIMEOUT
+// ("took too long") when what actually happened was SILENT ("went quiet") — and those are different
+// tiers of the recovery ladder. Measured: the shipped defaults give an XS ticket a 300s timeout and a
+// 480s silence window, so tier 0 was unreachable for every XS ticket. Clamped, silence always precedes
+// the timeout whatever either is configured to.
+export const SILENCE_CEILING = 0.6;
+export const effectiveSilenceMs = (silenceMs, timeoutMs) =>
+  silenceMs > 0 ? Math.min(silenceMs, Math.floor(timeoutMs * SILENCE_CEILING)) : 0;
+
 export async function runRole({ exe, args = [], cwd, prompt, env = process.env, timeoutMs = 30 * 60_000, silenceMs = 0,
   onEvent = null, loopWindow = 4, loopRepeats = 3, maxBytes = 4 * 1024 * 1024 }) {
   const command = await locateExe(exe);
@@ -49,7 +58,8 @@ export async function runRole({ exe, args = [], cwd, prompt, env = process.env, 
     };
     const terminate = (why) => { outcome = why; kill = killTree(child); setTimeout(() => done(why, null), 1500).unref?.(); };
     const hard = setTimeout(() => terminate("TIMEOUT"), timeoutMs);
-    const quiet = silenceMs > 0 ? setInterval(() => { if (Date.now() - lastEventAt > silenceMs) terminate("SILENT"); }, 1000) : null;
+    const quietMs = effectiveSilenceMs(silenceMs, timeoutMs);
+    const quiet = quietMs > 0 ? setInterval(() => { if (Date.now() - lastEventAt > quietMs) terminate("SILENT"); }, 1000) : null;
     quiet?.unref?.();
 
     const note = (ev) => { events.push({ at: new Date().toISOString(), ...ev }); if (onEvent) { try { onEvent(ev); } catch {} } };
